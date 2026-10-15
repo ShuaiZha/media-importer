@@ -1,0 +1,60 @@
+name: media-importer
+x-common: &common
+  image: local/media-importer:0.10.4
+  build:
+    context: .
+  environment:
+    MEDIA_IMPORTER_ENV_FILE: /run/media-importer.env
+    MEDIA_IMPORTER_REQUIRE_CACHE_MOUNT: "1"
+    MEDIA_IMPORTER_CONFIG_HOST_DIR: ${MEDIA_IMPORTER_CONFIG_HOST_DIR:-./config}
+    MEDIA_IMPORTER_DATA_HOST_DIR: ${MEDIA_IMPORTER_DATA_HOST_DIR:-./data}
+    MEDIA_IMPORTER_CACHE_HOST_DIR: ${MEDIA_IMPORTER_CACHE_HOST_DIR:-./data/cache}
+  init: true
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: ["/tmp:size=32m,mode=1777"]
+  volumes:
+    - type: bind
+      source: ./.env
+      target: /run/media-importer.env
+      read_only: true
+      bind: {create_host_path: false}
+    - type: bind
+      source: ${MEDIA_IMPORTER_CONFIG_HOST_DIR:-./config}
+      target: /config
+      bind: {create_host_path: false}
+    - type: bind
+      source: ${MEDIA_IMPORTER_DATA_HOST_DIR:-./data}
+      target: /data
+      bind: {create_host_path: false}
+    - type: bind
+      source: ${MEDIA_IMPORTER_CACHE_HOST_DIR:-./data/cache}
+      target: /data/cache
+      bind: {create_host_path: false}
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+services:
+  backup:
+    <<: *common
+    command: [daemon]
+    stop_grace_period: 45s
+    healthcheck:
+      test: [CMD, python3, -m, media_importer, health]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+  bot:
+    <<: *common
+    command: [bot]
+    healthcheck:
+      test: [CMD, python3, -m, media_importer, bot-health]
+      interval: 20s
+      timeout: 5s
+      start_period: 60s
+      retries: 3

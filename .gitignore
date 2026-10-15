@@ -1,0 +1,46 @@
+# Local connections, credentials, and runtime settings
+.env
+.env.*
+!.env.example
+/config/*
+!/config/settings.example.json
+/secrets/
+/credentials/
+*.pem
+*.key
+*.p12
+
+# Persistent records, media caches, backups, and local verification artifacts
+/data/
+/cache/
+/backups/
+/work/
+/release-*/
+/feishu-setup/
+*.sqlite3*
+*.sqlite*
+*.db
+*.db-wal
+*.db-shm
+*.download
+*.bin
+*.log
+*.lock
+*.incomplete-*
+
+# Python, builds, editors, and OS metadata
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.build/
+dist/
+build/
+*.egg-info/
+.DS_Store
+._*
+.idea/
+.vscode/

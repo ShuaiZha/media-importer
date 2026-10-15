@@ -1,0 +1,9 @@
+*
+!Dockerfile
+!requirements.txt
+!media_importer/
+!media_importer/**
+!scripts/
+!scripts/migrate_v010.py
+**/__pycache__
+**/*.pyc

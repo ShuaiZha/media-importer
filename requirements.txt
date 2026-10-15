@@ -1,0 +1,4 @@
+smbprotocol==1.17.0
+pyspnego==0.12.4
+lark-oapi==1.6.4
+python-dotenv==1.2.1
