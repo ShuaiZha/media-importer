@@ -1,0 +1,20 @@
+{
+  "version": 4,
+  "backup": {
+    "enabled": false,
+    "delete_source_after_import": false,
+    "poll_seconds": 10,
+    "retry_seconds": 30,
+    "stability_seconds": 2
+  },
+  "limits": {
+    "upload_mib_per_second": 0,
+    "min_free_disk_gib": 10,
+    "max_cache_gib": 50
+  },
+  "notifications": {
+    "enabled": false,
+    "progress_interval_seconds": 300,
+    "keyword": ""
+  }
+}
