@@ -1,0 +1,468 @@
+import json
+import re
+import time
+import uuid
+from html.parser import HTMLParser
+from http.client import HTTPException
+from pathlib import PurePosixPath
+from types import SimpleNamespace
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, unquote, urlencode, urljoin, urlsplit
+from urllib.request import Request, build_opener, HTTPRedirectHandler
+
+from ..paths import safe_relative
+from ..model import Asset, SourceError, SourceBlocked, Cancelled, now, device_directory
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+class _Links(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.links = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() == "a":
+            self.links.extend(v for k, v in attrs if k.lower() == "href" and v is not None)
+
+
+
+def make_asset(serial, path, size, created, modified, gumi, primary, parent_gumi="", device_name="HERO9"):
+    # GUMI and the camera timestamps define the source's stable material identity.
+    payload = {"serial": serial, "path": path, "size": size, "created": created,
+               "modified": modified, "gumi": gumi, "primary": primary, "parent_gumi": parent_gumi}
+    identity = uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(payload, sort_keys=True)).hex
+    return Asset(serial, path, size, created, modified, identity, device_name, "gopro",
+                 {"gumi": gumi, "primary": primary, "parent_gumi": parent_gumi})
+
+
+def defaults():
+    return {"type": "gopro", "url": "", "serial": "", "timeout_seconds": 20}
+
+
+def validate(values):
+    from ..config import ConfigError
+    url = urlsplit(values["url"])
+    if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in ("", "/"):
+        raise ConfigError("source.url 必须是包含协议和端口的相机地址，不含路径或凭据")
+    values["url"] = values["url"].rstrip("/")
+    if not values["serial"].isalnum():
+        raise ConfigError("source.serial 必须填写相机序列号")
+    if values["timeout_seconds"] < 1:
+        raise ConfigError("source.timeout_seconds 必须至少为 1")
+
+
+class GoProSource:
+    def __init__(self, config, stop=None):
+        self.config = config
+        self.base = config.source["url"]
+        self.serial = config.source["serial"]
+        self.timeout = config.source["timeout_seconds"]
+        self.stop = stop
+        self.device_name = "Camera"
+        self.opener = build_opener(_NoRedirect())
+
+    def fork(self, stop=None):
+        return type(self)(self.config, self.stop if stop is None else stop)
+
+    @staticmethod
+    def deletion_candidates(assets):
+        result = {}
+        for asset in assets:
+            metadata = asset.metadata
+            if not metadata.get("primary"):
+                result[asset.identity] = "相机未联动删除此附属文件，保留文件"
+            elif not metadata.get("gumi"):
+                result[asset.identity] = "素材缺少 GUMI，未执行删除"
+            else:
+                result[asset.identity] = None
+        return result
+
+    @staticmethod
+    def groups(assets):
+        """Deletion boundary: a primary and its unambiguously associated sidecars."""
+        primary = [a for a in assets if a.metadata.get("primary")]
+        result = []
+        assigned = set()
+        for parent in primary:
+            gumi = parent.metadata.get("gumi")
+            folder = str(PurePosixPath(parent.path).parent)
+            matches = [a for a in primary if a.metadata.get("gumi") == gumi
+                       and str(PurePosixPath(a.path).parent) == folder]
+            members = [parent]
+            if gumi and len(matches) == 1:
+                members += [a for a in assets if not a.metadata.get("primary")
+                            and a.metadata.get("parent_gumi") == gumi and str(PurePosixPath(a.path).parent) == folder]
+            assigned.update(a.identity for a in members)
+            # Unassigned files with the same media number make the association uncertain.
+            possible = [a for a in assets if str(PurePosixPath(a.path).parent) == folder
+                        and PurePosixPath(a.path).stem[2:] == PurePosixPath(parent.path).stem[2:]
+                        and a.identity not in {m.identity for m in members}]
+            safe = bool(gumi and len(matches) == 1 and not possible)
+            result.append({"id": parent.identity, "members": members, "safe": safe,
+                           "reason": None if safe else "素材身份或附属关系不明确，保留相机文件"})
+        for asset in assets:
+            if asset.identity not in assigned:
+                result.append({"id": asset.identity, "members": [asset], "safe": False,
+                               "reason": "无法确认附属文件归属，已导入但不自动删除"})
+        return result
+
+    @staticmethod
+    def reconcile(assets, rows):
+        """A sidecar left by our recorded primary deletion keeps its original identity."""
+        from ..store import Store
+        prior = {Store.asset(r).path: (Store.asset(r), r) for r in rows}
+        current = {a.path: a for a in assets}
+        deleted_parents = {Store.asset(r).metadata.get("gumi") for r in rows
+                           if r["cleanup"] in ("deleting", "deleted", "absent")
+                           and Store.asset(r).metadata.get("primary") and Store.asset(r).path not in current}
+        result = []
+        for asset in assets:
+            old = prior.get(asset.path)
+            if old and not asset.metadata.get("primary") and not asset.metadata.get("parent_gumi"):
+                previous, row = old
+                parent = previous.metadata.get("parent_gumi")
+                if (parent and parent in deleted_parents and asset.serial == previous.serial
+                        and asset.size == previous.size and asset.modified == previous.modified and asset.modified):
+                    asset = previous
+            result.append(asset)
+        return result
+
+    def _check_stop(self):
+        if self.stop and self.stop.is_set():
+            raise Cancelled("正在停止")
+
+    def _open(self, path, headers=None):
+        self._check_stop()
+        try:
+            return self.opener.open(Request(self.base + path, headers=headers or {}), timeout=self.timeout)
+        except (HTTPError, URLError, OSError, HTTPException) as exc:
+            raise SourceError(f"相机请求失败 {path.split('?')[0]}: {exc}") from exc
+
+    def _json(self, path):
+        try:
+            with self._open(path) as response:
+                data = json.loads(response.read(16 * 1024 * 1024))
+            if not isinstance(data, dict):
+                raise ValueError("不是 JSON 对象")
+            return data
+        except (ValueError, OSError, HTTPException) as exc:
+            raise SourceError(f"相机返回的数据无效: {exc}") from exc
+
+    def identify(self):
+        info = self.info()
+        if info.get("serial_number") != self.serial:
+            raise SourceError("相机序列号与配置不符，不处理这台设备")
+        return info
+
+    def info(self):
+        info = self._json("/gp/gpControl/info")
+        info = info.get("info", info)
+        if (not isinstance(info, dict) or not isinstance(info.get("serial_number"), str)
+                or not info["serial_number"].isalnum() or not isinstance(info.get("model_name"), str)):
+            raise SourceError("相机身份响应无效")
+        self.device_name = re.sub(r"\s+Black$", "", info["model_name"], flags=re.IGNORECASE).strip()
+        return {**{key: info.get(key) for key in ("model_name", "serial_number", "firmware_version")},
+                "archive_directory": device_directory(self.device_name, info["serial_number"])}
+
+    @classmethod
+    def probe(cls, url):
+        from ..config import ConfigError
+        parsed = urlsplit(url)
+        if (parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username
+                or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/")):
+            raise ConfigError("请填写相机 USB 网络地址，包含 http:// 和端口，不含路径或凭据")
+        config = SimpleNamespace(source={"url": url.rstrip("/"), "serial": "", "timeout_seconds": 10})
+        return cls(config).info()
+
+    @staticmethod
+    def decode_status(state):
+        if not isinstance(state, dict):
+            raise SourceError("相机状态响应无效")
+        def integer(key, minimum=0, maximum=None):
+            value = state.get(str(key))
+            return value if type(value) is int and value >= minimum and (maximum is None or value <= maximum) else None
+        def flag(key):
+            value = integer(key, 0, 1)
+            return bool(value) if value is not None else None
+        bars = integer(2, 0, 4)
+        storage = integer(33, -1, 8)
+        storage = storage if storage in (-1, 0, 1, 2, 3, 4, 8) else None
+        values = {"battery_present": flag(1), "battery_percent": integer(70, 0, 100),
+                  "charging": bars == 4 if bars is not None else None,
+                  "overheating": flag(6), "cold": flag(85), "busy": flag(8), "recording": flag(10),
+                  "ready": flag(82),
+                  "storage_status": {0: "ready", 1: "full", 2: "missing", 3: "format_error", 4: "busy", 8: "error"}.get(storage, "unknown"),
+                  "storage_remaining_bytes": integer(54) * 1024 if integer(54) is not None else None,
+                  "temperature_c": None, "storage_capacity_bytes": None, "usb_connected": None}
+        if values["battery_present"] is False:
+            values.update(battery_percent=None, charging=None)
+        return {**values, "observed_at": now(), "available": True,
+                "capabilities": {key: value is not None for key, value in values.items()}}
+
+    def telemetry(self):
+        return self.decode_status(self._json("/gopro/camera/state").get("status"))
+
+    @staticmethod
+    def idle_reason(state):
+        if state.get("overheating") is True:
+            return "相机报告过热，等待温度告警解除；完整缓存可继续上传"
+        if state.get("cold") is True:
+            return "相机报告过冷，等待恢复"
+        if state.get("recording") is True:
+            return "相机正在录像，等待结束后导入"
+        if state.get("busy") is True or state.get("ready") is False:
+            return "相机忙碌或尚未就绪，等待恢复"
+        if state.get("busy") is None or state.get("recording") is None:
+            return "无法确认相机录制/忙碌状态，等待相机就绪"
+        if state.get("storage_status") in ("missing", "format_error", "busy", "error"):
+            return "存储卡未插入、忙碌或状态异常，等待相机恢复"
+        # A full card still permits importing its existing footage.
+        return None
+
+    def ensure_idle(self):
+        reason = self.idle_reason(self.telemetry())
+        if reason:
+            raise SourceBlocked(reason)
+
+    def keep_alive(self):
+        try:
+            with self._open("/gopro/camera/keep_alive") as response:
+                response.read(4096)
+        except (OSError, HTTPException) as exc:
+            raise SourceError("相机保活响应中断") from exc
+
+    def media_list(self):
+        data = self._json("/gopro/media/list")
+        if not isinstance(data.get("media"), list):
+            raise SourceError("相机媒体清单不完整")
+        result = {}
+        for directory in data["media"]:
+            folder = safe_relative(directory["d"])
+            for item in directory["fs"]:
+                name = item["n"]
+                names = [name]
+                if "g" in item:
+                    match = re.fullmatch(r"(G\d{3})(\d{4})(\.[A-Za-z0-9]+)", name)
+                    if not match:
+                        raise SourceError(f"无法展开分组素材: {name}")
+                    begin, end = int(item["b"]), int(item["l"])
+                    if not 0 <= begin <= end <= 9999:
+                        raise SourceError(f"无效的分组范围: {name}")
+                    missing = {int(x) for x in item.get("m", [])}
+                    names = [f"{match[1]}{i:04d}{match[3]}" for i in range(begin, end + 1) if i not in missing]
+                for member in names:
+                    path = safe_relative(folder + "/" + member)
+                    result[path] = item
+        return result
+
+    def paths(self):
+        self.identify()
+        pending = ["/videos/DCIM/"]
+        visited, files = set(), set()
+        while pending:
+            directory = pending.pop()
+            if directory in visited:
+                continue
+            visited.add(directory)
+            if len(visited) > 4096:
+                raise SourceError("相机目录数量异常")
+            try:
+                with self._open(quote(directory, safe="/")) as response:
+                    body = response.read(16 * 1024 * 1024)
+                    content_type = response.headers.get("Content-Type", "")
+            except (OSError, HTTPException) as exc:
+                raise SourceError("相机目录响应中断") from exc
+            if "html" not in content_type.lower() or len(body) >= 16 * 1024 * 1024:
+                raise SourceError("相机目录清单无效或过大")
+            parser = _Links()
+            parser.feed(body.decode("utf-8", "strict"))
+            for href in parser.links:
+                target = urlsplit(urljoin(self.base + quote(directory, safe="/"), href))
+                if (target.scheme, target.netloc) != (urlsplit(self.base).scheme, urlsplit(self.base).netloc) or target.query or target.fragment:
+                    continue
+                path = unquote(target.path)
+                if "/../" in path or path.endswith("/..") or "/./" in path:
+                    continue
+                if not path.startswith(directory) or path == directory:
+                    continue
+                relative = path[len("/videos/DCIM/"):]
+                if not relative or len(PurePosixPath(relative).parts) > 8:
+                    continue
+                # HERO9 keeps mutable camera state at DCIM/leinfo.sav; it is not footage.
+                if relative.lower() == "leinfo.sav":
+                    continue
+                safe_relative(relative.rstrip("/"))
+                if path.endswith("/"):
+                    pending.append(path)
+                else:
+                    files.add(relative)
+                if len(files) > 100000:
+                    raise SourceError("相机文件数量超过首版扫描上限")
+        return files
+
+    def file_stat(self, path):
+        url = "/videos/DCIM/" + quote(safe_relative(path), safe="/")
+        # HERO9 rejects HEAD; Range 0-0 returns the exact size with one byte.
+        try:
+            with self._open(url, {"Range": "bytes=0-0"}) as response:
+                if response.status == 206:
+                    match = re.fullmatch(r"bytes 0-0/(\d+)", response.headers.get("Content-Range", ""))
+                    if not match:
+                        raise SourceError(f"相机返回的范围信息无效: {path}")
+                    size = int(match[1])
+                elif response.status == 200:
+                    size = int(response.headers["Content-Length"])
+                else:
+                    raise SourceError(f"无法读取文件信息: {path}")
+                modified = response.headers.get("Last-Modified", "")
+                response.read(1)
+                return size, modified
+        except SourceError as exc:
+            cause = exc.__cause__
+            if isinstance(cause, HTTPError) and cause.code == 416 and cause.headers.get("Content-Range") == "bytes */0":
+                return 0, cause.headers.get("Last-Modified", "")
+            raise
+        except (KeyError, ValueError, OSError, HTTPException) as exc:
+            raise SourceError(f"无法读取准确文件大小: {path}") from exc
+
+    def media_info(self, path):
+        # HERO9's HTTP parser requires the path separator to remain unescaped.
+        return self._json("/gopro/media/info?" + urlencode({"path": safe_relative(path)}, safe="/"))
+
+    @staticmethod
+    def gumi(value):
+        return value.lower() if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{32}", value) else ""
+
+    def inventory(self):
+        self.identify()
+        self.ensure_idle()
+        primary = self.media_list()
+        paths = self.paths()
+        if set(primary) - paths:
+            raise SourceError("媒体接口与目录清单不一致，稍后重试")
+        assets = []
+        by_stem = {}
+        for path in sorted(paths):
+            size, modified = self.file_stat(path)
+            metadata = self.media_info(path) if path in primary else {}
+            if metadata.get("s") is not None and int(metadata["s"]) != size:
+                raise SourceError(f"素材大小正在变化: {path}")
+            item = primary.get(path, {})
+            asset = make_asset(self.serial, path, size, str(metadata.get("cre", item.get("cre", ""))),
+                          modified, self.gumi(metadata.get("gumi")), path in primary, device_name=self.device_name)
+            assets.append(asset)
+            if asset.metadata["primary"]:
+                source = PurePosixPath(path)
+                by_stem.setdefault((str(source.parent), source.stem[2:]), []).append(asset)
+        resolved = []
+        for asset in assets:
+            if not asset.metadata["primary"]:
+                source = PurePosixPath(asset.path)
+                candidates = by_stem.get((str(source.parent), source.stem[2:]), [])
+                if len(candidates) == 1:
+                    parent = candidates[0]
+                    asset = make_asset(asset.serial, asset.path, asset.size, parent.created,
+                                  asset.modified, "", False, parent.metadata["gumi"], device_name=self.device_name)
+            resolved.append(asset)
+        self.ensure_idle()
+        return resolved
+
+    def snapshot(self):
+        first = self.inventory()
+        if self.stop:
+            if self.stop.wait(self.config.backup["stability_seconds"]):
+                raise Cancelled("正在停止")
+        else:
+            time.sleep(self.config.backup["stability_seconds"])
+        second = self.inventory()
+        if [a.identity for a in first] != [a.identity for a in second]:
+            raise SourceError("素材清单正在变化，等待稳定后再备份")
+        return second
+
+    def verify_primary(self, asset):
+        self.identify()
+        self.ensure_idle()
+        if not asset.metadata["primary"] or not asset.metadata["gumi"]:
+            raise SourceError("缺少可确认的素材 ID，保留相机文件")
+        size, modified = self.file_stat(asset.path)
+        info = self.media_info(asset.path)
+        actual = make_asset(asset.serial, asset.path, size, str(info.get("cre", "")), modified,
+                       self.gumi(info.get("gumi")), True, device_name=self.device_name)
+        if actual.identity != asset.identity:
+            raise SourceError("相机素材身份已经变化，保留文件并重新扫描")
+
+    def read_range(self, asset, offset, length):
+        """Strict, bounded reads for recovering an existing cache identity."""
+        self.identify()
+        self.ensure_idle()
+        if offset < 0 or not 0 < length <= 64 * 1024 or offset + length > asset.size:
+            raise SourceError("缓存核验范围无效")
+        if self.file_stat(asset.path) != (asset.size, asset.modified):
+            raise SourceError("原片身份变化，停止缓存核验")
+        end = offset + length - 1
+        try:
+            with self._open("/videos/DCIM/" + quote(asset.path, safe="/"),
+                            {"Range": f"bytes={offset}-{end}"}) as response:
+                if response.status != 206 or response.headers.get("Content-Range") != f"bytes {offset}-{end}/{asset.size}":
+                    raise SourceError("相机未返回准确范围，未继续读取大文件")
+                data = response.read(length + 1)
+                if len(data) != length:
+                    raise SourceError("相机核验范围长度不一致")
+                return data
+        except (OSError, HTTPException) as exc:
+            raise SourceError("相机缓存核验读取失败") from exc
+
+    def download(self, asset, partial_path, progress):
+        self.identify()
+        self.ensure_idle()
+        size, modified = self.file_stat(asset.path)
+        if (size, modified) != (asset.size, asset.modified):
+            raise SourceError("相机素材已变化，等待重新扫描")
+        if asset.metadata["primary"] and asset.metadata["gumi"]:
+            self.verify_primary(asset)
+        received = 0
+        try:
+            with self._open("/videos/DCIM/" + quote(asset.path, safe="/")) as response, open(partial_path, "wb") as output:
+                if response.status != 200 or int(response.headers.get("Content-Length", -1)) != asset.size:
+                    raise SourceError(f"下载长度与素材清单不一致: {asset.path}")
+                while True:
+                    self._check_stop()
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    output.write(chunk)
+                    received += len(chunk)
+                    if received > asset.size:
+                        raise SourceError("下载数据超过预期大小")
+                    progress(received, asset.size)
+                output.flush()
+                import os
+                os.fsync(output.fileno())
+            if received != asset.size or self.file_stat(asset.path) != (asset.size, asset.modified):
+                raise SourceError("下载未完整结束或原片已变化")
+            if asset.metadata["primary"] and asset.metadata["gumi"]:
+                self.verify_primary(asset)
+        except (OSError, ValueError, HTTPException) as exc:
+            raise SourceError(f"相机下载失败: {exc}") from exc
+
+    def delete(self, asset):
+        self.verify_primary(asset)
+        try:
+            with self._open("/gopro/media/delete/file?" + urlencode({"path": asset.path}, safe="/")) as response:
+                if response.status != 200:
+                    raise SourceError("相机未确认删除请求")
+                response.read(4096)
+        except (OSError, HTTPException) as exc:
+            raise SourceError("删除响应中断，需要重新列举确认结果") from exc
+
+
+def create(config, stop=None):
+    return GoProSource(config, stop)
+
+
+def probe(url):
+    return GoProSource.probe(url)
