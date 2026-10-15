@@ -1,0 +1,117 @@
+"""One runtime-settings format; all connections come from the deployment environment."""
+import json
+import math
+from dataclasses import dataclass
+from pathlib import Path
+from .model import ConfigError
+from .adapters import validate_source, validate_destination, destination_identity
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ConfigError(f"重复配置项: {key}")
+        result[key] = value
+    return result
+
+
+
+def _merge(raw, defaults, prefix=""):
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{prefix or '配置'} 必须是对象")
+    unknown = set(raw) - set(defaults)
+    if unknown:
+        raise ConfigError(f"未知配置项: {prefix}{', '.join(sorted(unknown))}")
+    result = {}
+    for key, default in defaults.items():
+        value = raw.get(key, default)
+        name = prefix + key
+        if isinstance(default, dict):
+            value = _merge(value, default, name + ".")
+        elif isinstance(default, bool):
+            if type(value) is not bool:
+                raise ConfigError(f"{name} 必须是 true 或 false")
+        elif isinstance(default, (int, float)):
+            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                raise ConfigError(f"{name} 必须是有限的非负数")
+        elif not isinstance(value, str) or any(c in value for c in "\r\n\x00"):
+            raise ConfigError(f"{name} 必须是不含换行的字符串")
+        result[key] = value
+    return result
+
+
+
+DEFAULTS = {
+    "version": 4,
+    "backup": {"enabled": False, "delete_source_after_import": False,
+               "poll_seconds": 10, "retry_seconds": 30, "stability_seconds": 2},
+    "limits": {"upload_mib_per_second": 0, "min_free_disk_gib": 10, "max_cache_gib": 50},
+    "notifications": {"enabled": False, "progress_interval_seconds": 300, "keyword": ""},
+}
+
+
+def runtime_config(raw):
+    if not isinstance(raw, dict) or type(raw.get("version")) is not int or raw["version"] != 4:
+        raise ConfigError("settings.json 必须使用 version: 4；请先停止服务并运行一次性迁移")
+    values = _merge(raw, DEFAULTS)
+    for key in ("poll_seconds", "retry_seconds"):
+        if values["backup"][key] < 1:
+            raise ConfigError(f"backup.{key} 必须至少为 1")
+    interval = values["notifications"]["progress_interval_seconds"]
+    if type(interval) is not int or not 60 <= interval <= 86400:
+        raise ConfigError("进度通知间隔必须为 60 到 86400 的整数秒数")
+    keyword = values["notifications"]["keyword"]
+    if len(keyword) > 100 or any(ord(c) < 32 for c in keyword):
+        raise ConfigError("通知前缀最多 100 字符，不能包含控制字符")
+    return values
+
+
+def preferences(values):
+    return {key: values[key] for key in DEFAULTS}
+
+
+@dataclass(frozen=True)
+class Config:
+    values: dict
+
+    @classmethod
+    def load(cls, path):
+        try:
+            raw = json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
+        except (OSError, ValueError) as exc:
+            raise ConfigError(f"无法读取 JSON 配置: {exc}") from exc
+        return cls.from_dict(raw)
+
+    @classmethod
+    def from_dict(cls, raw):
+        from .deployment import connections
+        return cls.from_values({**runtime_config(raw), **connections()})
+
+    @classmethod
+    def from_values(cls, values):
+        # Internal construction only; serialized settings never include connections.
+        data = runtime_config(preferences(values))
+        data.update(source=dict(values["source"]), destination=dict(values["destination"]))
+        validate_source(data["source"])
+        validate_destination(data["destination"])
+        return cls(data)
+
+    @property
+    def source(self):
+        return self.values["source"]
+
+    @property
+    def destination(self):
+        return self.values["destination"]
+
+    @property
+    def backup(self):
+        return self.values["backup"]
+
+    @property
+    def limits(self):
+        return self.values["limits"]
+
+    @property
+    def destination_id(self):
+        return destination_identity(self.destination)

@@ -1,0 +1,67 @@
+"""Deployment-only values. Secrets never enter runtime JSON or status snapshots."""
+import os
+from pathlib import Path
+
+from .model import ConfigError
+
+
+def environment():
+    path = os.environ.get("MEDIA_IMPORTER_ENV_FILE")
+    if path:
+        from dotenv import dotenv_values
+        if not Path(path).is_file():
+            raise ConfigError("无法读取 .env，请检查 MEDIA_IMPORTER_ENV_FILE 和只读挂载")
+        # Passwords containing $ are literal; Compose only interpolates mount paths.
+        return dotenv_values(path, interpolate=False)
+    return os.environ
+
+
+def text(values, key, default="", required=False):
+    value = values.get(key, default)
+    if not isinstance(value, str) or any(c in value for c in "\r\n\x00") or (required and not value):
+        raise ConfigError(f".env 中 {key} 缺失或格式无效")
+    return value
+
+
+def number(values, key, default, integer=False):
+    try:
+        return int(text(values, key, str(default))) if integer else float(text(values, key, str(default)))
+    except ValueError:
+        raise ConfigError(f".env 中 {key} 必须是{'整数' if integer else '数值'}") from None
+
+
+def connections():
+    env = environment()
+    return {
+        "source": {
+            "type": text(env, "SOURCE_TYPE", "gopro"),
+            "url": text(env, "SOURCE_URL", required=True),
+            "serial": text(env, "SOURCE_SERIAL", required=True),
+            "timeout_seconds": number(env, "SOURCE_TIMEOUT_SECONDS", 20),
+        },
+        "destination": {
+            "type": text(env, "DESTINATION_TYPE", "smb"),
+            "name": text(env, "DESTINATION_NAME", "SMB 存储"),
+            "host": text(env, "DESTINATION_HOST", required=True),
+            "port": number(env, "DESTINATION_PORT", 445, integer=True),
+            "share": text(env, "DESTINATION_SHARE", required=True),
+            "directory": text(env, "DESTINATION_DIRECTORY", "media"),
+            "username": text(env, "DESTINATION_USERNAME", required=True),
+            "domain": text(env, "DESTINATION_DOMAIN", "WORKGROUP"),
+        },
+    }
+
+
+def destination_password():
+    return text(environment(), "DESTINATION_PASSWORD", required=True)
+
+
+def notification_credentials():
+    from .adapters.feishu import validate_credentials
+    env = environment()
+    return validate_credentials({
+        "app_id": text(env, "FEISHU_APP_ID", required=True),
+        "app_secret": text(env, "FEISHU_APP_SECRET", required=True),
+        "receive_id_type": "open_id",
+        "receive_id": text(env, "FEISHU_OWNER_OPEN_ID", required=True),
+    })
