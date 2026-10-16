@@ -32,7 +32,8 @@ class BotTests(unittest.TestCase):
         self.settings = Settings(self.path)
         self.store = Store(self.root / 'data')
         self.sender = Mock()
-        self.bot = Bot(self.settings, self.root / 'data', sender=self.sender)
+        self.updater = Mock()
+        self.bot = Bot(self.settings, self.root / 'data', sender=self.sender, updater=self.updater)
 
     def tearDown(self):
         self.store.close(); self.env.stop(); self.tmp.cleanup()
@@ -128,12 +129,59 @@ class BotTests(unittest.TestCase):
             actions=[json.loads(x[0]) for x in db.execute('SELECT payload FROM bot_actions')]
         self.assertIn({'changes':{'backup':{'delete_source_after_import':True}},'page':'cleanup'},actions)
 
-    def test_status_has_no_navigation_or_transfer_controls(self):
-        text=json.dumps(self.bot.panel(), ensure_ascii=False)
-        self.assertNotIn('"tag": "button"', text)
+    def test_status_panels_only_have_read_only_refresh(self):
+        before = self.path.read_bytes()
+        for page in ('status', 'devices', 'archives'):
+            response = self.bot.panel(page)
+            self.assertTrue(response['config']['update_multi'])
+            buttons = [button for e in response['elements'] if e['tag'] == 'action' for button in e['actions']]
+            self.assertEqual(['刷新'], [b['text']['content'] for b in buttons])
+            with self.bot.db() as db:
+                payload = json.loads(db.execute('SELECT payload FROM bot_actions WHERE token=?',
+                                               (buttons[0]['value']['token'],)).fetchone()[0])
+            self.assertEqual({'panel': page, 'refresh': True}, payload)
+        self.assertEqual(before, self.path.read_bytes())
+
+    def test_three_status_menu_commands_select_distinct_read_only_cards(self):
+        before = self.path.read_bytes()
+        for label in ('运行总览', '设备与存储', '归档结果'):
+            self.bot.receive_message(self.message(label, event_id=label))
+            self.assertTrue(self.bot.process_one())
+            self.assertIn(label, self.sender.call_args.args[1]['header']['title']['content'])
+        self.assertEqual(before, self.path.read_bytes())
+        self.assertEqual([], self.store.files())
+
+    def test_refresh_replaces_the_clicked_message_and_retry_does_not_send_a_new_one(self):
+        before = self.path.read_bytes()
+        value = self.bot.panel('devices')['elements'][-1]['actions'][0]['value']
+        event = self.callback(value)
+        event['event']['context'] = {'open_message_id': 'om_status_test'}
+        reply = self.bot.receive_card(event)
+        self.assertIn('刷新此卡片', reply['toast']['content'])
+        self.bot.receive_card(event)
+        self.updater.side_effect = [OSError('offline'), None]
+        self.assertFalse(self.bot.process_one())
         with self.bot.db() as db:
-            self.assertEqual(0, db.execute('SELECT count(*) FROM bot_actions').fetchone()[0])
-        self.assertFalse(self.settings.read()['config']['backup']['enabled'])
+            db.execute('UPDATE bot_jobs SET retry_at=0')
+        again = Bot(self.settings, self.root/'data', sender=self.sender, updater=self.updater)
+        self.assertTrue(again.process_one())
+        self.assertFalse(again.process_one())
+        self.sender.assert_not_called()
+        self.assertEqual(2, self.updater.call_count)
+        self.assertEqual('om_status_test', self.updater.call_args.args[1])
+        self.assertEqual('设备与存储', self.updater.call_args.args[2]['header']['title']['content'])
+        self.assertEqual(before, self.path.read_bytes())
+
+    def test_refresh_requires_a_valid_original_message_and_owner(self):
+        value = self.bot.panel()['elements'][-1]['actions'][0]['value']
+        for message_id in (None, 'https://example.invalid', 'om_bad/other'):
+            event = self.callback(value)
+            event['event']['context'] = {'open_message_id': message_id}
+            self.assertEqual('error', self.bot.receive_card(event)['toast']['type'])
+        event = self.callback(value, owner='ou_other')
+        event['event']['context'] = {'open_message_id': 'om_status_test'}
+        self.assertEqual('error', self.bot.receive_card(event)['toast']['type'])
+        self.assertFalse(self.bot.process_one())
 
     def test_invalid_form_is_highlighted_and_keeps_values(self):
         before=self.path.read_bytes()
@@ -172,9 +220,10 @@ class BotTests(unittest.TestCase):
         self.assertNotIn('accidental-secret',str(self.sender.call_args))
 
     def test_configuration_cannot_leak_secret_in_status_card(self):
-        text=json.dumps(self.bot.panel(), ensure_ascii=False)
-        self.assertNotIn(ENV['DESTINATION_PASSWORD'],text)
-        self.assertNotIn(ENV['FEISHU_APP_SECRET'],text)
+        for page in ('status', 'devices', 'archives'):
+            text=json.dumps(self.bot.panel(page), ensure_ascii=False)
+            self.assertNotIn(ENV['DESTINATION_PASSWORD'],text)
+            self.assertNotIn(ENV['FEISHU_APP_SECRET'],text)
 
     def test_settings_compare_and_swap(self):
         rev=self.settings.read()['revision'];self.settings.set_enabled(True)

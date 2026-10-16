@@ -1,6 +1,7 @@
 """Owner-only Feishu controls, durable requests, and small settings cards."""
 import json
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -9,15 +10,19 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .adapters import feishu
-from .bot_cards import card, columns, feedback, markdown, note, paragraph, plain, settings_result, status_content
+from .bot_cards import (archive_content, card, columns, device_content, feedback, markdown,
+                        note, paragraph, plain, settings_result, status_content)
 from .config import ConfigError
 from .model import now
 from .status import snapshot, age
 from .store import Store
 
 
+STATUS_PANELS = {'status': status_content, 'devices': device_content, 'archives': archive_content}
+
+
 class Bot:
-    def __init__(self, settings, directory, sender=None):
+    def __init__(self, settings, directory, sender=None, updater=None):
         self.settings, self.directory = settings, Path(directory)
         self.credentials = settings.notification_credentials()
         if self.credentials["receive_id_type"] != "open_id":
@@ -25,6 +30,7 @@ class Bot:
         self.owner = self.credentials["receive_id"]
         self.scope = self.credentials["app_id"] + ":" + self.owner
         self.sender = sender or feishu.send_card
+        self.updater = updater or feishu.update_card
         self.directory.mkdir(parents=True, exist_ok=True)
         with self.db() as db:
             db.executescript("""
@@ -73,8 +79,8 @@ class Bot:
                                        paragraph(item["error"]), note("请在本机检查 .env 和 settings.json，再从底部菜单重试。")], "red")
         values, rev = item["config"], item["revision"]
         elements = feedback(notice) if notice else []
-        title = {"transfer": "传输设置", "notifications": "通知设置", "cleanup": "原片与缓存清理",
-                 "confirm_delete": "确认开启原片清理", "help": "使用指南"}.get(page, "传输状态")
+        title = {"transfer": "传输设置", "notifications": "通知设置", "cleanup": "原片处理",
+                 "confirm_delete": "确认开启原片清理", "help": "使用指南"}.get(page, "运行总览")
         color = "orange" if page == "confirm_delete" else "blue"
         if page == "transfer":
             limits = values["limits"]
@@ -112,18 +118,22 @@ class Bot:
                                       self.button("确认开启导入后删除", {"changes": {"backup": {"delete_source_after_import": True}}, "page": "cleanup"}, rev, danger=True))]
         elif page == "help":
             elements += [markdown("**点击底部菜单即可操作，无需记住命令。**"),
-                         paragraph("状态　查看连接、传输进度和等待原因\n同步　开启或停止两路传输\n设置　调整传输、原片清理与通知"),
+                         markdown("📊 **状态**"),
+                         paragraph("运行总览：两路进度、能否拔相机、是否需要处理\n设备与存储：相机状态、缓存盘与 SMB 连接\n归档结果：最近一次结果、实际位置与待清理事项"),
+                         markdown("🔄 **同步**"), paragraph("开启同步 / 停止同步，同时控制导入与上传。停止后保留完整缓存，未完成文件下次从头传输。"),
+                         markdown("⚙️ **设置**"), paragraph("传输设置 / 原片处理 / 通知设置"),
                          note("参数在卡片中填写并保存；开启原片删除需要再次确认。")]
         else:
+            page = page if page in STATUS_PANELS else 'status'
             view = snapshot(self.directory, self.settings)
-            title, color, content = status_content(view)
-            elements += content
+            title, color, content = STATUS_PANELS[page](view)
+            elements += content + [self.buttons(self.button('刷新', {'panel': page, 'refresh': True}))]
         if isinstance(notice, dict) and notice["level"] == "error":
             color = "red"
             title += " · 未保存"
         elif isinstance(notice, dict) and notice["level"] == "warning":
             color = "orange"
-        return card(title, elements, color)
+        return card(title, elements, color, shared=page in STATUS_PANELS)
 
     def form(self, kind, fields, revision):
         inputs = [{"tag": "input", "name": key, "label": plain(label), "default_value": str(int(value)) if isinstance(value, float) and value.is_integer() else str(value),
@@ -151,9 +161,11 @@ class Bot:
         except (ValueError, AttributeError):
             return False
         # Keep no arbitrary chat text, media, or credentials in the task database.
-        commands = {"状态": {"panel": "status"}, "进度": {"panel": "status"}, "帮助": {"panel": "help"},
+        commands = {"状态": {"panel": "status"}, "进度": {"panel": "status"}, "运行总览": {"panel": "status"},
+                    "设备与存储": {"panel": "devices"}, "归档结果": {"panel": "archives"},
+                    "帮助": {"panel": "help"}, "使用帮助": {"panel": "help"},
                     "设置": {"panel": "transfer"}, "传输设置": {"panel": "transfer"},
-                    "清理设置": {"panel": "cleanup"}, "通知设置": {"panel": "notifications"},
+                    "清理设置": {"panel": "cleanup"}, "原片处理": {"panel": "cleanup"}, "通知设置": {"panel": "notifications"},
                     "开启同步": {"changes": {"backup": {"enabled": True}}},
                     "停止同步": {"changes": {"backup": {"enabled": False}}},
                     "关闭同步": {"changes": {"backup": {"enabled": False}}}}
@@ -183,12 +195,18 @@ class Bot:
             return {"toast": {"type": "error", "content": "卡片已过期，请从底部菜单获取新卡片"}}
         payload = json.loads(row["payload"])
         payload["revision"] = row["revision"]
+        if payload.get('refresh'):
+            message_id = event.get('context', {}).get('open_message_id')
+            if (payload.get('panel') not in STATUS_PANELS or not isinstance(message_id, str) or
+                    not re.fullmatch(r'om_[A-Za-z0-9_-]{1,128}', message_id)):
+                return {'toast': {'type': 'error', 'content': '无法定位原消息，请从状态菜单重新获取卡片'}}
+            payload['message_id'] = message_id
         if "form" in payload:
             payload["values"] = event.get("action", {}).get("form_value", {})
             if len(json.dumps(payload["values"], ensure_ascii=False)) > 2048:
                 return {"toast": {"type": "error", "content": "输入内容过长"}}
         self.enqueue("card:" + event_id, payload)
-        return {"toast": {"type": "info", "content": "已收到，处理结果将发送到单聊"}}
+        return {"toast": {"type": "info", "content": "正在刷新此卡片" if payload.get('refresh') else "已收到，处理结果将发送到单聊"}}
 
     def process_one(self):
         with self.db() as db:
@@ -197,8 +215,8 @@ class Bot:
         if job is None:
             return False
         try:
+            payload = json.loads(job['payload'])
             if job["state"] == "queued":
-                payload = json.loads(job["payload"])
                 page, notice = payload.get("panel", payload.get("page", "status")), payload.get("notice")
                 try:
                     changes = payload.get("changes")
@@ -238,7 +256,10 @@ class Bot:
                     db.execute("UPDATE bot_jobs SET state='applied',response=? WHERE id=?", (json.dumps(response, ensure_ascii=False), job["id"]))
             else:
                 response = json.loads(job["response"])
-            self.sender(self.credentials, response, event_id="control:" + job["id"])
+            if payload.get('refresh'):
+                self.updater(self.credentials, payload['message_id'], response)
+            else:
+                self.sender(self.credentials, response, event_id="control:" + job["id"])
             with self.db() as db:
                 db.execute("UPDATE bot_jobs SET state='done',error=NULL WHERE id=?", (job["id"],))
             return True

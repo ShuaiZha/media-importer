@@ -13,7 +13,7 @@ from media_importer.settings import Settings
 from media_importer.status import snapshot
 from media_importer.storage import cache_evidence, file_identity, inspect_cached_file
 from media_importer.store import Store
-from media_importer.bot_cards import status_content
+from media_importer.bot_cards import archive_content, status_content
 from test_bot import ENV
 from test_service import configuration, footage, FakeSource, FakeDestination
 
@@ -150,7 +150,7 @@ class CacheStatusTests(unittest.TestCase):
         self.assertTrue(recent['complete'])
         self.assertEqual(1, recent['archived_files'])
         self.assertTrue(recent['archives'][0]['location'].endswith(path))
-        text = json.dumps(status_content(state), ensure_ascii=False)
+        text = json.dumps(archive_content(state), ensure_ascii=False)
         self.assertIn('GH010001_2.MP4', text)
         self.assertNotIn(ENV['DESTINATION_PASSWORD'], text)
         self.assertEqual(0, state['batch']['completed_files'])
@@ -160,7 +160,7 @@ class CacheStatusTests(unittest.TestCase):
         self.assertFalse(state['recent_result']['complete'])
         self.assertIsNone(state['recent_result']['finished_at'])
         self.assertFalse(state['archive']['locations'])
-        text = json.dumps(status_content(state), ensure_ascii=False)
+        text = json.dumps(archive_content(state), ensure_ascii=False)
         self.assertIn('尚无已归档文件', text)
         self.assertIn('smb://192.0.2.20:445/media/media/HERO9-', text)
 

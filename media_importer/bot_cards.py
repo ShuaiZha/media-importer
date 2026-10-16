@@ -100,9 +100,13 @@ def headline_elements(view):
     else:
         title = '📷 **导入尚未完成 · 请保持相机连接**'
     attention = view.get('attention', {'required': False, 'message': '暂无需要处理的问题。'})
-    label = '⚠️ **需要处理**' if attention['required'] else 'ℹ️ **当前提示**' if '无需处理' not in attention['message'] else '✅ **无需处理**'
-    return [markdown(title), paragraph(unplug.get('message', '请从「状态」菜单确认相机读取是否已结束。')),
-            markdown(label), paragraph(attention['message'])]
+    elements = [markdown(title), paragraph(unplug.get('message', '请从「状态 → 运行总览」确认相机读取是否已结束。'))]
+    if attention['required'] or '无需处理' not in attention['message']:
+        label = '⚠️ **需要处理**' if attention['required'] else 'ℹ️ **当前等待**'
+        elements += [markdown(label), paragraph(attention['message'].removeprefix('需要处理：'))]
+    else:
+        elements.append(note('无需处理 · ' + attention['message'].removeprefix('无需处理：')))
+    return elements
 
 
 def progress_elements(view):
@@ -200,46 +204,35 @@ def event_card(kind, title, text, view, *, keyword='', updated_at=None, location
 
 
 def status_content(view):
-    batch, health, disk = view["batch"], view["health"], view["disk"]
+    """The default overview answers what is happening and whether to intervene."""
+    batch, health = view["batch"], view["health"]
     enabled, running = view["configuration"]["sync_enabled"], view["running"]
     stopping = any(c["state"] == "pausing" for c in view["controls"].values())
     complete = bool(batch["total_files"] and batch["completed_files"] == batch["total_files"])
     if not running:
-        title, color, summary = "传输状态 · 服务待检查", "orange", "传输服务未运行或心跳已过期，请在本机检查 Docker。"
+        title, color = "运行总览 · 服务待检查", "orange"
     elif stopping:
-        title, color, summary = "传输状态 · 正在停止", "orange", "正在结束当前操作并清理半文件；完整缓存保留。"
+        title, color = "运行总览 · 正在停止", "orange"
     elif not enabled:
-        title, color, summary = "传输状态 · 同步已关闭", "grey", "任务与完整缓存已保留。可从底部「同步」菜单开启。"
+        title, color = "运行总览 · 同步已关闭", "grey"
     elif complete:
-        title, color, summary = "传输状态 · 本轮已归档", "green", "本轮素材已全部正式归档，等待新素材。"
+        title, color = "运行总览 · 本轮已归档", "green"
+    elif view['stages'].get('upload', {}).get('phase') in ('uploading', 'publishing'):
+        title, color = "运行总览 · 正在归档", "blue"
+    elif view['stages'].get('import', {}).get('phase') == 'downloading':
+        title, color = "运行总览 · 正在导入", "blue"
     else:
-        title, color, summary = "传输状态 · 同步已开启", "blue", "相机导入与目的地上传分别运行，等待原因见下方。"
+        title, color = "运行总览 · 同步已开启", "blue"
     attention = view.get('attention', {'required': False, 'message': '暂无需要处理的问题。'})
     if attention['required']:
-        title, color = '传输状态 · 需要处理', 'orange'
-    elif enabled and view['unplug']['ready'] and not complete:
-        title, color = '传输状态 · 相机可以带走', 'green'
+        title, color = '运行总览 · 需要处理', 'orange'
     title = ('⚠️ ' if color == 'orange' else '✅ ' if color == 'green' else '⏸ ' if color == 'grey' else '🔄 ') + title
     elements = headline_elements(view)
     if enabled or stopping:
         elements.append(note('正在结束当前操作' if stopping else '同步已开启 · 持续监听新素材'))
-    elements += [{'tag': 'hr'}, markdown("**连接状态**"), paragraph("  ·  ".join(
+    elements += [{'tag': 'hr'}, paragraph("  ·  ".join(
         label + " " + _connection(health[key], key == "cache")
         for key, label in (("source", "相机"), ("cache", "缓存盘"), ("destination", "目的地"))))]
-    checked = view.get('preflight')
-    if checked:
-        labels = {'ok': '通过', 'waiting': '有等待项', 'error': '有待处理项', 'checking': '检查中'}
-        elements.append(note('最近启动自检：' + labels.get(checked['state'], '未知') + ' · ' +
-                             format_time(checked.get('finished_at') or checked.get('started_at')) + '；当前连接以上方为准'))
-        for check in checked.get('checks', {}).values():
-            if check['state'] != 'ok':
-                elements.append(paragraph(check['message']))
-    if disk.get("free_bytes") is not None:
-        used = _size(disk["cache_used_bytes"]) if disk.get("cache_used_bytes") is not None else "待更新"
-        quota = _size(disk["quota_bytes"]) if disk.get("quota_bytes") else "不限额"
-        elements.append(note(f"缓存占用 {used} / {quota} · 磁盘可用 {_size(disk['free_bytes'])}"))
-        if disk.get('unverified_cache_files'):
-            elements.append(paragraph(f"其中 {disk['unverified_cache_files']} 个缓存（{_size(disk['unverified_cache_bytes'])}）待核验；未归档文件核验前不计为导入完成，已归档数量保留。"))
     elements.append({"tag": "hr"})
     elements += progress_elements(view)
     cleanup = view["totals"]
@@ -248,48 +241,144 @@ def status_content(view):
         ("半文件", len(view["temporary_cleanup"]))) if count]
     if pending:
         elements.append(paragraph("待清理：" + " · ".join(pending)))
-    errors = []
-    if not health["cache"].get("available") and disk.get("reason"):
-        errors.append(str(disk["reason"]) + "；" + str(disk.get("action") or "请检查缓存盘连接和挂载"))
-    for item in view["issues"][:3]:
-        errors.append(item["path"] + "：" + str(item.get("cache_reason") if item.get('cache_state') == 'unverified' else
-                      item.get("error") or item.get("source_cleanup_error") or item.get("cache_cleanup_error")))
-    for item in view["temporary_cleanup"][:2]:
-        if item.get("error"):
-            errors.append("半文件清理：" + str(item["error"]))
-    if errors:
-        elements += [{"tag": "hr"}, markdown("**需要留意**")]
-        elements.extend(paragraph(error[:360]) for error in errors)
+    if view.get('issues'):
+        elements.append(note(f"{len(view['issues'])} 个文件有异常或待清理；详情见「状态 → 归档结果」。"))
+    elements.append(note(('完整导入后删除原片' if view['policy']['delete_source'] else '保留相机原片') +
+                         ' · 正式归档后清理对应缓存'))
+    elements.append(note('查询快照 · ' + format_time(view['observed_at']) + ' · 点击下方刷新'))
+    return title, color, elements
+
+
+def _known_size(value):
+    return _size(value) if value is not None else '未知'
+
+
+def _observation(state):
+    return ('最近观测 · ' + format_time(state.get('checked_at')) +
+            (' · 已过期，等待更新' if state.get('stale') else ''))
+
+
+def device_content(view):
+    """Connection diagnostics live here, without repeating transfer/history cards."""
+    health, disk = view['health'], view['disk']
+    source, target = health['source'], health['destination']
+    elements = [markdown('📷 **相机 · ' + _connection(source) + '**')]
+    identity = ' · '.join(str(source[key]) for key in ('model_name', 'serial_number') if source.get(key))
+    elements.append(paragraph(identity or '尚未读取到绑定相机的身份'))
+    if source.get('firmware_version'):
+        elements.append(note('固件 ' + source['firmware_version']))
+    telemetry = source.get('telemetry', {})
+    fresh = bool(source.get('online') and not source.get('stale') and telemetry.get('available') and not telemetry.get('stale'))
+    if fresh:
+        battery = '未安装电池' if telemetry.get('battery_present') is False else (
+            str(telemetry['battery_percent']) + '%' if telemetry.get('battery_percent') is not None else '未知 / 不支持')
+        charging = {True: '正在充电', False: '未充电'}.get(telemetry.get('charging'), '充电状态未知')
+        working = '正在录像' if telemetry.get('recording') else '忙碌' if telemetry.get('busy') else (
+            '就绪' if telemetry.get('ready') is True and telemetry.get('recording') is False and telemetry.get('busy') is False else '状态未知')
+        temperature = '过热告警' if telemetry.get('overheating') else '过冷告警' if telemetry.get('cold') else (
+            '无温度告警' if telemetry.get('overheating') is False and telemetry.get('cold') is False else '温度告警状态未知')
+        storage = {'ready': '正常', 'full': '已满', 'missing': '未插入', 'format_error': '格式异常',
+                   'busy': '忙碌', 'error': '异常'}.get(telemetry.get('storage_status'), '未知')
+        elements += [paragraph(f'电量 {battery} · {charging}\n{working} · {temperature}'),
+                     paragraph(f"存储卡 {storage} · 剩余 {_known_size(telemetry.get('storage_remaining_bytes'))}")]
+    else:
+        elements.append(note('电量、充电、温度告警与存储卡状态待更新；不以旧数据判断正常。'))
+    if source.get('reason'):
+        elements.append(paragraph(str(source['reason'])[:300]))
+    elements.append(note(_observation(source)))
+
+    elements += [{'tag': 'hr'}, markdown('💾 **缓存与磁盘 · ' + _connection(health['cache'], True) + '**')]
+    location = view.get('storage', {}).get('cache', {})
+    elements.append(paragraph('本机目录\n' + str(location.get('host') or '未提供宿主机路径')))
+    elements.append(note('容器挂载 ' + str(location.get('path') or disk.get('path') or '未知')))
+    if health['cache'].get('available'):
+        quota = _known_size(disk.get('quota_bytes')) if disk.get('quota_bytes') != 0 else '不限额'
+        waiting = [f for f in view.get('files', []) if f.get('cache_available') and f.get('state') != 'uploaded']
+        elements += [markdown(f"缓存占用 **{_known_size(disk.get('cache_used_bytes'))}** / 额度 {quota}"),
+                     paragraph(f"完整待归档 {len(waiting)} 个 · {_size(sum(f['size'] for f in waiting))}\n未完成文件 {_known_size(disk.get('partial_cache_bytes'))}"),
+                     markdown(f"磁盘可用 **{_known_size(disk.get('free_bytes'))}** · 至少预留 {_known_size(disk.get('reserve_bytes'))}")]
+        if disk.get('unverified_cache_files'):
+            elements.append(paragraph(f"⚠️ {disk['unverified_cache_files']} 个缓存待核验 · {_known_size(disk.get('unverified_cache_bytes'))}；未归档文件核验前不计入导入完成。"))
+        if disk.get('extra_bytes_needed'):
+            elements.append(paragraph('下一文件空间不足，还需释放 ' + _size(disk['extra_bytes_needed']) + '。'))
+        if disk.get('quota_extra_bytes'):
+            elements.append(paragraph('下一文件超过缓存额度，需先上传释放 ' + _size(disk['quota_extra_bytes']) + ' 或调整额度。'))
+    else:
+        elements.append(paragraph(str(disk.get('reason') or '缓存盘不可用') + '\n' +
+                                  str(disk.get('action') or '请检查原缓存盘和 Docker 挂载；不会改用内置磁盘。')))
+
+    elements += [{'tag': 'hr'}, markdown('📁 **SMB 目的地 · ' + _connection(target) + '**')]
+    for location in view.get('archive', {}).get('planned_locations', [])[:1]:
+        elements.append(paragraph(location))
+    if target.get('issue'):
+        issue = target['issue']
+        elements.append(paragraph(str(issue.get('message') or target.get('reason') or '连接需要检查')[:300]))
+        elements.append(note(str(issue.get('action') or '请检查连接配置。')[:300]))
+        if not view['configuration']['sync_enabled']:
+            elements.append(note('同步关闭中；开启后才会执行导入和上传。'))
+    elif target.get('reason'):
+        elements.append(paragraph(str(target['reason'])[:300]))
+    elements.append(note(_observation(target)))
+    checked = view.get('preflight')
+    if checked:
+        labels = {'ok': '通过', 'waiting': '有等待项', 'error': '有待处理项', 'checking': '检查中'}
+        elements += [{'tag': 'hr'}, note('启动自检 ' + labels.get(checked['state'], '未知') + ' · ' +
+                     format_time(checked.get('finished_at') or checked.get('started_at')) + '；当前连接以上方观测为准')]
+    elements.append(note('查询快照 · ' + format_time(view['observed_at']) + ' · 点击下方刷新'))
+    problematic = not health['cache'].get('available') or view.get('attention', {}).get('required')
+    return '设备与存储', 'orange' if problematic else 'blue', elements
+
+
+def archive_content(view):
+    """Recorded outcomes are distinct from live bytes, current policy and settings."""
+    elements = [markdown('📋 **最近一次结果**')]
     recent = view.get('recent_result')
-    elements += [{'tag': 'hr'}, markdown('**最近一次结果**')]
     if recent:
-        label = '归档完成' if recent['complete'] else '尚未完成 · 没有已完成批次'
-        elements.append(paragraph(label + (f"\n已归档 {recent['archived_files']} 个 · 异常 {recent['failed_files']} 个" if recent['complete'] else
-                                          f"\n待归档 {recent['pending_files']} 个 · 异常 {recent['failed_files']} 个")))
+        label = '最近完成批次' if recent['complete'] else '最近批次 · 尚未完成'
+        elements.append(markdown(f"**{label}**\n已正式归档 **{recent['archived_files']} / {recent['total_files']}** 个 · 待归档 {recent['pending_files']} 个 · 异常 {recent['failed_files']} 个"))
         if recent.get('finished_at'):
             elements.append(note('完成时间 ' + format_time(recent['finished_at'])))
-        if recent['complete'] or recent['source_deleted'] or recent['cache_cleanup_pending']:
-            elements.append(note(f"原片已清理或不在相机 {recent['source_deleted']} 个 · 已归档缓存待清理 {recent['cache_cleanup_pending']} 个"))
-        for item in recent['archives'][:2]:
-            elements.append(paragraph('已归档 ' + item['source'].rsplit('/', 1)[-1] + '\n' + item['location']))
-        if len(recent['archives']) > 2:
-            elements.append(note(f"另有 {len(recent['archives']) - 2} 个已归档文件，保存在下方目录。"))
+        elements.append(note(f"原片已清理或复查时不存在 {recent['source_deleted']} 个 · 已归档缓存待清理 {recent['cache_cleanup_pending']} 个"))
     else:
         elements.append(paragraph('尚无任务结果。未扫描不代表相机没有素材。'))
     archive = view.get('archive', {})
     actual = archive.get('locations', [])
-    elements.append(markdown('**实际归档目录**' if actual else '**归档目的地 · 尚无已归档文件**'))
+    totals = view['totals']
+    elements += [{'tag': 'hr'}, markdown(f"📁 **归档记录**\n累计已归档 **{totals.get('uploaded_files', 0)}** 个 · {_size(totals.get('uploaded_bytes'))}\n仍待归档 {totals.get('pending_files', 0)} 个"),
+                 markdown('**实际归档目录**' if actual else '**计划归档位置 · 尚无已归档文件**')]
     elements.extend(paragraph(location) for location in (actual or archive.get('planned_locations', []))[:3])
-    source_policy = "完整导入后删除原片" if view["policy"]["delete_source"] else "保留相机原片"
-    elements.append(note(source_policy + " · 正式归档后清理对应缓存"))
-    updated = format_time(view['observed_at'])
-    elements.append(note("查询快照 · " + updated + " · 底部「状态」可刷新"))
-    return title, color, elements
+    if recent and recent['archives']:
+        elements.append(markdown('**最近批次归档示例**'))
+        for item in recent['archives'][:3]:
+            original, final = item['source'].rsplit('/', 1)[-1], item['location'].rsplit('/', 1)[-1]
+            label = original + (' → ' + final if original != final else '')
+            elements.append(paragraph(label + '\n' + item['location']))
+        if len(recent['archives']) > 3:
+            elements.append(note(f"本卡展示 3 个，共 {len(recent['archives'])} 个已归档文件；完整文件见上述目录。"))
+    pending = totals.get('pending_cleanup', 0) + totals.get('cache_cleanup_pending', 0) + len(view['temporary_cleanup'])
+    if pending or view['issues']:
+        elements += [{'tag': 'hr'}, markdown('⚠️ **异常与待清理**'),
+                     paragraph(f"相机原片待清理 {totals.get('pending_cleanup', 0)} 个 · 已归档缓存待清理 {totals.get('cache_cleanup_pending', 0)} 个\n未完成临时文件待清理 {len(view['temporary_cleanup'])} 个")]
+        for item in view['issues'][:3]:
+            reason = (item.get('cache_reason') if item.get('cache_state') == 'unverified' else
+                      item.get('error') or item.get('source_cleanup_error') or item.get('cache_cleanup_error'))
+            elements.append(paragraph(str(item['path']) + '\n' + str(reason)[:300]))
+        if len(view['issues']) > 3:
+            elements.append(note(f"另有 {len(view['issues']) - 3} 个异常，完整记录可在本机 status --json 查看。"))
+        for item in view['temporary_cleanup'][:2]:
+            if item.get('error'):
+                elements.append(paragraph('临时文件清理：' + str(item['error'])[:300]))
+        elements.append(note('归档成功不因缓存清理失败而倒退；尚未归档的完整缓存保留。'))
+    source_policy = '完整导入后删除原片' if view['policy']['delete_source'] else '保留相机原片'
+    elements.append(note('当前策略：' + source_policy + '；不代表历史原片的实际处理结果。'))
+    elements.append(note('查询快照 · ' + format_time(view['observed_at']) + ' · 点击下方刷新'))
+    complete = bool(recent and recent['complete'] and not totals.get('pending_files'))
+    return '归档结果', 'orange' if view['issues'] else 'green' if complete else 'blue', elements
 
 
 def format_time(value):
     try:
         stamp = datetime.fromisoformat(value)
-        return stamp.strftime('%m-%d %H:%M ') + (stamp.tzname() or '时区未知')
+        return stamp.strftime('%m-%d %H:%M:%S ') + (stamp.tzname() or '时区未知')
     except (ValueError, TypeError):
         return '时间未知'

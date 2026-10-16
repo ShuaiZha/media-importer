@@ -46,7 +46,7 @@ def attention(live, enabled, configuration, health, files, stages):
         if issue.get('code') in ('network', 'source_state', 'cache_capacity'):
             return {'required': False, 'message': '暂时等待，程序会重试：' + issue['action']}
     if any(f['error'] or f['cache_cleanup_error'] or f['source_cleanup_error'] for f in files):
-        return {'required': False, 'message': '有文件待重试或待清理，其他可处理文件继续；详情见下方。'}
+        return {'required': False, 'message': '有文件待重试或待清理，其他可处理文件继续；详情见「状态 → 归档结果」。'}
     return {'required': False, 'message': '无需处理：程序会继续导入和归档，暂时断网会自动重试。'}
 
 

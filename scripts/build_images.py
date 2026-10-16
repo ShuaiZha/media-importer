@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ALPINE = "3.24.2"
-VERSION = "0.10.4"
+VERSION = "0.10.5"
 
 
 def download(url, path):
