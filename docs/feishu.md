@@ -1,6 +1,6 @@
 # 飞书应用机器人配置
 
-[返回 README 与 Docker Compose 部署步骤](../README.md#首次部署)
+[返回首页](../README.md) · [部署与配置](deployment.md) · [使用与维护](operations.md)
 
 本项目通过**企业自建应用机器人 + 长连接 + 本人单聊**提供控制和通知。无需群机器人 Webhook、签名密钥、公网回调地址或端口映射。容器主动连接飞书，电脑必须保持联网与唤醒。同一应用只运行一个 `bot` 服务。
 
@@ -39,7 +39,7 @@ FEISHU_OWNER_OPEN_ID='ou_EXAMPLE00000000'
 
 ## 2. 先启动本地长连接
 
-回到 [README 首次部署](../README.md#首次部署)，填好相机、SMB、挂载路径，创建配置文件及目录，保持同步、删除原片和自动通知均关闭。然后运行：
+回到 [首次部署指南](deployment.md#首次部署)，填好相机、SMB、挂载路径，创建配置文件及目录，保持同步、删除原片和自动通知均关闭。然后运行：
 
 ```sh
 docker compose config --quiet
