@@ -7,3 +7,5 @@
 !scripts/migrate_v010.py
 **/__pycache__
 **/*.pyc
+**/._*
+**/.DS_Store
