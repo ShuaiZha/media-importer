@@ -2,6 +2,7 @@ import json
 import re
 import time
 import uuid
+import threading
 from html.parser import HTMLParser
 from http.client import HTTPException
 from pathlib import PurePosixPath
@@ -11,7 +12,7 @@ from urllib.parse import quote, unquote, urlencode, urljoin, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 from ..paths import safe_relative
-from ..model import Asset, SourceError, SourceBlocked, Cancelled, now, device_directory
+from ..model import Asset, SourceError, SourceConnectionError, SourceBlocked, Cancelled, now, device_directory
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -40,30 +41,40 @@ def make_asset(serial, path, size, created, modified, gumi, primary, parent_gumi
 
 
 def defaults():
-    return {"type": "gopro", "url": "", "serial": "", "timeout_seconds": 20}
+    return {"type": "gopro", "url": "", "serial": "", "timeout_seconds": 20,
+            "transport": "usb", "wireless_url": "http://10.5.5.9:8080", "request_attempts": 3}
 
 
 def validate(values):
     from ..config import ConfigError
-    url = urlsplit(values["url"])
-    if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in ("", "/"):
-        raise ConfigError("source.url 必须是包含协议和端口的相机地址，不含路径或凭据")
-    values["url"] = values["url"].rstrip("/")
+    for key, value in defaults().items():
+        values.setdefault(key, value)
+    if values["transport"] not in ("usb", "wifi"):
+        raise ConfigError("SOURCE_TRANSPORT 必须为 usb 或 wifi")
+    for key in ("url", "wireless_url"):
+        url = urlsplit(values[key])
+        if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in ("", "/"):
+            raise ConfigError(f"source.{key} 必须是包含协议和端口的相机地址，不含路径或凭据")
+        values[key] = values[key].rstrip("/")
     if not values["serial"].isalnum():
         raise ConfigError("source.serial 必须填写相机序列号")
     if values["timeout_seconds"] < 1:
         raise ConfigError("source.timeout_seconds 必须至少为 1")
+    if type(values["request_attempts"]) is not int or not 1 <= values["request_attempts"] <= 5:
+        raise ConfigError("SOURCE_REQUEST_ATTEMPTS 必须为 1 到 5")
 
 
 class GoProSource:
     def __init__(self, config, stop=None):
         self.config = config
-        self.base = config.source["url"]
+        self.transport = config.source.get("transport", "usb")
+        self.base = config.source.get("wireless_url", "http://10.5.5.9:8080") if self.transport == "wifi" else config.source["url"]
         self.serial = config.source["serial"]
         self.timeout = config.source["timeout_seconds"]
         self.stop = stop
         self.device_name = "Camera"
         self.opener = build_opener(_NoRedirect())
+        self.attempts = config.source.get("request_attempts", 3)
 
     def fork(self, stop=None):
         return type(self)(self.config, self.stop if stop is None else stop)
@@ -162,20 +173,28 @@ class GoProSource:
         self._check_stop()
         try:
             return self.opener.open(Request(self.base + path, headers=headers or {}), timeout=self.timeout)
-        except (HTTPError, URLError, OSError, HTTPException) as exc:
-            raise SourceError(f"相机请求失败 {path.split('?')[0]}: {exc}") from exc
+        except HTTPError as exc:
+            error = SourceConnectionError if exc.code in (408, 429, 500, 502, 503, 504) else SourceError
+            raise error(f"相机请求失败 {path.split('?')[0]}: HTTP {exc.code}") from exc
+        except (URLError, OSError, HTTPException) as exc:
+            raise SourceConnectionError(f"相机连接超时或中断 {path.split('?')[0]}") from exc
 
     def _read(self, path, limit, headers=None):
-        try:
-            with self._open(path, headers) as response:
-                return response.read(limit), response.status, response.headers
-        except (OSError, HTTPException) as exc:
-            raise SourceError("相机元数据读取中断") from exc
+        # Retry only bounded, idempotent reads. In particular, NEVER retry delete here.
+        for attempt in range(self.attempts):
+            try:
+                with self._open(path, headers) as response:
+                    return response.read(limit), response.status, response.headers
+            except (SourceConnectionError, OSError, HTTPException) as exc:
+                if attempt + 1 == self.attempts:
+                    raise SourceConnectionError("相机读取超时或中断，稍后自动重试") from exc
+                if (self.stop or threading.Event()).wait(min(2 ** attempt, 4)):
+                    self._check_stop()
 
     def _json(self, path):
         try:
-            with self._open(path) as response:
-                data = json.loads(response.read(16 * 1024 * 1024))
+            body, _, _ = self._read(path, 16 * 1024 * 1024)
+            data = json.loads(body)
             if not isinstance(data, dict):
                 raise ValueError("不是 JSON 对象")
             return data
@@ -196,7 +215,8 @@ class GoProSource:
             raise SourceError("相机身份响应无效")
         self.device_name = re.sub(r"\s+Black$", "", info["model_name"], flags=re.IGNORECASE).strip()
         return {**{key: info.get(key) for key in ("model_name", "serial_number", "firmware_version")},
-                "archive_directory": device_directory(self.device_name, info["serial_number"])}
+                "archive_directory": device_directory(self.device_name, info["serial_number"]),
+                "transport": self.transport}
 
     @classmethod
     def probe(cls, url):
@@ -204,7 +224,7 @@ class GoProSource:
         parsed = urlsplit(url)
         if (parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username
                 or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/")):
-            raise ConfigError("请填写相机 USB 网络地址，包含 http:// 和端口，不含路径或凭据")
+            raise ConfigError("请填写相机网络地址，包含 http:// 和端口，不含路径或凭据")
         config = SimpleNamespace(source={"url": url.rstrip("/"), "serial": "", "timeout_seconds": 10})
         return cls(config).info()
 
@@ -301,9 +321,8 @@ class GoProSource:
             if len(visited) > 4096:
                 raise SourceError("相机目录数量异常")
             try:
-                with self._open(quote(directory, safe="/")) as response:
-                    body = response.read(16 * 1024 * 1024)
-                    content_type = response.headers.get("Content-Type", "")
+                body, _, headers = self._read(quote(directory, safe="/"), 16 * 1024 * 1024)
+                content_type = headers.get("Content-Type", "")
             except (OSError, HTTPException) as exc:
                 raise SourceError("相机目录响应中断") from exc
             if "html" not in content_type.lower() or len(body) >= 16 * 1024 * 1024:
@@ -338,19 +357,17 @@ class GoProSource:
         url = "/videos/DCIM/" + quote(safe_relative(path), safe="/")
         # HERO9 rejects HEAD; Range 0-0 returns the exact size with one byte.
         try:
-            with self._open(url, {"Range": "bytes=0-0"}) as response:
-                if response.status == 206:
-                    match = re.fullmatch(r"bytes 0-0/(\d+)", response.headers.get("Content-Range", ""))
-                    if not match:
-                        raise SourceError(f"相机返回的范围信息无效: {path}")
-                    size = int(match[1])
-                elif response.status == 200:
-                    size = int(response.headers["Content-Length"])
-                else:
-                    raise SourceError(f"无法读取文件信息: {path}")
-                modified = response.headers.get("Last-Modified", "")
-                response.read(1)
-                return size, modified
+            _, status, headers = self._read(url, 1, {"Range": "bytes=0-0"})
+            if status == 206:
+                match = re.fullmatch(r"bytes 0-0/(\d+)", headers.get("Content-Range", ""))
+                if not match:
+                    raise SourceError(f"相机返回的范围信息无效: {path}")
+                size = int(match[1])
+            elif status == 200:
+                size = int(headers["Content-Length"])
+            else:
+                raise SourceError(f"无法读取文件信息: {path}")
+            return size, headers.get("Last-Modified", "")
         except SourceError as exc:
             cause = exc.__cause__
             if isinstance(cause, HTTPError) and cause.code == 416 and cause.headers.get("Content-Range") == "bytes */0":
@@ -368,6 +385,61 @@ class GoProSource:
                     and PurePosixPath(path).suffix.lower() == ".mp4"):
                 raise
             return self._mp4_media_info(path)
+
+    def _mp4_media_info(self, path):
+        """Bounded MP4 identity reads when a remaining chapter has no API metadata."""
+        size, modified = self.file_stat(path)
+        consumed, count = 0, 0
+
+        def read(offset, length):
+            nonlocal consumed, count
+            consumed += length
+            count += 1
+            if offset < 0 or length < 1 or offset + length > size or consumed > 65536 or count > 128:
+                raise SourceError("MP4 元数据结构异常，保留素材")
+            data, status, headers = self._read("/videos/DCIM/" + quote(safe_relative(path), safe="/"),
+                                              length + 1, {"Range": f"bytes={offset}-{offset + length - 1}"})
+            if status != 206 or headers.get("Content-Range") != f"bytes {offset}-{offset + length - 1}/{size}" or len(data) != length:
+                raise SourceError("相机未返回准确的 MP4 元数据范围")
+            return data
+
+        def boxes(start, end):
+            while start < end:
+                if end - start < 8:
+                    raise SourceError("MP4 元数据边界无效")
+                header = read(start, 8)
+                length, kind, width = int.from_bytes(header[:4], "big"), header[4:], 8
+                if length == 1:
+                    length, width = int.from_bytes(read(start + 8, 8), "big"), 16
+                if length == 0:
+                    length = end - start
+                if length < width or start + length > end:
+                    raise SourceError("MP4 元数据长度无效")
+                yield kind, start + width, start + length
+                start += length
+
+        created, gumi = None, None
+        for kind, start, end in boxes(0, size):
+            if kind != b"moov":
+                continue
+            for child, begin, finish in boxes(start, end):
+                if child == b"mvhd":
+                    version = read(begin, 1)[0]
+                    if version not in (0, 1) or finish - begin < (12 if version else 8) or created is not None:
+                        raise SourceError("MP4 创建时间不可确认")
+                    created = int.from_bytes(read(begin + 4, 8 if version else 4), "big") - 2082844800
+                elif child == b"udta":
+                    for tag, first, last in boxes(begin, finish):
+                        if tag == b"GUMI":
+                            if last - first != 16 or gumi is not None:
+                                raise SourceError("MP4 素材身份不可确认")
+                            gumi = read(first, 16).hex()
+            break
+        if created is None or created < 0 or not gumi or gumi == "0" * 32:
+            raise SourceError("MP4 缺少可确认的创建时间或 GUMI，保留素材")
+        if self.file_stat(path) != (size, modified):
+            raise SourceError("读取元数据时相机素材已变化")
+        return {"cre": str(created), "s": str(size), "gumi": gumi}
 
     @staticmethod
     def gumi(value):
@@ -467,7 +539,10 @@ class GoProSource:
                     raise SourceError(f"下载长度与素材清单不一致: {asset.path}")
                 while True:
                     self._check_stop()
-                    chunk = response.read(1024 * 1024)
+                    try:
+                        chunk = response.read(1024 * 1024)
+                    except (OSError, HTTPException) as exc:
+                        raise SourceConnectionError("相机下载连接中断；未完成文件将从头重试") from exc
                     if not chunk:
                         break
                     output.write(chunk)
@@ -482,8 +557,10 @@ class GoProSource:
                 raise SourceError("下载未完整结束或原片已变化")
             if asset.metadata["primary"] and asset.metadata["gumi"]:
                 self.verify_primary(asset)
-        except (OSError, ValueError, HTTPException) as exc:
-            raise SourceError(f"相机下载失败: {exc}") from exc
+        except HTTPException as exc:
+            raise SourceConnectionError("相机下载连接中断；未完成文件将从头重试") from exc
+        except ValueError as exc:
+            raise SourceError("相机下载响应无效") from exc
 
     def delete(self, asset):
         self.verify_primary(asset)
@@ -494,61 +571,6 @@ class GoProSource:
                 response.read(4096)
         except (OSError, HTTPException) as exc:
             raise SourceError("删除响应中断，需要重新列举确认结果") from exc
-
-    def _mp4_media_info(self, path):
-        """Bounded MP4 identity reads when a remaining chapter has no API metadata."""
-        size, modified = self.file_stat(path)
-        consumed, count = 0, 0
-
-        def read(offset, length):
-            nonlocal consumed, count
-            consumed += length
-            count += 1
-            if offset < 0 or length < 1 or offset + length > size or consumed > 65536 or count > 128:
-                raise SourceError("MP4 元数据结构异常，保留素材")
-            data, status, headers = self._read("/videos/DCIM/" + quote(safe_relative(path), safe="/"),
-                                              length + 1, {"Range": f"bytes={offset}-{offset + length - 1}"})
-            if status != 206 or headers.get("Content-Range") != f"bytes {offset}-{offset + length - 1}/{size}" or len(data) != length:
-                raise SourceError("相机未返回准确的 MP4 元数据范围")
-            return data
-
-        def boxes(start, end):
-            while start < end:
-                if end - start < 8:
-                    raise SourceError("MP4 元数据边界无效")
-                header = read(start, 8)
-                length, kind, width = int.from_bytes(header[:4], "big"), header[4:], 8
-                if length == 1:
-                    length, width = int.from_bytes(read(start + 8, 8), "big"), 16
-                if length == 0:
-                    length = end - start
-                if length < width or start + length > end:
-                    raise SourceError("MP4 元数据长度无效")
-                yield kind, start + width, start + length
-                start += length
-
-        created, gumi = None, None
-        for kind, start, end in boxes(0, size):
-            if kind != b"moov":
-                continue
-            for child, begin, finish in boxes(start, end):
-                if child == b"mvhd":
-                    version = read(begin, 1)[0]
-                    if version not in (0, 1) or finish - begin < (12 if version else 8) or created is not None:
-                        raise SourceError("MP4 创建时间不可确认")
-                    created = int.from_bytes(read(begin + 4, 8 if version else 4), "big") - 2082844800
-                elif child == b"udta":
-                    for tag, first, last in boxes(begin, finish):
-                        if tag == b"GUMI":
-                            if last - first != 16 or gumi is not None:
-                                raise SourceError("MP4 素材身份不可确认")
-                            gumi = read(first, 16).hex()
-            break
-        if created is None or created < 0 or not gumi or gumi == "0" * 32:
-            raise SourceError("MP4 缺少可确认的创建时间或 GUMI，保留素材")
-        if self.file_stat(path) != (size, modified):
-            raise SourceError("读取元数据时相机素材已变化")
-        return {"cre": str(created), "s": str(size), "gumi": gumi}
 
 
 def create(config, stop=None):

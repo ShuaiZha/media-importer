@@ -35,6 +35,15 @@ class RuntimeTests(unittest.TestCase):
         self.settings.update_preferences({'notifications':{'enabled':True},'backup':{'delete_source_after_import':True}})
         self.assertEqual(before,self.settings.token()[1])
 
+    def test_saved_switch_survives_a_new_runtime_with_default_sync_off(self):
+        self.assertFalse(Config.from_dict({'version': 4}).backup['enabled'])
+        for enabled in (True, False):
+            self.settings.set_enabled(enabled)
+            restarted = Control(Settings(self.path), threading.Event())
+            self.assertEqual(enabled, restarted.adopt().backup['enabled'])
+            self.assertEqual(enabled, Config.load(self.path).backup['enabled'])
+        self.assertFalse(Config.load(self.path).backup['delete_source_after_import'])
+
     def test_master_stop_interrupts_both_parallel_workers(self):
         control=Control(self.settings,self.stop);config=control.adopt()
         source=FakeSource([footage(1),footage(2)]);destination=FakeDestination()

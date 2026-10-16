@@ -19,6 +19,96 @@ CREDENTIALS = {"app_id": "cli_test12345678", "app_secret": "only-test-secret",
 
 
 class WorkerTests(unittest.TestCase):
+    def test_source_network_failure_is_delayed_and_recovers_as_a_connection_issue(self):
+        from media_importer.issues import describe
+        from media_importer.model import SourceConnectionError
+        issue = describe(SourceConnectionError('timeout'), 'import')
+        self.view['stages'] = {'import': {'phase': 'waiting_source', 'issue': issue},
+                               'upload': {'phase': 'idle'}}
+        self.view['health']['source'] = {'online': False, 'issue': issue}
+        self.tick()
+        self.tick(119)
+        self.sender.assert_not_called()
+        self.tick(1)
+        self.assertEqual(1, self.sender.call_count)
+        message = json.dumps(self.sender.call_args.args[1], ensure_ascii=False)
+        self.assertIn('相机连接暂时不可用', message)
+        self.assertIn('完整缓存继续上传', message)
+        self.assertNotIn('文件传输失败', message)
+        self.tick(30)
+        self.assertEqual(1, self.sender.call_count)
+        self.view['health']['source'] = {'online': True}
+        self.view['stages']['import'] = {'phase': 'idle'}
+        self.tick(1)
+        self.assertTrue(any('问题已恢复' in str(call) for call in self.updater.call_args_list))
+
+    def test_missing_or_unverified_complete_cache_is_actionable(self):
+        self.view['files'] = [{'id': self.rows[0]['id'], 'state': 'cached', 'cache_state': 'unverified'}]
+        self.tick()
+        self.assertIn('完整缓存需要核验', str(self.sender.call_args))
+        self.view['files'][0].update(cache_state='verified', cache_available=True)
+        self.tick(1)
+        self.assertTrue(any('问题已恢复' in str(call) for call in self.updater.call_args_list))
+
+    def test_recovery_never_patches_a_different_recipients_message(self):
+        self.view['health']['destination'] = {'online': False, 'issue': {'code': 'network'}}
+        self.tick()
+        self.tick(121)
+        self.assertEqual(1, self.sender.call_count)
+        credentials = copy.deepcopy(CREDENTIALS)
+        credentials['receive_id'] = 'another@example.invalid'
+        self.settings.notification_credentials.return_value = credentials
+        self.view['health']['destination'] = {'online': True}
+        self.tick(1)
+        self.assertFalse(any('问题已恢复' in str(call) for call in self.updater.call_args_list))
+
+    def test_backlog_alert_once_per_stall_and_recovery_updates_original_card(self):
+        self.view['backlog'] = {'files': 2, 'bytes': 32, 'source_removed_files': 1, 'verified_files': 2}
+        self.view['files'] = [{'id': r['id'], 'state': 'cached'} for r in self.rows]
+        self.view['stages'] = {'import': {'phase': 'idle'}, 'upload': {'phase': 'idle'}}
+        self.tick()
+        self.tick(6 * 3600)
+        self.assertEqual(1, self.sender.call_count)
+        self.assertIn('缓存长时间未归档', str(self.sender.call_args))
+        self.tick(3600)
+        self.assertEqual(1, self.sender.call_count)
+        self.worker = self.make_worker()
+        self.tick(3600)
+        self.assertEqual(1, self.sender.call_count)
+        self.view['stages']['upload'].update(phase='uploading', current_file_id=self.rows[0]['id'], current_bytes=8)
+        self.tick(1)
+        self.tick(1)
+        self.assertTrue(any('问题已恢复' in str(call) for call in self.updater.call_args_list))
+
+    def test_old_bytes_retried_are_not_progress_and_stop_does_not_alert(self):
+        self.view['backlog'] = {'files': 1, 'bytes': 16, 'verified_files': 1}
+        self.view['files'] = [{'id': self.rows[0]['id'], 'state': 'cached'}]
+        self.view['stages'] = {'upload': {'phase': 'uploading', 'current_file_id': self.rows[0]['id'], 'current_bytes': 8}}
+        self.tick()
+        self.view['stages']['upload']['current_bytes'] = 0
+        self.tick(3 * 3600)
+        self.view['stages']['upload']['current_bytes'] = 8
+        self.tick(3 * 3600)
+        self.tick(1)
+        self.assertTrue(any('缓存长时间未归档' in str(call) for call in self.sender.call_args_list))
+        self.values['backup']['enabled'] = False
+        self.sender.reset_mock()
+        self.tick(24 * 3600)
+        self.sender.assert_not_called()
+
+    def test_retrying_a_failed_file_does_not_claim_recovery_before_archive(self):
+        item = {'id': self.rows[0]['id'], 'path': 'clip.mp4', 'state': 'cached', 'error': 'failed', 'error_stage': 'upload'}
+        self.view['files'] = [item]
+        self.view['stages']['upload'] = {'phase': 'failed', 'issue': {'code': 'file', 'scope': 'file'}}
+        self.tick()
+        item['error'] = None
+        self.view['stages']['upload'] = {'phase': 'uploading', 'current_file_id': item['id'], 'current_bytes': 5}
+        self.tick(1)
+        self.assertFalse(any('问题已恢复' in str(call) for call in self.updater.call_args_list))
+        item['state'] = 'uploaded'
+        self.tick(1)
+        self.assertTrue(any('问题已恢复' in str(call) for call in self.updater.call_args_list))
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.directory = Path(self.tmp.name)

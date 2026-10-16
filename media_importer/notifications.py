@@ -30,6 +30,7 @@ DELIVERY_ERRORS = {
 }
 PROBLEMS = {
     "network": ("连接暂时不可用", "检查网络或设备连接；程序会自动重试，已保存的任务和完整缓存会保留；中断文件从头重传。"),
+    "source_network": ("相机连接暂时不可用", "检查相机开机与连接；无线模式请确认电脑已连接相机热点。程序会自动重试，完整缓存继续上传。"),
     "authentication": ("目的地认证失败", "检查目的地账号和密码，修改后测试连接；完整缓存保留。"),
     "permission": ("目的地权限不足", "检查共享目录的访问、写入和改名权限；完整缓存保留。"),
     "destination_path": ("目的地目录不可用", "检查共享名和目标目录，修改后测试连接。"),
@@ -38,10 +39,14 @@ PROBLEMS = {
     "cache_unavailable": ("缓存盘不可用", "连接原缓存盘并检查挂载和读写权限；两路传输会等待恢复。"),
     "source_state": ("源设备暂时无法读取", "等待录像结束、设备就绪或温度告警解除；完整缓存可继续上传。"),
     "source_file": ("源文件导入失败", "检查源设备和存储卡；失败文件会自动重试，其他可处理文件继续。"),
-    "file": ("文件传输失败", "失败文件会自动重试，其他可处理文件继续；发送“状态”查看原因，详细记录可通过本机 status --json 查看。"),
+    "file": ("文件传输失败", "失败文件会自动重试，其他可处理文件继续；从归档结果点击“查看全部异常”查看原因。"),
     "source_cleanup": ("已导入，原片清理待处理", "完整缓存继续上传；检查源设备连接，发送“状态”查看清理原因。"),
     "cache_cleanup": ("已归档，缓存清理待处理", "已归档素材不会重复上传；检查缓存盘连接和写入权限。"),
+    "cache_verification": ("完整缓存需要核验", "请检查原缓存盘；缓存待核验时先停止同步，再点击问题卡的核验缓存。缺失文件需从原片或备份恢复。"),
 }
+
+BACKLOG_DELAY = 6 * 3600
+CONNECTION_KINDS = ('connected', 'disconnected')
 
 
 def _stamp(seconds=None):
@@ -199,6 +204,67 @@ class NotificationWorker:
                 self._enqueue(db, "completed:" + scope + ":" + batch_id, "completed", scope, "", "", stamp,
                               batch_id=batch_id, state="suppressed")
 
+    def _observe_connection(self, db, scope, values, view, stamp):
+        """Track fresh, identity-checked observations, separately from sync.
+
+        One successful identity check announces a connection. Disconnection
+        requires three different observations spanning at least twenty seconds.
+        Service restarts, stale status and repeated reads are not transitions.
+        """
+        source = values['source']
+        transport = source['transport']
+        address = source['wireless_url'] if transport == 'wifi' else source['url']
+        peer = _digest([scope, source['type'], source['serial'], transport, address])
+        state = _meta(db, 'notification_connection', {})
+        if state.get('peer') != peer:
+            db.execute("UPDATE notification_events SET state='cancelled' WHERE kind IN ('connected','disconnected') AND state='pending'")
+            state = {'peer': peer, 'stable': None, 'episode': uuid.uuid4().hex, 'sequence': 0}
+        if not values['notifications'].get('connection_events', True):
+            db.execute("UPDATE notification_events SET state='cancelled' WHERE kind IN ('connected','disconnected') AND state='pending'")
+            state.update(stable=None, last_observation=None, failures=0)
+            _put_meta(db, 'notification_connection', state)
+            return
+        _put_meta(db, 'notification_connection', state)
+        observation = view.get('health', {}).get('source', {})
+        if (not view.get('running') or view.get('configuration', {}).get('pending') or observation.get('stale')
+                or observation.get('transport') != transport or type(observation.get('online')) is not bool):
+            return
+        online = observation['online']
+        if online and observation.get('serial_number') != source['serial']:
+            return
+        try:
+            observed = datetime.fromisoformat(observation['checked_at']).timestamp()
+        except (KeyError, ValueError, TypeError, OverflowError):
+            return
+        if not 0 <= stamp - observed <= max(30, values['backup']['poll_seconds'] * 3):
+            return
+        if state.get('last_observation') is not None and observed <= state['last_observation']:
+            return
+        state['last_observation'] = observed
+        transition = False
+        if online:
+            transition = state.get('stable') is not True
+            state.update(failures=0, failure_since=None)
+        elif state.get('stable') is None:
+            # Starting with no camera is normal, not a disconnect event.
+            state.update(stable=False, failures=0)
+        elif state.get('stable') is True:
+            state['failures'] = state.get('failures', 0) + 1
+            state['failure_since'] = state.get('failure_since') or observed
+            transition = state['failures'] >= 3 and observed - state['failure_since'] >= 20
+        if transition:
+            state.update(stable=online, sequence=state.get('sequence', 0) + 1)
+            # If delivery was unavailable, send the latest confirmed state only.
+            db.execute("UPDATE notification_events SET state='cancelled' WHERE kind IN ('connected','disconnected') AND state='pending'")
+            kind = 'connected' if online else 'disconnected'
+            mode = {'usb': 'USB 直连', 'wifi': '手动 Wi-Fi'}[transport]
+            title = '素材导入助手 · 相机已连接' if online else '素材导入助手 · 相机连接已断开'
+            text = ('连接方式：' + mode + '\n已核对绑定相机身份：' + source['serial'] if online else
+                    '连接方式：' + mode + '\n连续 3 次无法访问绑定相机。可能是关机、拔线或网络切换；这不等同于确认 USB 已拔出。')
+            key = 'connection:' + scope + ':' + state['episode'] + ':' + str(state['sequence'])
+            self._enqueue(db, key, kind, scope, title, text, stamp)
+        _put_meta(db, 'notification_connection', state)
+
     @staticmethod
     def _progress(view):
         batch, lines = view["batch"], []
@@ -224,8 +290,11 @@ class NotificationWorker:
         policy = view.get("policy", {})
         live_files = {f["id"]: f for f in view.get("files", [])}
         cache_pending = sum(bool(row.get("cache_cleanup_error") or live_files.get(row["id"], {}).get("cache_available")) for row in rows)
-        source_pending = sum(row["cleanup"] not in ("deleted", "absent") for row in rows)
+        selected = [row for row in rows if live_files.get(row['id'], {}).get('selected', True)]
+        source_pending = sum(row["cleanup"] not in ("deleted", "absent") for row in selected)
         source = (f"原片清理待处理 {source_pending} 文件" if source_pending else "原片清理完成") if policy.get("delete_source") else "原片保留"
+        if policy.get('delete_source') and len(selected) != len(rows):
+            source = (source + '；' if selected else '') + '未选类别原片保留'
         cache = (f"缓存清理待处理 {cache_pending} 文件" if cache_pending else "缓存清理完成") if policy.get("cleanup_cache") else "缓存保留"
         try:
             started = min(datetime.fromisoformat(row["batch_created"]).timestamp() for row in rows)
@@ -239,6 +308,9 @@ class NotificationWorker:
     def _card_key(scope, view, credentials):
         # The destination, batch, application and recipient all own this message.
         # Secret rotation must not create a new card; changing the recipient must.
+        media_scope = view.get('selection', {}).get('scope', 'all')
+        if media_scope != 'all':
+            scope += ':' + media_scope
         return 'notification_progress_card:' + _digest([
             scope, view.get('batch', {}).get('id'), credentials['app_id'],
             credentials['receive_id_type'], credentials['receive_id']])
@@ -300,7 +372,8 @@ class NotificationWorker:
                 pointer['created_at'] = stamp
             batch = view.get('batch', {})
             pointer.update(signature=signature, updated_at=stamp, retry_at=0, attempts=0,
-                           finished=bool(batch.get('total_files') and batch.get('completed_files') == batch['total_files']))
+                           finished=bool(batch.get('total_files') and batch.get('completed_files') == batch['total_files']
+                                         and not view.get('selection', {}).get('cached_outside_scope_files')))
             with db:
                 _put_meta(db, key, pointer)
         except Exception:
@@ -364,6 +437,10 @@ class NotificationWorker:
                     add("cache_unavailable", "cache", stage)
                     break
         for item in view.get("files", []):
+            if not item.get('selected', True) and not item.get('imported') and item.get('state') in ('pending', 'missing'):
+                continue
+            if item.get('cache_state') == 'unverified' or (item.get('state') in ('cached', 'staged', 'publishing') and item.get('cache_state') == 'missing'):
+                add('cache_verification', 'cache', 'import')
             if item.get("error") and item.get("state") != "uploaded":
                 stage = item.get("error_stage") or "import"
                 progress = view.get("stages", {}).get(stage, {})
@@ -373,12 +450,12 @@ class NotificationWorker:
                 # Prefer the classified stage error; a generic file alert would duplicate it.
                 if not retrying and not any(p["stage"] == stage for p in found.values()):
                     add("source_file" if stage == "import" else "file", "file", stage)
-            if item.get("source_cleanup_error") and view.get("policy", {}).get("delete_source"):
+            if item.get("source_cleanup_error") and item.get('selected', True) and view.get("policy", {}).get("delete_source"):
                 add("source_cleanup", "source", "import")
             if item.get("state") == "uploaded":
                 if item.get("cache_cleanup_error") and view.get("policy", {}).get("cleanup_cache"):
                     add("cache_cleanup", "cache", "upload")
-                if item.get("cleanup") in ("blocked", "changed") and view.get("policy", {}).get("delete_source"):
+                if item.get("cleanup") in ("blocked", "changed") and item.get('selected', True) and view.get("policy", {}).get("delete_source"):
                     add("source_cleanup", "source", "import")
         return found
 
@@ -405,6 +482,7 @@ class NotificationWorker:
             resumed = enabled and state.get('armed_at') is None
             with db:
                 db.execute("UPDATE notification_events SET state='cancelled' WHERE scope<>? AND state='pending'", (scope,))
+                self._observe_connection(db, scope, values, view, stamp)
                 if not enabled or not state.get("initialized"):
                     self._baseline(db, batches, scope, stamp)
                 if not enabled or state.get("armed_at") is None:
@@ -415,16 +493,19 @@ class NotificationWorker:
                                   '素材导入助手 · 传输进度', '', stamp)
                 state["initialized"] = True
                 if not enabled:
-                    db.execute("UPDATE notification_events SET state='cancelled' WHERE state='pending'")
+                    db.execute("UPDATE notification_events SET state='cancelled' WHERE state='pending' AND kind NOT IN ('connected','disconnected')")
                     _put_meta(db, "notification_state", state)
                     delivery = _meta(db, "notification_delivery", {})
                     # Retain an explicit test result while automatic notification is disabled.
-                    delivery.update(enabled=bool(options["enabled"]), sync_enabled=bool(values["backup"]["enabled"]), pending_count=0)
+                    delivery.update(enabled=bool(options["enabled"] or options.get('connection_events', True)),
+                                    sync_enabled=bool(values["backup"]["enabled"]),
+                                    pending_count=db.execute("SELECT COUNT(*) FROM notification_events WHERE state='pending'").fetchone()[0])
                     if delivery.get("last_event") != "test":
                         delivery.update(state="disabled", next_retry_at=None)
                     _put_meta(db, "notification_delivery", delivery)
                     db.commit()
                     self._refresh_existing_progress(db, scope, view, options, stamp)
+                    self._send_pending(db, scope, options, stamp, view)
                     return
                 if (not view.get("running") or view.get("configuration", {}).get("pending")
                         or view.get("status", {}).get("phase") == "applying_config"):
@@ -442,12 +523,13 @@ class NotificationWorker:
                 active = any(stage.get("phase") in ("downloading", "uploading") and
                              not view.get("controls", {}).get(name, {}).get("requested_stop", False)
                              for name, stage in view.get("stages", {}).items())
-                if not active or self._complete(batches.get(view["batch"].get("id"), [])):
+                if not active or (self._complete(batches.get(view["batch"].get("id"), []))
+                                  and not view.get('selection', {}).get('cached_outside_scope_files')):
                     db.execute("UPDATE notification_events SET state='cancelled' WHERE kind='progress' AND state='pending'")
                 db.execute("UPDATE notification_events SET state='cancelled' WHERE kind='progress' AND state='pending' AND batch_id IS NOT ?",
                            (view["batch"].get("id"),))
                 signature, text = self._progress(view)
-                if (active and view["batch"].get("total_files", 0) > 0
+                if (active and (view["batch"].get("total_files", 0) > 0 or view.get('selection', {}).get('cached_outside_scope_files'))
                         and stamp - state.get("progress_at", stamp) >= options["progress_interval_seconds"]
                         and signature != state.get("progress_signature")):
                     db.execute("UPDATE notification_events SET state='cancelled' WHERE kind='progress' AND state='pending'")
@@ -459,8 +541,10 @@ class NotificationWorker:
                 current = {}
                 for key, problem in observed.items():
                     started = previous.get(key, {}).get("since", stamp)
-                    current[key] = {"since": started}
-                    delay = 120 if problem["code"] in ("network", "source_state") else 0
+                    current[key] = previous.get(key) or {"since": started, 'files': [f['id'] for f in view.get('files', [])
+                        if f.get('error') or f.get('source_cleanup_error') or f.get('cache_cleanup_error') or
+                        f.get('cache_state') == 'unverified' or f.get('state') in ('cached', 'staged', 'publishing') and f.get('cache_state') == 'missing']}
+                    delay = 120 if problem["code"] in ("network", "source_network", "source_state") else 0
                     if stamp - started >= delay:
                         title, action = PROBLEMS[problem["code"]]
                         self._enqueue(db, "failed:" + scope + ":" + key + ":" + str(started), "failed", scope,
@@ -468,9 +552,15 @@ class NotificationWorker:
                 # A recovered fault should not be delivered later from an old retry queue.
                 for key, episode in previous.items():
                     if key not in current:
+                        failed_id = "failed:" + scope + ":" + key + ":" + str(episode["since"])
                         db.execute("UPDATE notification_events SET state='cancelled' WHERE id=? AND state='pending'",
-                                   ("failed:" + scope + ":" + key + ":" + str(episode["since"]),))
+                                   (failed_id,))
+                        if self._recovered(key, episode, view):
+                            self._recover_card(db, failed_id, scope, stamp, '已重新确认连接可用或对应文件处理成功，程序会按当前同步设置继续处理。')
+                        else:
+                            current[key] = episode
                 state["problems"] = current
+                self._backlog(db, scope, state, view, stamp)
                 _put_meta(db, "notification_state", state)
                 self._reconcile_delivery(db, options, stamp)
             self._send_pending(db, scope, options, stamp, view)
@@ -488,16 +578,90 @@ class NotificationWorker:
                 if self._complete(rows):
                     self._refresh_existing_progress(db, scope, self._completed_view(view, rows), options, stamp)
 
+    def _recover_card(self, db, event_id, scope, stamp, message):
+        sent = _meta(db, 'event_message:' + event_id, {})
+        if sent and sent.get('recipient') == self._recipient():
+            self._enqueue(db, 'recovered:' + event_id, 'recovered', scope, '素材导入助手 · 问题已恢复',
+                          message, stamp)
+            _put_meta(db, 'recovery_message:recovered:' + event_id, sent)
+
+    def _recipient(self):
+        credentials = self.settings.notification_credentials()
+        return _digest([credentials['app_id'], credentials['receive_id_type'], credentials['receive_id']])
+
+    @staticmethod
+    def _recovered(key, episode, view):
+        scope, stage, code = key.split(':', 2)
+        files = {f['id']: f for f in view.get('files', [])}
+        affected = [files[i] for i in episode.get('files', []) if i in files]
+        if episode.get('files') and len(affected) != len(episode['files']):
+            return False
+        if code == 'source_cleanup':
+            return bool(affected) and all(f.get('cleanup') in ('deleted', 'absent') for f in affected)
+        if code == 'cache_cleanup':
+            return bool(affected) and all(f.get('state') == 'uploaded' and f.get('cache_state') == 'missing' for f in affected)
+        if code == 'cache_verification':
+            return bool(affected) and all(f.get('cache_available') or f.get('state') == 'uploaded' and f.get('cache_state') == 'missing' for f in affected)
+        if scope == 'file' or code in ('permission', 'destination_full', 'source_file'):
+            return bool(affected) and all(f.get('imported') if stage == 'import' else f.get('state') == 'uploaded' for f in affected)
+        if code == 'cache_unavailable':
+            return view.get('health', {}).get('cache', {}).get('available') is True
+        if code == 'cache_capacity':
+            disk = view.get('disk', {})
+            return bool(disk.get('available') and disk.get('extra_bytes_needed') == 0 and disk.get('quota_extra_bytes') in (None, 0))
+        peer = view.get('health', {}).get(scope, {})
+        if code == 'source_state':
+            telemetry = peer.get('telemetry', {})
+            return bool(telemetry.get('available') and not telemetry.get('stale') and telemetry.get('ready') is True
+                        and all(telemetry.get(k) is False for k in ('recording', 'busy', 'overheating', 'cold')))
+        return peer.get('online') is True and not peer.get('stale')
+
+    def _backlog(self, db, scope, state, view, stamp):
+        """One alert per stalled episode; retries of old bytes are not progress."""
+        backlog = view.get('backlog', {})
+        previous = state.get('backlog', {})
+        pending = backlog.get('files', 0)
+        archived = view.get('totals', {}).get('uploaded_files', 0)
+        upload = view.get('stages', {}).get('upload', {})
+        file_id = upload.get('current_file_id')
+        peaks = previous.get('peaks', {})
+        transferred = upload.get('current_bytes', 0) if upload.get('phase') in ('uploading', 'publishing') else 0
+        changed = archived > previous.get('archived', archived) or bool(file_id and transferred > peaks.get(file_id, 0))
+        event_id = previous.get('event_id')
+        if not pending or changed:
+            if event_id:
+                db.execute("UPDATE notification_events SET state='cancelled' WHERE id=? AND state='pending'", (event_id,))
+                self._recover_card(db, event_id, scope, stamp,
+                                   '缓存已全部归档。' if not pending else '上传已恢复进展，剩余缓存会继续归档。')
+            previous.update(progress_at=stamp, event_id=None)
+        if not pending:
+            state['backlog'] = {}
+            return
+        previous.setdefault('progress_at', stamp)
+        live_ids = {f['id'] for f in view.get('files', []) if f.get('state') != 'uploaded'}
+        peaks = {key: value for key, value in peaks.items() if key in live_ids}
+        if file_id:
+            peaks[file_id] = max(peaks.get(file_id, 0), transferred)
+        previous.update(peaks=peaks, archived=archived)
+        if stamp - previous['progress_at'] >= BACKLOG_DELAY and not previous.get('event_id'):
+            event_id = 'backlog:' + scope + ':' + str(previous['progress_at'])
+            self._enqueue(db, event_id, 'backlog', scope, '素材导入助手 · 缓存长时间未归档',
+                          '已连续 6 小时没有上传进展。请检查目的地和网络，并保持缓存盘连接；不会清理未归档的完整缓存。', stamp)
+            previous['event_id'] = event_id
+        state['backlog'] = previous
+
     def _send_pending(self, db, scope, options, stamp, view):
         # Send at most one message per tick; failure backoff is independent for each event.
         candidates = db.execute("""SELECT * FROM notification_events WHERE state='pending' AND scope=?
-            AND next_attempt_at<=? ORDER BY CASE kind WHEN 'started' THEN -1 WHEN 'failed' THEN 0 WHEN 'imported' THEN 1 WHEN 'completed' THEN 2 ELSE 3 END, created_at""",
+            AND next_attempt_at<=? ORDER BY CASE kind WHEN 'connected' THEN -2 WHEN 'disconnected' THEN -2 WHEN 'started' THEN -1 WHEN 'failed' THEN 0 WHEN 'imported' THEN 1 WHEN 'completed' THEN 2 ELSE 3 END, created_at""",
                          (scope, stamp)).fetchall()
         if not candidates or self.stop.is_set():
             return
         latest = self.settings.read().get("config") or {}
-        if not latest.get("backup", {}).get("enabled") or not latest.get("notifications", {}).get("enabled"):
+        if not latest:
             return
+        transfer_enabled = bool(latest.get('backup', {}).get('enabled') and latest.get('notifications', {}).get('enabled'))
+        connection_enabled = bool(latest.get('notifications', {}).get('connection_events', True))
         from .config import Config
         latest_destination = Config.from_values(latest).destination_id
         if scope != _digest([latest_destination, latest["source"]["type"], latest["source"]["serial"]]):
@@ -506,6 +670,20 @@ class NotificationWorker:
         current_batches = None
         current = []
         for row in candidates:
+            if row['kind'] in CONNECTION_KINDS:
+                if not connection_enabled or not view.get('running') or view.get('configuration', {}).get('pending'):
+                    continue
+                peer = latest['source']
+                expected = _digest([scope, peer['type'], peer['serial'], peer['transport'],
+                                    peer['wireless_url'] if peer['transport'] == 'wifi' else peer['url']])
+                if _meta(db, 'notification_connection', {}).get('peer') != expected:
+                    continue
+                observation = view.get('health', {}).get('source', {})
+                if (observation.get('stale') or observation.get('transport') != peer['transport']
+                        or observation.get('online') is not (row['kind'] == 'connected')):
+                    continue
+            elif not transfer_enabled:
+                continue
             payload = json.loads(row["payload"])
             if row["kind"] == "completed":
                 if current_batches is None:
@@ -540,22 +718,35 @@ class NotificationWorker:
                                     for r in current if r.get('remote_path')})
                 content = event_card(row['kind'], payload['title'], payload['text'], view,
                                      keyword=options.get('keyword', ''), updated_at=_stamp(stamp), locations=locations)
-                (self.sender or adapter.send_card)(self.settings.notification_credentials(), content,
-                                                  event_id=_meta(db, "notification_instance_id") + ":" + row["id"])
+                if row['kind'] in ('failed', 'backlog') and self.settings.notification_credentials().get('receive_id_type') == 'open_id':
+                    from .bot import Bot
+                    bot = Bot(self.settings, self.directory)
+                    content['elements'] += bot.problem_actions(view, self.settings.read().get('revision'))
+                    content['config']['update_multi'] = True
+                if row['kind'] == 'recovered':
+                    sent = _meta(db, 'recovery_message:' + row['id'], {})
+                    if sent and sent.get('recipient') == self._recipient():
+                        (self.updater or adapter.update_card)(self.settings.notification_credentials(), sent['id'], content)
+                else:
+                    message_id = (self.sender or adapter.send_card)(self.settings.notification_credentials(), content,
+                                                      event_id=_meta(db, "notification_instance_id") + ":" + row["id"])
+                    if row['kind'] in ('failed', 'backlog'):
+                        with db:
+                            _put_meta(db, 'event_message:' + row['id'], {'id': message_id, 'recipient': self._recipient()})
         except Exception as exc:
             code, message = _safe_failure(exc)
             next_retry_at = stamp + min(1800, 30 * 2 ** min(row["attempts"], 6))
             with db:
                 db.execute("UPDATE notification_events SET attempts=attempts+1,next_attempt_at=? WHERE id=?", (next_retry_at, row["id"]))
                 delivery = _meta(db, "notification_delivery", {})
-                delivery.update(state="retrying", enabled=True, sync_enabled=True, last_event=row["kind"], last_error=message, last_error_at=_stamp(stamp),
+                delivery.update(state="retrying", enabled=True, sync_enabled=bool(latest['backup']['enabled']), last_event=row["kind"], last_error=message, last_error_at=_stamp(stamp),
                                 error_code=code, next_retry_at=_stamp(next_retry_at), pending_count=db.execute("SELECT COUNT(*) FROM notification_events WHERE state='pending'").fetchone()[0])
                 _put_meta(db, "notification_delivery", delivery)
             return
         with db:
             db.execute("UPDATE notification_events SET state='sent',attempts=attempts+1,sent_at=? WHERE id=?", (stamp, row["id"]))
             delivery = _meta(db, "notification_delivery", {})
-            delivery.update(state="sent", enabled=True, sync_enabled=True, last_event=row["kind"], last_sent_at=_stamp(stamp),
+            delivery.update(state="sent", enabled=True, sync_enabled=bool(latest['backup']['enabled']), last_event=row["kind"], last_sent_at=_stamp(stamp),
                             last_error=None, error_code=None, next_retry_at=None,
                             pending_count=db.execute("SELECT COUNT(*) FROM notification_events WHERE state='pending'").fetchone()[0])
             _put_meta(db, "notification_delivery", delivery)

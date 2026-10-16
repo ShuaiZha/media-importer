@@ -1,0 +1,3 @@
+# Optional host dependencies; deliberately excluded from the Docker image.
+bleak==3.0.2
+python-dotenv==1.2.1

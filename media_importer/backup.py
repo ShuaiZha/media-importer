@@ -161,6 +161,8 @@ def prepare_restore(directory, settings_path, bundle=None):
                 store.db.execute("UPDATE bot_jobs SET state='error',error='迁移后旧请求已失效' WHERE state IN ('queued','applied')")
             if 'notification_events' in tables:
                 store.db.execute("UPDATE notification_events SET state='cancelled' WHERE state='pending'")
+            if 'maintenance_requests' in tables:
+                store.db.execute("UPDATE maintenance_requests SET state='cancelled' WHERE state IN ('pending','running','done')")
             store.db.execute("DELETE FROM meta WHERE key IN ('status','service','bot','preflight','notification_state','notification_delivery') OR key LIKE 'notification_progress_card:%'")
         store.invalidate_inventory('迁移后需重新核对相机清单')
         store.set_meta('restored_at', now())

@@ -1,5 +1,5 @@
 """Small, shared error vocabulary for the queues and bot status."""
-from .model import CacheUnavailable, SourceBlocked, SourceError, DestinationError
+from .model import CacheUnavailable, SourceBlocked, SourceError, SourceConnectionError, DestinationError
 
 
 def describe(exc, stage=None):
@@ -8,6 +8,8 @@ def describe(exc, stage=None):
     code, action, scope = "file", "程序会重试此文件，其他可处理的文件继续。", "file"
     if isinstance(exc, CacheUnavailable) or isinstance(exc, OSError) and not isinstance(exc, DestinationError):
         code, action, scope = "cache_unavailable", "连接原缓存盘，检查挂载与读写权限后重试。", "cache"
+    elif isinstance(exc, SourceConnectionError):
+        code, action, scope = "source_network", "检查相机连接；无线模式请在 Mac 连接相机 Wi-Fi。程序会重试，完整缓存继续上传。", "source"
     elif isinstance(exc, SourceBlocked):
         code, action, scope = "source_state", "等待相机结束录像、恢复就绪或解除温度告警，已有完整缓存继续上传。", "source"
     elif isinstance(exc, DestinationError):

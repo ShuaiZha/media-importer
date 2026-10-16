@@ -18,6 +18,10 @@ class SourceError(BackupError):
     pass
 
 
+class SourceConnectionError(SourceError):
+    """Transient source transport failure; retry without skipping the material."""
+
+
 class SourceBlocked(SourceError):
     """The source is reachable, but does not currently permit media reads."""
 

@@ -20,7 +20,15 @@
 
 所有示例地址、序列号和凭据都需要换成自己的值。`192.0.2.10` 与 `storage.example.com` 是文档示例，不是可以直接连接的服务。
 
+无线连接使用同一套配置和记录，在 Mac 手动连接相机热点即可；蓝牙脚本可选，详见 [无线模式](wireless.md)。以下默认按 USB 部署。
+
 ## 首次部署
+
+推荐先准备飞书 App ID、App Secret 与本人 Open ID，克隆项目后运行 `python3 scripts/setup.py`（Python 3.9+；Windows 可用 `py -3 scripts/setup.py`）。向导读取相机序列号、检查缓存目录写入，生成 `.env` 和 JSON，随后构建镜像并从容器检查相机、SMB 与飞书认证。密码不回显，已有配置或任务记录会拒绝覆盖。
+
+向导不会启动后台服务、发送消息或开启同步。通过后执行 `docker compose up -d --no-build`，再完成飞书的事件订阅与发布。`--no-check` 只生成配置，之后仍需按第 3、4 步构建和验证。相机暂不可用时可以手动填写序列号；外接磁盘未挂载时不会创建替代目录。
+
+以下为无需向导的手动配置方式。
 
 ### 1. 克隆并创建本机文件
 
@@ -87,20 +95,20 @@ Compose 将以上三个目录分别挂载为 `/config`、`/data`、`/data/cache`
 
 ### 3. 校验、构建并启动
 
-确认示例 JSON 中 `backup.enabled`、`backup.delete_source_after_import` 和 `notifications.enabled` 均为 `false`，然后在仓库根目录执行：
+示例 JSON 中 `backup.enabled`、`backup.delete_source_after_import` 和 `notifications.enabled` 默认为 `false`，连接提醒 `notifications.connection_events` 为 `true`。服务启动后检测连接，通过飞书开启同步才导入和上传。然后在仓库根目录执行：
 
 ```sh
 docker compose config --quiet
-docker compose build
+python3 scripts/build.py
 docker compose run --rm --no-deps backup validate
 docker compose up -d --no-build
 docker compose ps
 docker compose logs --tail 100 backup bot
 ```
 
-`validate` 只检查 JSON 及相机、SMB 连接字段格式，不测试账号能否登录。镜像由源码在本机构建，`local/media-importer:0.10.5` 是本地标签；仓库没有可供 `docker pull` 的预构建镜像。首次构建需要访问 Docker Hub、Alpine 软件源和 Python 包源。
+`validate` 只检查 JSON 及相机、SMB 连接字段格式，不测试账号能否登录。镜像由源码在本机构建，`local/media-importer:0.10.7` 是本地标签；仓库没有可供 `docker pull` 的预构建镜像。首次构建需要访问 Docker Hub、Alpine 软件源和 Python 包源。`scripts/build.py` 只复制构建所需源码到临时目录，避免外接盘的 macOS 元数据导致构建失败，配置和素材不会进入构建目录。Windows 可用 `py -3` 替代 `python3`。
 
-Compose 启动 `backup`（导入、上传和通知）与 `bot`（飞书长连接控制）两个服务，不映射端口，没有网页入口。此时保持同步关闭。`bot` 建立连接后，继续 [配置事件、回调、菜单和发布](feishu.md#3-配置事件与卡片回调)。若提示“应用未建立长连接”，先检查 `bot` 凭据、容器状态与联网情况，再回后台保存。
+Compose 启动 `backup`（导入、上传和通知）与 `bot`（飞书长连接控制）两个服务，不映射端口，没有网页入口。同步按 JSON 中保存的开关运行。`bot` 建立连接后，继续 [配置事件、回调、菜单和发布](feishu.md#3-配置事件与卡片回调)。若提示“应用未建立长连接”，先检查 `bot` 凭据、容器状态与联网情况，再回后台保存。
 
 ### 4. 验证部署结果
 
@@ -112,22 +120,22 @@ docker compose exec backup python3 -m media_importer status
 docker compose exec backup python3 -m media_importer check --json
 ```
 
-两项服务最终应显示 `healthy`。这表示进程/长连接正常，不代表所有外部设备均在线；`check` 会分别报告相机、缓存、SMB 与飞书认证结果，等待或失败时退出码为 `2`。它不会传输素材或发送测试消息。SMB 写入、改名和飞书收件人仍需实际验证。
+两项服务最终应显示 `healthy`。这表示进程/长连接正常，不代表所有外部设备均在线；`check` 会分别报告相机、缓存、SMB 与飞书认证结果，等待或失败时退出码为 `2`。首次检查会登记缓存卷身份，但不会传输素材或发送测试消息。SMB 写入、改名和飞书收件人仍需实际验证。
 
-在飞书单聊点击「状态 → 运行总览」，再点击卡片的「刷新」：应更新原消息，且同步仍关闭。也可从本机主动发送一张状态卡测试发送权限和接收人：
+在飞书单聊点击「状态 → 运行总览」，再点击卡片的「刷新」：应更新原消息，同步状态应与 JSON 一致。可通过「同步 → 停止同步」停止传输；关闭状态会持久化，普通重启不会重新开启。也可从本机主动发送一张状态卡测试发送权限和接收人：
 
 ```sh
 docker compose exec bot python3 -m media_importer bot-panel
 ```
 
-首次传输验收使用仅含可丢弃小素材的测试卡和独立 SMB 子目录，保持「原片处理 → 保留原片」。**开启同步会处理绑定相机中所有待导入素材，没有“只选某个测试文件”的入口。** 如要验证通知，先在「设置 → 通知设置」开启自动通知，再在「同步 → 开启同步」开始；完成后停止同步，并在归档结果中检查实际文件位置。
+首次传输验收前先停止同步，再准备仅含可丢弃小素材的测试卡和独立 SMB 子目录，保持「原片处理 → 保留原片」。**开启同步会处理所选类别的全部待导入素材及已有完整缓存，没有“只选某个测试文件”的入口。** 同步内容默认为全部素材，可在「传输设置」切换为仅视频或仅照片。如要验证通知，先在「设置 → 通知设置」开启传输通知，再在「同步 → 开启同步」开始；完成后停止同步，并在归档结果中检查实际文件位置。
 
 ## 配置与数据
 
 | 文件 | 内容 |
 | --- | --- |
 | `.env` | 相机、SMB、飞书连接与凭据，以及宿主机挂载路径 |
-| `config/settings.json` | 同步、导入后删除原片、传输限制与通知设置，版本 4 |
+| `config/settings.json` | 同步、USB／手动 Wi-Fi 选择、素材类别、导入后删除原片、传输限制与通知设置，版本 4 |
 | `data/state.sqlite3` | 文件与素材组身份、任务、归档记录、待清理事项，数据库版本 5 |
 | 配置的缓存目录 | 完整缓存、未完成下载、核验元数据和隐藏卷标识，迁移时作为整体保留 |
 
@@ -135,6 +143,6 @@ docker compose exec bot python3 -m media_importer bot-panel
 
 日常设置通过飞书保存到 JSON，校验后原子替换并自动应用。修改传输限制可能中断当前未完成文件，下次从头重传。默认缓存额度 50 GiB、磁盘预留 10 GiB、上传不限速；缓存额度或上传限速填 `0` 表示不限。自动通知默认关闭，开启后的进度间隔默认 300 秒。
 
-同步设置会持久化，普通重启会沿用已保存的开关，并非每次启动都关闭。维护或升级前先停止同步。归档后清理对应完整缓存是固定行为，一次只运行一套使用同一数据目录和飞书应用的服务。
+同步默认关闭；手动启停后的设置会持久化，普通重启沿用已保存的开关。连接方式由 `backup.source_transport` 保存为 `usb` 或 `wifi`，实际地址仍读取 `.env` 的 `SOURCE_URL` 和 `SOURCE_WIRELESS_URL`；旧 JSON 未保存此项时沿用 `.env` 的 `SOURCE_TRANSPORT`。切换前先停止同步，不需要重建容器。维护或升级前也先停止同步。归档后清理对应完整缓存是固定行为，一次只运行一套使用同一数据目录和飞书应用的服务。
 
 部署遇到问题时，查看[故障排查](operations.md#故障排查)或[飞书常见问题](feishu.md#常见问题)。

@@ -7,10 +7,11 @@ import shutil
 import subprocess
 import urllib.request
 from pathlib import Path
+from build import build_context
 
 ROOT = Path(__file__).resolve().parents[1]
 ALPINE = "3.24.2"
-VERSION = "0.10.5"
+VERSION = "0.10.7"
 
 
 def download(url, path):
@@ -64,7 +65,8 @@ def main():
         if not exists:
             run(["docker", "import", "--platform", "linux/" + arch, str(rootfs), tag])
         image = f"local/media-importer:{VERSION}-{arch}"
-        run(["docker", "build", "--platform", "linux/" + arch, "--build-arg", "BASE_IMAGE=" + tag, "-t", image, "."])
+        with build_context(ROOT) as context:
+            run(["docker", "build", "--platform", "linux/" + arch, "--build-arg", "BASE_IMAGE=" + tag, "-t", image, str(context)])
         run(["docker", "tag", image, f"local/media-importer:{VERSION}"])
         if args.export:
             destination = ROOT / "dist" / f"media-importer-{VERSION}-{arch}.tar.gz"

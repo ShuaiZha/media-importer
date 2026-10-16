@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from .model import ConfigError
 from .adapters import validate_source, validate_destination, destination_identity
+from .media import MEDIA_SCOPES
 
 def _unique_object(pairs):
     result = {}
@@ -44,9 +45,10 @@ def _merge(raw, defaults, prefix=""):
 DEFAULTS = {
     "version": 4,
     "backup": {"enabled": False, "delete_source_after_import": False, "stop_after_current": False,
+               "media_scope": "all", "source_transport": "usb",
                "poll_seconds": 10, "retry_seconds": 30, "stability_seconds": 2},
     "limits": {"upload_mib_per_second": 0, "min_free_disk_gib": 10, "max_cache_gib": 50},
-    "notifications": {"enabled": False, "progress_interval_seconds": 300, "keyword": ""},
+    "notifications": {"enabled": False, "connection_events": True, "progress_interval_seconds": 300, "keyword": ""},
 }
 
 
@@ -54,6 +56,10 @@ def runtime_config(raw):
     if not isinstance(raw, dict) or type(raw.get("version")) is not int or raw["version"] != 4:
         raise ConfigError("settings.json 必须使用 version: 4；请先停止服务并运行一次性迁移")
     values = _merge(raw, DEFAULTS)
+    if values["backup"]["media_scope"] not in MEDIA_SCOPES:
+        raise ConfigError("backup.media_scope 必须为 all、video 或 photo")
+    if values["backup"]["source_transport"] not in ("usb", "wifi"):
+        raise ConfigError("backup.source_transport 必须为 usb 或 wifi")
     for key in ("poll_seconds", "retry_seconds"):
         if values["backup"][key] < 1:
             raise ConfigError(f"backup.{key} 必须至少为 1")
@@ -85,7 +91,11 @@ class Config:
     @classmethod
     def from_dict(cls, raw):
         from .deployment import connections
-        return cls.from_values({**runtime_config(raw), **connections()})
+        data = {**runtime_config(raw), **connections()}
+        # Existing installations retain their .env choice until the first saved
+        # preference. Addresses and credentials always remain in .env.
+        data["source"]["transport"] = raw.get("backup", {}).get("source_transport", data["source"]["transport"])
+        return cls.from_values(data)
 
     @classmethod
     def from_values(cls, values):
@@ -93,6 +103,7 @@ class Config:
         data = runtime_config(preferences(values))
         data.update(source=dict(values["source"]), destination=dict(values["destination"]))
         validate_source(data["source"])
+        data["backup"]["source_transport"] = data["source"]["transport"]
         validate_destination(data["destination"])
         return cls(data)
 

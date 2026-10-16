@@ -90,6 +90,8 @@ def main(argv=None):
             from .settings import Settings
             store = Store(args.data)
             try:
+                from .storage import initialize_cache
+                initialize_cache(store)
                 result = run(Settings(args.config), store)
                 emit(result)
                 return 0 if result["state"] == "ok" else 2

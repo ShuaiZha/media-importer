@@ -54,6 +54,9 @@ class Store:
                 UNIQUE(kind, destination, path)
             );
             CREATE INDEX IF NOT EXISTS files_destination_state ON files(destination, state);
+            CREATE TABLE IF NOT EXISTS cache_receipts (
+                file_id TEXT PRIMARY KEY, imported_at TEXT NOT NULL
+            );
         """)
         with self.db:
             self.db.execute("PRAGMA user_version=5")
@@ -147,6 +150,8 @@ class Store:
         fields["updated_at"] = now()
         with self.db:
             self.db.execute("UPDATE files SET " + ", ".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), file_id))
+            if fields.get("state") == "cached":
+                self.db.execute("INSERT OR IGNORE INTO cache_receipts VALUES (?,?)", (file_id, now()))
 
     def batch_state(self, batch_id, state):
         with self.db:

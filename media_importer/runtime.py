@@ -1,5 +1,6 @@
 import logging
 import threading
+from pathlib import Path
 
 from .adapters import create_source, create_destination, probe_source
 from .config import Config
@@ -22,6 +23,7 @@ class Control:
         self.transfer_stop = threading.Event()
         self.changed = threading.Event()
         self.lock = threading.RLock()
+        self.work_guard = threading.Lock()
         self.item, self.token, self.error = None, None, None
         self.applied_token, self.applied_revision = None, None
         self.refresh()
@@ -48,6 +50,14 @@ class Control:
         self.refresh()
         with self.lock:
             return self.enabled() and (not policy or (not self.draining() and self.item["config"]["backup"][policy]))
+
+    def draining(self):
+        return bool(self.enabled() and self.item["config"]["backup"].get("stop_after_current"))
+
+    def finish_stop(self):
+        changed = self.settings.finish_stop()
+        self.refresh()
+        return changed
 
     def boundary(self):
         self.refresh()
@@ -76,14 +86,6 @@ class Control:
                     "pending": self.token != self.applied_token,
                     "error": self.error, "sync_enabled": self.enabled(), "stop_after_current": self.draining()}
 
-    def draining(self):
-        return bool(self.enabled() and self.item["config"]["backup"].get("stop_after_current"))
-
-    def finish_stop(self):
-        changed = self.settings.finish_stop()
-        self.refresh()
-        return changed
-
 
 def daemon(config_path, directory, stop):
     from .service import Service
@@ -95,15 +97,32 @@ def daemon(config_path, directory, stop):
     store.status(source_work=False)
     store.set_meta("service", {"running": True, "started_at": now()})
     def observe():
+        from .wireless_control import publish, connection_status
         db = Store(directory)
         try:
             while not stop.is_set():
                 control.refresh()
                 db.status(worker_heartbeat_at=now(), configuration=control.state())
+                config = Config.from_values(control.item["config"]) if control.item and control.item.get("config") and not control.error else None
+                try:
+                    if config and config.source.get("transport") == "wifi":
+                        publish(directory, config, control.enabled() and not stop.is_set(), db.get_meta("status", {}))
+                        db.status(wireless=connection_status(directory, config.source["serial"]))
+                    elif (Path(directory) / "wireless/control.json").exists():
+                        publish(directory, config, False, {})
+                except OSError:
+                    # Let the lease expire; a radio helper must not keep acting
+                    # when the original data disk becomes inaccessible.
+                    logging.warning("无线控制状态暂不可写，请检查数据盘")
                 stop.wait(1)
         finally:
             control.transfer_stop.set()
             control.changed.set()
+            try:
+                if (Path(directory) / "wireless/control.json").exists():
+                    publish(directory, None, False, {})
+            except OSError:
+                pass
             db.close()
     watcher = threading.Thread(target=observe, daemon=True, name="settings-and-heartbeat")
     watcher.start()
@@ -117,6 +136,9 @@ def daemon(config_path, directory, stop):
             logging.error("通知工作线程暂不可用；传输服务继续运行")
     notifier = threading.Thread(target=notify, daemon=True, name="notifications")
     notifier.start()
+    from .operations import serve as maintenance
+    maintainer = threading.Thread(target=maintenance, args=(directory, control, stop), daemon=True, name="maintenance")
+    maintainer.start()
     try:
         from .preflight import run as startup_check
         checked = startup_check(control.settings, store, stop)
@@ -131,18 +153,24 @@ def daemon(config_path, directory, stop):
             source, destination = create_source(config, control.transfer_stop), create_destination(config, control.transfer_stop)
             try:
                 service = Service(config, store, source, destination, stop, control=control)
+                if store.get_meta("status", {}).get("active_transport", config.source["transport"]) != config.source["transport"]:
+                    store.invalidate_inventory("连接方式已切换，需重新核对相机身份与清单")
+                    store.status(source={"online": None, "transport": config.source["transport"]})
                 store.status(configuration=control.state(), active_destination=config.destination_id,
-                             active_serial=config.source["serial"], active_source_type=config.source["type"])
-                service.recover_interrupted()
+                             active_serial=config.source["serial"], active_source_type=config.source["type"],
+                             active_transport=config.source["transport"])
+                with control.work_guard:
+                    service.recover_interrupted()
                 with service.monitoring():
                     while not stop.is_set():
                         control.refresh()
                         if control.token != control.applied_token or control.error:
                             break
                         control.adopt()
-                        service.clean_temporaries()
                         try:
-                            result = service.safe_cycle()
+                            with control.work_guard:
+                                service.clean_temporaries()
+                                result = service.safe_cycle()
                         except Cancelled:
                             if stop.is_set():
                                 break
@@ -163,6 +191,7 @@ def daemon(config_path, directory, stop):
         control.changed.set()
         watcher.join(timeout=3)
         notifier.join(timeout=35)
+        maintainer.join(timeout=35)
         store.set_meta("service", {"running": False, "stopped_at": now()})
         store.status(phase="stopped", message="服务已停止，任务与缓存已保留", speed_bytes_per_second=0, eta_seconds=None)
         store.close()

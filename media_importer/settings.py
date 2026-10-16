@@ -67,9 +67,9 @@ class Settings:
         return self.update_preferences({"backup": {"enabled": enabled}})
 
     def update_preferences(self, changes, expected=None):
-        allowed = {"backup": {"enabled", "delete_source_after_import", "stop_after_current"},
+        allowed = {"backup": {"enabled", "delete_source_after_import", "stop_after_current", "media_scope", "source_transport"},
                    "limits": {"upload_mib_per_second", "min_free_disk_gib", "max_cache_gib"},
-                   "notifications": {"enabled", "progress_interval_seconds", "keyword"}}
+                   "notifications": {"enabled", "connection_events", "progress_interval_seconds", "keyword"}}
         if not isinstance(changes, dict) or not changes:
             raise ConfigError("未提供要保存的设置")
         for group, updates in changes.items():
@@ -82,22 +82,16 @@ class Settings:
             if expected is not None and item["revision"] != expected:
                 raise Conflict("设置已经变化，请获取新的设置卡片后再操作")
             values = preferences(item["config"])
+            previous_transport = values["backup"]["source_transport"]
             for group, updates in changes.items():
                 values[group].update(updates)
+            if values["backup"]["source_transport"] != previous_transport and values["backup"]["enabled"]:
+                raise ConfigError("请先从「同步 → 停止同步」停止传输，再切换连接方式；任务与完整缓存保留")
             if "enabled" in changes.get("backup", {}) or not values["backup"]["enabled"]:
                 values["backup"]["stop_after_current"] = False
             checked = runtime_config(values)
             atomic_write(self.path, json.dumps(checked, ensure_ascii=False, indent=2) + "\n")
             return self.read()
-
-    def token(self):
-        item = self.read()
-        structural = json.loads(json.dumps(item["config"]))
-        if structural:
-            structural.pop("notifications", None)
-            for key in ("enabled", "delete_source_after_import", "stop_after_current"):
-                structural["backup"].pop(key, None)
-        return item, revision(json.dumps(structural, sort_keys=True))
 
     def finish_stop(self):
         """Finish a drain only if it has not been cancelled by a newer start."""
@@ -109,3 +103,12 @@ class Settings:
             values["backup"].update(enabled=False, stop_after_current=False)
             atomic_write(self.path, json.dumps(runtime_config(values), ensure_ascii=False, indent=2) + "\n")
             return True
+
+    def token(self):
+        item = self.read()
+        structural = json.loads(json.dumps(item["config"]))
+        if structural:
+            structural.pop("notifications", None)
+            for key in ("enabled", "delete_source_after_import", "stop_after_current"):
+                structural["backup"].pop(key, None)
+        return item, revision(json.dumps(structural, sort_keys=True))

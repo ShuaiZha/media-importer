@@ -17,6 +17,7 @@ from .storage import (require_cache, file_identity, unlink_cache, cache_evidence
                       inspect_cached_file, sample_ranges)
 from .issues import describe
 from .contracts import MediaSource, ArchiveDestination
+from .media import MEDIA_SCOPES, select_groups, selected_file_ids
 
 
 LOG = logging.getLogger("media_importer")
@@ -70,7 +71,8 @@ class Service:
             self.store.status(source=result)
             return result
         except SourceError as exc:
-            self.store.status(source={"online": False, "checked_at": now(), "reason": str(exc)})
+            self.store.status(source={"online": False, "checked_at": now(), "reason": str(exc),
+                                     "transport": self.config.source.get("transport", "usb")})
             self.store.invalidate_inventory("相机连接或身份变化，需重新核对清单")
             raise
 
@@ -95,12 +97,20 @@ class Service:
         def monitor():
             store = Store(self.store.directory)
             source = self.source.fork(self.stop) if hasattr(self.source, "fork") else self.source
+            # Connection monitoring must remain responsive even when the normal
+            # download client has long timeouts and retries.
+            if source is not self.source:
+                if hasattr(source, "timeout"):
+                    source.timeout = min(source.timeout, 3)
+                if hasattr(source, "attempts"):
+                    source.attempts = 1
             try:
                 while not finished.is_set() and not self.stop.is_set():
                     keep_awake = self.allowed() and bool(store.get_meta("status", {}).get("source_work"))
                     try:
                         identity = source.identify()
-                        result = {"online": True, "checked_at": now(), **identity}
+                        result = {"online": True, "checked_at": now(), **identity,
+                                  "transport": self.config.source.get("transport", "usb")}
                         if hasattr(source, "telemetry"):
                             try:
                                 result["telemetry"] = source.telemetry()
@@ -111,20 +121,41 @@ class Service:
                         if telemetry:
                             if not telemetry.get("available") or source.idle_reason(telemetry):
                                 store.invalidate_inventory("相机状态变化，需重新核对清单")
-                        if keep_awake and not finished.is_set() and hasattr(source, "keep_alive"):
-                            try:
-                                source.keep_alive()
-                                store.status(source_keep_alive={"ok": True})
-                            except SourceError as exc:
-                                store.status(source_keep_alive={"ok": False, "reason": str(exc)})
                     except SourceError as exc:
-                        store.status(source={"online": False, "checked_at": now(), "reason": str(exc)})
-                        store.invalidate_inventory("相机断开，连接后需重新核对清单")
+                        store.status(source={"online": False, "checked_at": now(), "reason": str(exc),
+                                             "transport": self.config.source.get("transport", "usb")})
+                        # A released Wi-Fi camera may sleep while durable caches
+                        # upload. Keep the completed import evidence, but report
+                        # its current connection honestly.
+                        released = (self.config.source.get("transport") == "wifi" and not keep_awake
+                                    and store.get_meta("status", {}).get("inventory", {}).get("verified"))
+                        if not released:
+                            store.invalidate_inventory("相机断开，连接后需重新核对清单")
                     except Cancelled:
                         break
                     finished.wait(min(5, self.config.backup["poll_seconds"]) if keep_awake else self.config.backup["poll_seconds"])
             finally:
                 store.close()
+        def keep_alive():
+            if not hasattr(self.source, "keep_alive"):
+                return
+            db = Store(self.store.directory)
+            source = self.source.fork(self.stop) if hasattr(self.source, "fork") else self.source
+            # A stuck status read must not delay the recommended three-second keepalive.
+            if hasattr(source, "timeout"):
+                source.timeout = min(source.timeout, 2)
+            try:
+                while not finished.is_set() and not self.stop.is_set():
+                    started = time.monotonic()
+                    if self.allowed() and db.get_meta("status", {}).get("source_work"):
+                        try:
+                            source.keep_alive()
+                            db.status(source_keep_alive={"ok": True})
+                        except (SourceError, Cancelled) as exc:
+                            db.status(source_keep_alive={"ok": False, "reason": str(exc)})
+                    finished.wait(max(.1, 3 - (time.monotonic() - started)))
+            finally:
+                db.close()
         def monitor_destination():
             if not hasattr(self.destination, "fork"):
                 return
@@ -142,7 +173,7 @@ class Service:
                 remote.close()
                 store.close()
         threads = [threading.Thread(target=target, name=name, daemon=True)
-                   for target, name in ((monitor, "source-monitor"), (monitor_destination, "destination-monitor"))]
+                   for target, name in ((monitor, "source-monitor"), (monitor_destination, "destination-monitor"), (keep_alive, "source-keepalive"))]
         for thread in threads:
             thread.start()
         try:
@@ -557,6 +588,10 @@ class Service:
             if not rows or any(not r or r["group_id"] != group["id"] or
                                r["state"] not in ("cached", "staged", "publishing", "uploaded") for r in rows):
                 continue
+            members = [self.store.asset(r) for r in rows]
+            if (any(a.serial != self.config.source["serial"] or a.source_type != self.config.source["type"] for a in members)
+                    or not select_groups([{"members": members}], self.config.backup["media_scope"])):
+                continue
             if all(r["cleanup"] in ("deleted", "absent") for r in rows):
                 continue
             attempted.add(group["id"])
@@ -630,15 +665,22 @@ class Service:
 
     def prepare_imports(self):
         self.boundary()
-        self.store.status(inventory={"scanned": False, "verified": False})
+        scope = self.config.backup["media_scope"]
+        previous_scope = self.store.get_meta("status", {}).get("inventory", {}).get("media_scope", "all")
+        self.store.status(inventory={"scanned": False, "verified": False}, source_work=True)
         self.observe_source()
         self.report("scanning", "正在核对相机完整素材清单", issue=None, current_file=None, current_file_id=None)
         self.store.status(source_work=True)
         assets = self.source_snapshot()
+        groups = select_groups(self.source.groups(assets), scope)
+        selected = [a for group in groups for a in group["members"]]
         known = self.rows()
+        eligible = selected_file_ids(known, scope)
         available = {a.identity for a in assets}
         paths = {a.path for a in assets}
         for row in known:
+            if row["id"] not in eligible:
+                continue
             if row["state"] in ("pending", "missing"):
                 if row["asset_id"] not in available:
                     self.store.update(row["id"], state="missing", error="相机当前没有这份素材，等待再次连接原卡", error_stage="import")
@@ -647,19 +689,26 @@ class Service:
             elif row["state"] == "uploaded" and self.store.asset(row).path not in paths:
                 self.store.update(row["id"], cleanup="absent")
         known_ids = {r["asset_id"] for r in known}
-        additions = [a for a in assets if a.identity not in known_ids]
+        additions = [a for a in selected if a.identity not in known_ids]
         batch_id = self.store.get_meta("last_batch")
-        if additions:
+        prior_batch = self.store.files(batch_id=batch_id) if batch_id else []
+        if previous_scope != scope or any(r["id"] not in eligible for r in prior_batch):
+            # A scope change creates a view of the remaining selected work, not
+            # a mutation of previous mixed batches or their file identities.
+            archived = {r["asset_id"] for r in known if r["state"] == "uploaded"}
+            remaining = [a for a in selected if a.identity not in archived]
+            batch_id = self.store.batch(self.destination_id, remaining) if remaining else None
+        elif additions:
             batch_id = self.store.batch(self.destination_id, additions)
         elif batch_id and not any(r["destination"] == self.destination_id and self.store.asset(r).serial == self.config.source["serial"]
                                  for r in self.store.files(batch_id=batch_id)):
             batch_id = None
         self.store.status(batch_id=batch_id, inventory={"scanned": True, "verified": False,
                           "batch_id": batch_id, "serial": self.config.source["serial"], "destination": self.destination_id,
-                          "checked_at": now(), "source_files": len(assets), "new_files": len(additions)})
-        groups = self.source.groups(assets)
+                          "checked_at": now(), "source_files": len(assets), "new_files": len(additions),
+                          "media_scope": scope, "selected_files": len(selected), "excluded_files": len(assets) - len(selected)})
         self.store.save_groups(self.destination_id, groups)
-        return {"assets": [a for group in groups for a in group["members"]], "batch_id": batch_id}
+        return {"assets": selected, "batch_id": batch_id}
 
     def verify_imports(self, inventory):
         self.boundary()
@@ -681,14 +730,19 @@ class Service:
         self.store.status(source_work=True)
         self.boundary()
         fresh = self.source_snapshot()
+        fresh_selected = [a for group in select_groups(self.source.groups(fresh), self.config.backup["media_scope"])
+                          for a in group["members"]]
         expected = {a.identity for a in inventory["assets"]
                     if rows[a.identity]["cleanup"] not in ("deleted", "absent")}
-        same = {a.identity for a in fresh} == expected
+        same = {a.identity for a in fresh_selected} == expected
         state = self.store.get_meta("status", {}).get("inventory", {})
         state.update(verified=same, verified_at=now() if same else None,
-                     changed_files=len({a.identity for a in fresh} ^ {a.identity for a in inventory["assets"]}))
+                     changed_files=len({a.identity for a in fresh_selected} ^ expected),
+                     excluded_files=len(fresh) - len(fresh_selected))
         self.store.status(inventory=state, source_work=False)
-        self.report("complete" if same else "waiting_scan", "本轮相机导入完成，已复查清单" if same else
+        complete_message = "本轮相机导入完成，已复查清单" if self.config.backup["media_scope"] == "all" else (
+            MEDIA_SCOPES[self.config.backup["media_scope"]] + "导入完成，其他类别保留在相机中")
+        self.report("complete" if same else "waiting_scan", complete_message if same else
                     "复查发现新增或变更素材，将在下一轮处理，请保持相机连接", current_file=None,
                     current_file_id=None, current_bytes=0, current_total_bytes=0, issue=None)
         if same:
@@ -720,7 +774,10 @@ class Service:
         state = self.store.get_meta("status", {})
         batch_id = state.get("batch_id")
         batch_rows = self.store.files(batch_id=batch_id) if batch_id else []
-        pending = [r for r in self.rows() if r["state"] != "uploaded"]
+        rows = self.rows()
+        eligible = selected_file_ids(rows, self.config.backup["media_scope"])
+        pending = [r for r in rows if r["state"] != "uploaded" and
+                   (r["id"] in eligible or r["state"] in ("cached", "staged", "publishing"))]
         if pending:
             stages = state.get("stages", {})
             waiting = next((stages[s] for s in ("import", "upload") if stages.get(s, {}).get("phase", "").startswith("waiting")), {})

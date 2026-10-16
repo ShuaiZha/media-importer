@@ -19,6 +19,29 @@ from test_service import configuration, footage, FakeSource, FakeDestination
 
 
 class CacheStatusTests(unittest.TestCase):
+    def test_backlog_distinguishes_local_only_and_preserves_import_time(self):
+        self.cache()
+        self.store.update(self.row['id'], cleanup='deleted')
+        before = self.view()['backlog']
+        self.assertEqual(1, before['source_removed_files'])
+        self.assertEqual(footage().size, before['bytes'])
+        self.assertIsNotNone(before['oldest_imported_at'])
+        self.store.update(self.row['id'], error='network failure', attempts=2, state='cached')
+        self.assertEqual(before['oldest_imported_at'], self.view()['backlog']['oldest_imported_at'])
+        self.store.update(self.row['id'], state='uploaded')
+        self.assertEqual(0, self.view()['backlog']['files'])
+
+    def test_historical_cache_age_is_unknown_and_unverified_copy_not_claimed_safe(self):
+        self.cache()
+        with self.store.db:
+            self.store.db.execute('DELETE FROM cache_receipts')
+        self.store.update(self.row['id'], cleanup='deleted')
+        self.assertIsNone(self.view()['backlog']['oldest_age_seconds'])
+        self.assertEqual(1, self.view()['backlog']['unknown_age_files'])
+        self.path.write_bytes(b'z' * footage().size)
+        self.assertEqual(0, self.view()['backlog']['source_removed_files'])
+        self.assertEqual(0, self.view()['backlog']['verified_files'])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -88,6 +111,32 @@ class CacheStatusTests(unittest.TestCase):
         self.assertEqual(original, self.config_path.read_bytes())
         self.assertEqual([], self.source.downloads + self.source.deletes + self.remote.uploads)
 
+    def test_v2_timestamp_drift_requires_original_identity_and_matching_samples(self):
+        self.cache()
+        previous = self.path.stat()
+        os.utime(self.path, ns=(previous.st_atime_ns, previous.st_mtime_ns + 15_000_000_000))
+        self.assertFalse(self.service.cache_valid(self.store.get(self.row['id'])))
+        self.source.online = False
+        self.assertTrue(self.service.verify_caches()['pending'])
+        self.source.online = True
+        self.source.assets = {}
+        self.assertTrue(self.service.verify_caches()['pending'])
+        self.source.assets = {footage().path: footage()}
+        self.source.read_range = lambda asset, start, count: b'z' * count
+        self.assertTrue(self.service.verify_caches()['pending'])
+        self.source.read_range = lambda asset, start, count: FakeSource.payload(asset)[start:start+count]
+        result = self.service.verify_caches()
+        self.assertEqual([footage().path], result['verified'])
+        self.assertFalse(result['pending'])
+        self.assertTrue(self.service.cache_valid(self.store.get(self.row['id'])))
+        self.assertFalse(self.source.downloads + self.source.deletes + self.remote.uploads)
+
+    def test_v2_changed_content_is_never_repaired_as_timestamp_drift(self):
+        self.cache()
+        self.path.write_bytes(b'z' * footage().size)
+        self.assertTrue(self.service.verify_caches()['pending'])
+        self.assertFalse(self.service.cache_valid(self.store.get(self.row['id'])))
+
     def test_legacy_offline_or_different_source_keeps_cache_and_count_unconfirmed(self):
         self.cache(legacy=True, remapped=True)
         payload = self.path.read_bytes()
@@ -138,6 +187,37 @@ class CacheStatusTests(unittest.TestCase):
         self.store.status(inventory={'scanned': False, 'verified': False})
         self.assertFalse(self.view()['unplug']['ready'])
 
+    def test_wireless_verified_import_survives_expired_observation_without_claiming_online(self):
+        self.settings.update_preferences({'backup': {'source_transport': 'wifi'}})
+        self.cache()
+        self.settings.set_enabled(True)
+        self.store.status(inventory={'scanned': True, 'verified': True, 'batch_id': self.batch,
+                                     'destination': self.config.destination_id, 'serial': footage().serial},
+                          source={'online': True, 'checked_at': '2020-01-01T00:00:00+00:00'})
+        state = self.view()
+        self.assertTrue(state['unplug']['ready'])
+        self.assertTrue(state['unplug']['can_disconnect'])
+        self.assertTrue(state['health']['source']['stale'])
+        self.assertIsNone(state['health']['source']['online'])
+        self.assertIn('剩余素材将继续上传', state['unplug']['message'])
+        self.store.update(self.row['id'], state='uploaded')
+        self.assertIn('本轮素材已全部归档', self.view()['unplug']['message'])
+        self.store.status(source_work=True)
+        self.assertFalse(self.view()['unplug']['can_disconnect'])
+        self.store.status(source_work=False, inventory={'scanned': True, 'verified': False})
+        self.assertFalse(self.view()['unplug']['ready'])
+
+    def test_wireless_expired_observation_does_not_hide_missing_cache(self):
+        self.settings.update_preferences({'backup': {'source_transport': 'wifi'}})
+        self.cache()
+        self.settings.set_enabled(True)
+        self.store.status(inventory={'scanned': True, 'verified': True, 'batch_id': self.batch,
+                                     'destination': self.config.destination_id, 'serial': footage().serial},
+                          source={'online': True, 'checked_at': '2020-01-01T00:00:00+00:00'})
+        self.path.unlink()
+        self.assertFalse(self.view()['unplug']['ready'])
+        self.assertTrue(self.view()['attention']['required'])
+
     def test_recent_archive_uses_real_suffixed_path_and_survives_next_pending_batch(self):
         path = footage().device_directory + '/GH010001_2.MP4'
         self.store.update(self.row['id'], state='uploaded', remote_path=path)
@@ -181,29 +261,3 @@ class CacheStatusTests(unittest.TestCase):
         self.store.status(worker_heartbeat_at=now(), destination={'online':False,'checked_at':now(),
                           'issue': {'code':'permission', 'action':'检查共享权限'}})
         self.assertIn('检查共享权限', self.view()['attention']['message'])
-
-    def test_v2_timestamp_drift_requires_original_identity_and_matching_samples(self):
-        self.cache()
-        previous = self.path.stat()
-        os.utime(self.path, ns=(previous.st_atime_ns, previous.st_mtime_ns + 15_000_000_000))
-        self.assertFalse(self.service.cache_valid(self.store.get(self.row['id'])))
-        self.source.online = False
-        self.assertTrue(self.service.verify_caches()['pending'])
-        self.source.online = True
-        self.source.assets = {}
-        self.assertTrue(self.service.verify_caches()['pending'])
-        self.source.assets = {footage().path: footage()}
-        self.source.read_range = lambda asset, start, count: b'z' * count
-        self.assertTrue(self.service.verify_caches()['pending'])
-        self.source.read_range = lambda asset, start, count: FakeSource.payload(asset)[start:start+count]
-        result = self.service.verify_caches()
-        self.assertEqual([footage().path], result['verified'])
-        self.assertFalse(result['pending'])
-        self.assertTrue(self.service.cache_valid(self.store.get(self.row['id'])))
-        self.assertFalse(self.source.downloads + self.source.deletes + self.remote.uploads)
-
-    def test_v2_changed_content_is_never_repaired_as_timestamp_drift(self):
-        self.cache()
-        self.path.write_bytes(b'z' * footage().size)
-        self.assertTrue(self.service.verify_caches()['pending'])
-        self.assertFalse(self.service.cache_valid(self.store.get(self.row['id'])))

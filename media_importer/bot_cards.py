@@ -3,6 +3,7 @@ from datetime import datetime
 import math
 
 from .notifications import _size, _duration
+from .media import MEDIA_SCOPES
 
 
 def plain(text):
@@ -46,13 +47,23 @@ def settings_result(changes, applied, stopping):
         title = "同步已开启" if backup["enabled"] else "正在停止同步" if stopping else "同步已关闭"
     elif "delete_source_after_import" in backup:
         title = "已开启导入后删除原片" if backup["delete_source_after_import"] else "已设置保留相机原片"
+    elif "media_scope" in backup:
+        title = "同步内容已改为" + MEDIA_SCOPES[backup["media_scope"]]
+    elif "source_transport" in backup:
+        title = "连接方式已改为" + {"usb": "USB 直连", "wifi": "手动 Wi-Fi"}[backup["source_transport"]]
+    elif backup.get('stop_after_current'):
+        title = '传完当前文件后停止'
     elif "enabled" in notifications:
-        title = "自动通知已开启" if notifications["enabled"] else "自动通知已关闭"
+        title = "传输通知已开启" if notifications["enabled"] else "传输通知已关闭"
+    elif "connection_events" in notifications:
+        title = "连接提醒已开启" if notifications["connection_events"] else "连接提醒已关闭"
     else:
         title = "传输设置已保存" if "limits" in changes else "通知设置已保存"
     if not applied:
         return {"title": "设置已保存 · 等待生效", "detail": "已保存到 JSON，后台尚未确认应用；稍后点击底部「状态」查看。", "level": "warning"}
     detail = "已保存到 JSON，后台已应用。"
+    if backup.get('stop_after_current'):
+        detail += '两路只完成各自当前文件，不再启动新文件或新的原片删除。需要取消时点击「继续同步」。'
     if stopping:
         detail += "正在结束当前操作并清理半文件，完整缓存保留。"
     return {"title": title, "detail": detail, "level": "warning" if stopping else "success"}
@@ -74,7 +85,7 @@ def _stage_label(view, name):
     if state == "paused":
         return "已停止" if view.get("running") else "服务未运行"
     return {"downloading": "导入中", "uploading": "上传中", "publishing": "确认归档",
-            "scanning": "扫描中", "verifying": "核对中", "paused": "准备继续"}.get(phase, "等待中")
+            "scanning": "扫描中", "verifying": "核对中", "paused": "准备继续", "draining": "本路已停止，等待另一条传输"}.get(phase, "等待中")
 
 
 def progress_bar(value):
@@ -88,7 +99,8 @@ def progress_bar(value):
 def headline_elements(view):
     unplug = view.get('unplug', {})
     if unplug.get('ready'):
-        title = '✅ **本轮素材已收齐 · 相机可以拔走**'
+        subject = '本轮素材' if view.get('selection', {}).get('scope', 'all') == 'all' else '所选类别素材'
+        title = '✅ **' + subject + '已收齐 · 相机可以拔走**'
     elif unplug.get('can_disconnect'):
         title = '📷 **当前可以断开相机 · 素材尚未确认收齐**'
     elif not view.get('running'):
@@ -101,6 +113,14 @@ def headline_elements(view):
         title = '📷 **导入尚未完成 · 请保持相机连接**'
     attention = view.get('attention', {'required': False, 'message': '暂无需要处理的问题。'})
     elements = [markdown(title), paragraph(unplug.get('message', '请从「状态 → 运行总览」确认相机读取是否已结束。'))]
+    selection = view.get('selection', {})
+    if selection:
+        label = '同步内容 · ' + selection['label']
+        if not selection.get('applied', True):
+            label += ' · 等待后台应用并扫描'
+        elif selection.get('excluded_source_files'):
+            label += f" · 本轮不导入 {selection['excluded_source_files']} 个其他文件"
+        elements.append(note(label))
     if attention['required'] or '无需处理' not in attention['message']:
         label = '⚠️ **需要处理**' if attention['required'] else 'ℹ️ **当前等待**'
         elements += [markdown(label), paragraph(attention['message'].removeprefix('需要处理：'))]
@@ -113,28 +133,39 @@ def progress_elements(view):
     """Shared by queried status cards and periodically updated progress cards."""
     batch = view.get('batch', {})
     if not batch.get('total_files'):
-        elements = [markdown('**没有待处理素材**' if batch.get('scanned') else '**尚未扫描素材**')]
+        empty = '所选类别没有待导入素材' if view.get('selection', {}).get('scope', 'all') != 'all' else '没有待处理素材'
+        elements = [markdown('**' + empty + '**' if batch.get('scanned') else '**尚未扫描素材**')]
         if any(stage.get('phase') == 'paused' and not view.get('controls', {}).get(name, {}).get('requested_stop')
                and view.get('controls', {}).get(name, {}).get('state') == 'running'
                for name, stage in view.get('stages', {}).items()):
             elements.append(note('已收到继续指令，等待队列更新。'))
-        return elements
-    label = '本轮素材' if batch.get('scanned') else '已记录素材 · 尚未重新扫描相机'
-    elements = [markdown(f"**{label}**　{batch['total_files']} 个文件 · {_size(batch.get('total_bytes'))}")]
+        if not view.get('selection', {}).get('cached_outside_scope_files'):
+            return elements
+    else:
+        label = '本轮所选素材' if view.get('selection', {}).get('scope', 'all') != 'all' else '本轮素材'
+        label = label if batch.get('scanned') else '已记录素材 · 尚未重新扫描相机'
+        elements = [markdown(f"**{label}**　{batch['total_files']} 个文件 · {_size(batch.get('total_bytes'))}")]
     for name, label, count, percent, verb in (
             ('import', '💾 导入到缓存', 'imported_files', 'import_percent', '已完整导入'),
             ('upload', '📁 归档到存储', 'completed_files', 'percent', '已正式归档')):
         bar, value = progress_bar(batch.get(percent))
-        done, total = batch.get(count, 0), batch['total_files']
+        done, total = batch.get(count, 0), batch.get('total_files', 0)
         stage = view.get('stages', {}).get(name, {})
         control = view.get('controls', {}).get(name, {})
         stopped = control.get('requested_stop') or control.get('state') in ('paused', 'pausing') or not view.get('running')
         state_label = _stage_label(view, name)
-        if done == total:
+        if total and done == total:
             state_label = '导入完成' if name == 'import' else '归档完成'
         elif value == 100 and not stopped:
             state_label = '等待导入核验' if name == 'import' else '正在确认归档'
-        elements.append(markdown(f"**{label} · {value:.1f}%**\n{bar}\n{verb} **{done} / {total}** 个 · {state_label}"))
+        if total:
+            elements.append(markdown(f"**{label} · {value:.1f}%**\n{bar}\n{verb} **{done} / {total}** 个 · {state_label}"))
+        elif name == 'upload':
+            elements.append(markdown(f"**{label} · {_stage_label(view, name)}**"))
+        else:
+            continue
+        if name == 'upload' and view.get('selection', {}).get('cached_outside_scope_files'):
+            elements.append(note('其他类别的完整缓存仍会上传，不计入上方所选类别进度。'))
         if stopped:
             continue
         queue = view.get('queues', {}).get(name, {})
@@ -150,15 +181,32 @@ def progress_elements(view):
             elements.append(paragraph(str(stage['message'])[:240]))
         if queue.get('pending_files'):
             elements.append(note(f"待处理 {queue['pending_files']} 个 · {_size(queue.get('remaining_bytes'))}"))
-    if batch.get('percent', 0) >= 100 and batch.get('completed_files', 0) < batch['total_files']:
+    if batch.get('percent', 0) >= 100 and batch.get('completed_files', 0) < batch.get('total_files', 0):
         elements.append(note('上传字节已到达，仍需大小核对与正式改名；当前尚未全部归档。'))
+    return elements
+
+
+def backlog_elements(view):
+    backlog = view.get('backlog', {})
+    if not backlog.get('files'):
+        return []
+    elements = [markdown(f"💾 **待归档缓存 {backlog['files']} 个 · {_size(backlog['bytes'])}**")]
+    if backlog.get('source_removed_files'):
+        elements.append(paragraph(f"其中 {backlog['source_removed_files']} 个的相机原片已清理或不存在；当前链路仅确认缓存盘有完整副本，请保持连接。"))
+    if backlog.get('oldest_age_seconds') is not None:
+        elements.append(note('最早一项已等待 ' + _duration(backlog['oldest_age_seconds'])))
+    if backlog.get('unknown_age_files'):
+        elements.append(note(f"{backlog['unknown_age_files']} 个历史缓存未记录导入时间；不估算其等待时长。"))
+    if backlog.get('verified_files', 0) < backlog['files']:
+        elements.append(note('部分缓存当前无法核验，请检查原缓存盘；不据此认定文件安全可用。'))
     return elements
 
 
 def progress_card(view, interval, keyword='', updated_at=None, *, notifications_enabled=True):
     batch = view.get('batch', {})
     enabled = view.get('configuration', {}).get('sync_enabled', True)
-    complete = bool(batch.get('total_files') and batch.get('completed_files') == batch['total_files'])
+    complete = bool(batch.get('total_files') and batch.get('completed_files') == batch['total_files']
+                    and not view.get('selection', {}).get('cached_outside_scope_files'))
     title, color = ('✅ 本轮已归档', 'green') if complete else ('🔄 传输进度', 'blue')
     if view.get('attention', {}).get('required'):
         title, color = '⚠️ 传输需要处理', 'orange'
@@ -170,6 +218,9 @@ def progress_card(view, interval, keyword='', updated_at=None, *, notifications_
         title, color = '⚠️ 传输服务待检查', 'orange'
     elements = ([note(keyword)] if keyword else []) + headline_elements(view)
     elements += [{'tag': 'hr'}] + progress_elements(view)
+    elements += backlog_elements(view)
+    if view.get('configuration', {}).get('stop_after_current'):
+        elements.append(markdown('⏳ **传完当前文件后停止，不再启动新文件或新的原片删除。**'))
     if complete:
         elements.append(note('本轮更新结束；归档结果另行提醒。'))
     elif not enabled or not notifications_enabled:
@@ -181,11 +232,23 @@ def progress_card(view, interval, keyword='', updated_at=None, *, notifications_
 
 
 def event_card(kind, title, text, view, *, keyword='', updated_at=None, locations=None):
-    icon, color = {'completed': ('✅', 'green'), 'imported': ('📷', 'green'),
-                   'failed': ('⚠️', 'orange'), 'test': ('✅', 'blue')}.get(kind, ('ℹ️', 'blue'))
+    icon, color = {'connected': ('📷', 'green'), 'disconnected': ('🔌', 'orange'),
+                   'completed': ('✅', 'green'), 'imported': ('📷', 'green'),
+                   'failed': ('⚠️', 'orange'), 'backlog': ('💾', 'orange'),
+                   'recovered': ('✅', 'green'), 'test': ('✅', 'blue')}.get(kind, ('ℹ️', 'blue'))
     title = title.removeprefix('素材导入助手 · ')
     elements = [note(keyword)] if keyword else []
-    if kind == 'completed':
+    if kind in ('connected', 'disconnected'):
+        elements += [paragraph(text), {"tag": "hr"}]
+        enabled = view.get('configuration', {}).get('sync_enabled', False)
+        if kind == 'connected':
+            elements.append(markdown('**同步已开启，将按当前类别导入。**' if enabled else '**同步已关闭，尚未开始导入。**'))
+            if not enabled:
+                elements.append(note('需要备份时点击「同步 → 开启同步」。'))
+        else:
+            elements.append(note('已有完整缓存仍可继续上传，未完成导入等待重新连接。' if enabled else '同步已关闭，任务与完整缓存保留。'))
+        elements.append(note('「状态 → 设备与存储」查看当前连接；连接提醒可在「设置 → 通知设置」关闭。'))
+    elif kind == 'completed':
         elements += [markdown('**素材已正式归档**'), paragraph(text), {'tag': 'hr'}, markdown('📁 **实际归档位置**')]
         elements.extend(paragraph(location) for location in (locations or [])[:3])
         if not locations:
@@ -197,6 +260,10 @@ def event_card(kind, title, text, view, *, keyword='', updated_at=None, location
     elif kind == 'failed':
         elements += [markdown('**当前问题**'), paragraph(title), markdown('**如何处理**'), paragraph(text)]
         elements.append(note('已完成的文件与完整缓存保留；同一持续故障不重复提醒。'))
+    elif kind == 'backlog':
+        elements += [markdown('**缓存仍未归档**'), paragraph(text)] + backlog_elements(view)
+    elif kind == 'recovered':
+        elements += [markdown('**此问题已恢复**'), paragraph(text)]
     else:
         elements += [markdown('**通知连接成功**'), paragraph(text)]
     elements.append(note('通知时间 ' + format_time(updated_at or view.get('observed_at')) + ' · 底部「状态」查看最新进展'))
@@ -208,11 +275,14 @@ def status_content(view):
     batch, health = view["batch"], view["health"]
     enabled, running = view["configuration"]["sync_enabled"], view["running"]
     stopping = any(c["state"] == "pausing" for c in view["controls"].values())
-    complete = bool(batch["total_files"] and batch["completed_files"] == batch["total_files"])
+    complete = bool(batch["total_files"] and batch["completed_files"] == batch["total_files"]
+                    and not view.get('selection', {}).get('cached_outside_scope_files'))
     if not running:
         title, color = "运行总览 · 服务待检查", "orange"
     elif stopping:
         title, color = "运行总览 · 正在停止", "orange"
+    elif view['configuration'].get('stop_after_current'):
+        title, color = "运行总览 · 传完当前文件后停止", "blue"
     elif not enabled:
         title, color = "运行总览 · 同步已关闭", "grey"
     elif complete:
@@ -229,12 +299,13 @@ def status_content(view):
     title = ('⚠️ ' if color == 'orange' else '✅ ' if color == 'green' else '⏸ ' if color == 'grey' else '🔄 ') + title
     elements = headline_elements(view)
     if enabled or stopping:
-        elements.append(note('正在结束当前操作' if stopping else '同步已开启 · 持续监听新素材'))
+        elements.append(note('正在结束当前操作' if stopping else '不再启动新文件或新的原片删除' if view['configuration'].get('stop_after_current') else '同步已开启 · 持续监听新素材，重连后自动导入'))
     elements += [{'tag': 'hr'}, paragraph("  ·  ".join(
         label + " " + _connection(health[key], key == "cache")
         for key, label in (("source", "相机"), ("cache", "缓存盘"), ("destination", "目的地"))))]
     elements.append({"tag": "hr"})
     elements += progress_elements(view)
+    elements += backlog_elements(view)
     cleanup = view["totals"]
     pending = [f"{label} {count}" for label, count in (
         ("相机原片", cleanup["pending_cleanup"]), ("完整缓存", cleanup["cache_cleanup_pending"]),
@@ -267,6 +338,11 @@ def device_content(view):
     elements.append(paragraph(identity or '尚未读取到绑定相机的身份'))
     if source.get('firmware_version'):
         elements.append(note('固件 ' + source['firmware_version']))
+    if source.get('transport'):
+        elements.append(note('连接方式 · ' + {'wifi': '手动 Wi-Fi', 'usb': 'USB 直连'}.get(source['transport'], '未知')))
+    if source.get('wireless'):
+        elements.append(paragraph(str(source['wireless'].get('message') if source['wireless'].get('state') != 'unavailable' else
+                                       '请在电脑手动连接相机热点；这里显示相机的网络可访问状态，飞书不会切换电脑 Wi-Fi。')[:300]))
     telemetry = source.get('telemetry', {})
     fresh = bool(source.get('online') and not source.get('stale') and telemetry.get('available') and not telemetry.get('stale'))
     if fresh:
@@ -322,7 +398,7 @@ def device_content(view):
     checked = view.get('preflight')
     if checked:
         labels = {'ok': '通过', 'waiting': '有等待项', 'error': '有待处理项', 'checking': '检查中'}
-        elements += [{'tag': 'hr'}, note('启动自检 ' + labels.get(checked['state'], '未知') + ' · ' +
+        elements += [{'tag': 'hr'}, note('最近自检 ' + labels.get(checked['state'], '未知') + ' · ' +
                      format_time(checked.get('finished_at') or checked.get('started_at')) + '；当前连接以上方观测为准')]
     elements.append(note('查询快照 · ' + format_time(view['observed_at']) + ' · 点击下方刷新'))
     problematic = not health['cache'].get('available') or view.get('attention', {}).get('required')
@@ -364,7 +440,7 @@ def archive_content(view):
                       item.get('error') or item.get('source_cleanup_error') or item.get('cache_cleanup_error'))
             elements.append(paragraph(str(item['path']) + '\n' + str(reason)[:300]))
         if len(view['issues']) > 3:
-            elements.append(note(f"另有 {len(view['issues']) - 3} 个异常，完整记录可在本机 status --json 查看。"))
+            elements.append(note(f"另有 {len(view['issues']) - 3} 个异常，点击「查看全部异常」逐页查看。"))
         for item in view['temporary_cleanup'][:2]:
             if item.get('error'):
                 elements.append(paragraph('临时文件清理：' + str(item['error'])[:300]))

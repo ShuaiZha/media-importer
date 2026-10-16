@@ -129,16 +129,18 @@ class BotTests(unittest.TestCase):
             actions=[json.loads(x[0]) for x in db.execute('SELECT payload FROM bot_actions')]
         self.assertIn({'changes':{'backup':{'delete_source_after_import':True}},'page':'cleanup'},actions)
 
-    def test_status_panels_only_have_read_only_refresh(self):
+    def test_stopped_status_panels_offer_only_refresh_and_safe_checks(self):
         before = self.path.read_bytes()
         for page in ('status', 'devices', 'archives'):
             response = self.bot.panel(page)
             self.assertTrue(response['config']['update_multi'])
             buttons = [button for e in response['elements'] if e['tag'] == 'action' for button in e['actions']]
-            self.assertEqual(['刷新'], [b['text']['content'] for b in buttons])
+            self.assertIn('刷新', [b['text']['content'] for b in buttons])
+            self.assertTrue(all(b['text']['content'] in ('刷新', '重新检查连接') for b in buttons))
+            refresh = next(b for b in buttons if b['text']['content'] == '刷新')
             with self.bot.db() as db:
                 payload = json.loads(db.execute('SELECT payload FROM bot_actions WHERE token=?',
-                                               (buttons[0]['value']['token'],)).fetchone()[0])
+                                               (refresh['value']['token'],)).fetchone()[0])
             self.assertEqual({'panel': page, 'refresh': True}, payload)
         self.assertEqual(before, self.path.read_bytes())
 
