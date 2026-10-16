@@ -47,7 +47,7 @@ class Control:
     def allowed(self, policy=None):
         self.refresh()
         with self.lock:
-            return self.enabled() and (not policy or self.item["config"]["backup"][policy])
+            return self.enabled() and (not policy or (not self.draining() and self.item["config"]["backup"][policy]))
 
     def boundary(self):
         self.refresh()
@@ -74,7 +74,15 @@ class Control:
             return {"saved_revision": self.item["revision"] if self.item else None,
                     "applied_revision": self.applied_revision,
                     "pending": self.token != self.applied_token,
-                    "error": self.error, "sync_enabled": self.enabled()}
+                    "error": self.error, "sync_enabled": self.enabled(), "stop_after_current": self.draining()}
+
+    def draining(self):
+        return bool(self.enabled() and self.item["config"]["backup"].get("stop_after_current"))
+
+    def finish_stop(self):
+        changed = self.settings.finish_stop()
+        self.refresh()
+        return changed
 
 
 def daemon(config_path, directory, stop):

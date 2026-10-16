@@ -210,7 +210,7 @@ class Service:
         return inspect_cached_file(self.store.cached_path(row), expected, row["asset_id"],
                                    self.store.get_meta("cache_identity"))["valid"]
 
-    def verify_caches(self):
+    def verify_caches(self, cancelled=None):
         """Explicit read-only source verification; never transfer, publish or delete.
 
         Legacy records are adopted only after matching their prior size/mtime,
@@ -222,6 +222,8 @@ class Service:
         volume = self.store.get_meta("cache_identity")
         inventory = None
         for row in self.rows():
+            if self.stop.is_set() or cancelled and cancelled():
+                raise Cancelled("缓存核验已停止；文件与原片保留")
             path = self.store.cached_path(row)
             if not path.exists():
                 continue
@@ -232,12 +234,19 @@ class Service:
                 if not expected or before["size"] != asset.size:
                     raise CacheUnavailable("缺少完整导入凭据或大小不符，保留缓存待人工核验")
                 if expected.get("version") == 2:
-                    if not self.cache_valid(row):
+                    actual = cache_evidence(path, row["asset_id"], volume)
+                    if actual == expected:
+                        result["verified"].append(asset.path)
+                        continue
+                    # Recover only timestamp drift, and only after a fresh
+                    # identity and sample comparison against the original.
+                    if any(actual.get(key) != value for key, value in expected.items() if key != "mtime_ns"):
                         raise CacheUnavailable("缓存与导入凭据不符，保留缓存待人工核验")
-                    result["verified"].append(asset.path)
-                    continue
-                if before != expected:
-                    if any(before[key] != expected.get(key) for key in ("size", "mtime_ns")):
+                    verify_source = True
+                else:
+                    verify_source = before != expected
+                if verify_source:
+                    if not expected.get("version") and any(before[key] != expected.get(key) for key in ("size", "mtime_ns")):
                         raise CacheUnavailable("缓存大小或修改时间变化，保留缓存待人工核验")
                     if not hasattr(self.source, "read_range"):
                         raise CacheUnavailable("设备不支持小范围核验，保留原缓存")
@@ -247,7 +256,7 @@ class Service:
                         raise SourceError("原相机素材身份不匹配，等待连接原相机和存储卡")
                     with path.open("rb") as handle:
                         for offset, length in sample_ranges(asset.size):
-                            if self.stop.is_set():
+                            if self.stop.is_set() or cancelled and cancelled():
                                 raise Cancelled("缓存核验已停止")
                             handle.seek(offset)
                             if handle.read(length) != self.source.read_range(asset, offset, length):
@@ -499,14 +508,32 @@ class Service:
         try:
             self.source.download(asset, partial, self.progress)
             require_cache(self.store)
+            # Explicit whole-second metadata avoids delayed write timestamps
+            # on external FAT-family volumes shared by Docker Desktop.
+            committed_mtime = time.time_ns() // 2_000_000_000 * 2_000_000_000
+            os.utime(partial, ns=(committed_mtime, committed_mtime))
+            # Reopen and flush after the writer closes. Docker Desktop's
+            # external-volume metadata can settle only at this boundary;
+            # keep the subsequent identity checks strict.
+            with partial.open("rb") as imported:
+                os.fsync(imported.fileno())
             identity = cache_evidence(partial, row["asset_id"], self.store.get_meta("cache_identity"))
             if identity["size"] != asset.size:
                 raise SourceError("导入大小不一致")
             # This intent makes a crash between rename and SQLite commit recoverable.
             self.store.update(row["id"], cache_identity=json.dumps(identity))
             os.replace(partial, cache)
+            os.utime(cache, ns=(committed_mtime, committed_mtime))
             fsync_directory(self.store.cache)
-            self.store.update(row["id"], state="cached", error=None, error_stage=None)
+            with cache.open("rb") as imported:
+                os.fsync(imported.fileno())
+            final_identity = cache_evidence(cache, row["asset_id"], self.store.get_meta("cache_identity"))
+            if any(final_identity[key] != identity[key] for key in ("asset_id", "volume_id", "size", "samples")):
+                raise CacheUnavailable("正式缓存与导入文件不一致，已保留完整文件和相机原片")
+            # A rename can refresh stale external-volume timestamps. Persist
+            # the final path's evidence, after confirming identical content.
+            self.store.update(row["id"], state="cached", cache_identity=json.dumps(final_identity),
+                              error=None, error_stage=None)
             committed = True
         finally:
             if not committed:
@@ -527,7 +554,8 @@ class Service:
             if group["id"] in attempted:
                 continue
             rows = [self.store.get(key) for key in json.loads(group["members"])]
-            if not rows or any(not r or r["state"] not in ("cached", "staged", "publishing", "uploaded") for r in rows):
+            if not rows or any(not r or r["group_id"] != group["id"] or
+                               r["state"] not in ("cached", "staged", "publishing", "uploaded") for r in rows):
                 continue
             if all(r["cleanup"] in ("deleted", "absent") for r in rows):
                 continue
@@ -686,6 +714,8 @@ class Service:
         self.boundary()
         from .pipeline import transfer
         transfer(self)
+        if self.control and self.control.draining():
+            self.control.finish_stop()
         self.boundary()
         state = self.store.get_meta("status", {})
         batch_id = state.get("batch_id")

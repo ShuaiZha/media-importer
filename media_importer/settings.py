@@ -67,7 +67,7 @@ class Settings:
         return self.update_preferences({"backup": {"enabled": enabled}})
 
     def update_preferences(self, changes, expected=None):
-        allowed = {"backup": {"enabled", "delete_source_after_import"},
+        allowed = {"backup": {"enabled", "delete_source_after_import", "stop_after_current"},
                    "limits": {"upload_mib_per_second", "min_free_disk_gib", "max_cache_gib"},
                    "notifications": {"enabled", "progress_interval_seconds", "keyword"}}
         if not isinstance(changes, dict) or not changes:
@@ -84,6 +84,8 @@ class Settings:
             values = preferences(item["config"])
             for group, updates in changes.items():
                 values[group].update(updates)
+            if "enabled" in changes.get("backup", {}) or not values["backup"]["enabled"]:
+                values["backup"]["stop_after_current"] = False
             checked = runtime_config(values)
             atomic_write(self.path, json.dumps(checked, ensure_ascii=False, indent=2) + "\n")
             return self.read()
@@ -93,6 +95,17 @@ class Settings:
         structural = json.loads(json.dumps(item["config"]))
         if structural:
             structural.pop("notifications", None)
-            for key in ("enabled", "delete_source_after_import"):
+            for key in ("enabled", "delete_source_after_import", "stop_after_current"):
                 structural["backup"].pop(key, None)
         return item, revision(json.dumps(structural, sort_keys=True))
+
+    def finish_stop(self):
+        """Finish a drain only if it has not been cancelled by a newer start."""
+        with self.lock():
+            item = self.read()
+            if item["error"] or not item["config"]["backup"]["stop_after_current"]:
+                return False
+            values = preferences(item["config"])
+            values["backup"].update(enabled=False, stop_after_current=False)
+            atomic_write(self.path, json.dumps(runtime_config(values), ensure_ascii=False, indent=2) + "\n")
+            return True

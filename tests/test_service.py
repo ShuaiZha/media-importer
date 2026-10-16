@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 import tempfile
 import threading
 import time
@@ -225,7 +226,8 @@ class ServiceTests(unittest.TestCase):
         row = next(r for r in self.store.files() if r['asset_id']==asset.identity)
         path = self.store.cached_path(row)
         path.write_bytes(FakeSource.payload(asset))
-        self.store.update(row['id'], state='cached', cache_identity=json.dumps(file_identity(path)))
+        from media_importer.storage import cache_evidence
+        self.store.update(row['id'], state='cached', cache_identity=json.dumps(cache_evidence(path, row['asset_id'], self.store.get_meta('cache_identity'))))
         return self.store.get(row['id'])
 
     def test_full_archive_cleans_cache_and_retains_originals(self):
@@ -248,6 +250,35 @@ class ServiceTests(unittest.TestCase):
         self.source.download=download;self.destination.online=False
         self.service(configuration(delete_source_after_import=True)).safe_cycle()
         self.assertEqual(1,len(self.source.deletes))
+
+    def test_all_video_chapters_import_before_deleting_last_chapter_first(self):
+        first, first_proxy = footage(), footage(primary=False)
+        last = replace(footage(2), path='100GOPRO/GH020001.MP4')
+        last_proxy = replace(footage(2, primary=False), path='100GOPRO/GL020001.LRV')
+        self.source = FakeSource([first, first_proxy, last, last_proxy])
+        self.destination.online = False
+        def deleting(asset):
+            self.assertEqual(4, len(self.source.downloads))
+        self.source.on_delete = deleting
+        self.service(configuration(delete_source_after_import=True)).safe_cycle()
+        self.assertEqual([last.path, first.path], self.source.deletes)
+        self.assertFalse(self.source.assets)
+
+    def test_old_individual_groups_cannot_delete_incomplete_recording(self):
+        first, proxy = footage(), footage(primary=False)
+        last = replace(footage(2), path='100GOPRO/GH020001.MP4')
+        last_proxy = replace(footage(2, primary=False), path='100GOPRO/GL020001.LRV')
+        self.source = FakeSource([first, proxy, last, last_proxy])
+        for asset in (first, proxy):
+            self.cached(asset)
+        self.store.batch(self.config.destination_id, [last, last_proxy])
+        # Existing installations recorded each chapter as a separate group.
+        for pair in ((first, proxy), (last, last_proxy)):
+            self.store.save_groups(self.config.destination_id, self.source.groups(list(pair)))
+        self.store.save_groups(self.config.destination_id, self.source.groups(list(self.source.assets.values())))
+        self.service(configuration(delete_source_after_import=True)).cleanup_groups(set())
+        self.assertFalse(self.source.deletes)
+        self.assertEqual(4, len(self.source.assets))
 
     def test_missing_member_or_identity_prevents_delete(self):
         self.source.fail_download=True
@@ -294,6 +325,71 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual('pending',self.store.temporary_items()[0]['state'])
         self.destination.online=True;service.clean_temporaries()
         self.assertFalse(self.destination.objects);self.assertTrue(self.store.cached_path(row).exists())
+
+    def test_repeated_interruption_cleans_each_new_local_attempt(self):
+        asset = footage()
+        self.store.batch(self.config.destination_id, [asset])
+        row = self.store.files()[0]
+        service = self.service()
+        self.source.fail_download = True
+        for attempt in range(2):
+            with self.assertRaises(SourceError):
+                service.import_asset(self.store.get(row['id']))
+            self.assertFalse(self.store.cached_path(row).with_suffix('.download').exists())
+            self.assertFalse(self.store.temporary_items())
+        self.source.fail_download = False
+        service.import_asset(self.store.get(row['id']))
+        self.assertEqual('cached', self.store.get(row['id'])['state'])
+        self.assertEqual(3, len(self.source.downloads))
+        self.assertFalse(self.source.deletes)
+
+    def test_import_flushes_closed_download_before_recording_cache_identity(self):
+        from media_importer.storage import cache_evidence
+        self.store.batch(self.config.destination_id, [footage()])
+        row = self.store.files()[0]
+        with patch('media_importer.service.os.fsync', wraps=os.fsync) as flush:
+            def checked(*args):
+                self.assertGreater(flush.call_count, 0)
+                return cache_evidence(*args)
+            with patch('media_importer.service.cache_evidence', side_effect=checked):
+                self.service().import_asset(row)
+        self.assertTrue(self.service().cache_valid(self.store.get(row['id'])))
+
+    def test_import_records_final_cache_timestamp_after_rename(self):
+        self.store.batch(self.config.destination_id, [footage()])
+        row = self.store.files()[0]
+        replace = os.replace
+        def rename(source, destination):
+            replace(source, destination)
+            previous = Path(destination).stat()
+            os.utime(destination, ns=(previous.st_atime_ns, previous.st_mtime_ns + 15_000_000_000))
+        with patch('media_importer.service.os.replace', side_effect=rename):
+            self.service().import_asset(row)
+        self.assertTrue(self.service().cache_valid(self.store.get(row['id'])))
+
+    def test_changed_content_after_rename_is_preserved_without_import_commit(self):
+        self.store.batch(self.config.destination_id, [footage()])
+        row = self.store.files()[0]
+        replace = os.replace
+        def rename(source, destination):
+            replace(source, destination)
+            Path(destination).write_bytes(b'z' * footage().size)
+        with patch('media_importer.service.os.replace', side_effect=rename):
+            with self.assertRaises(CacheUnavailable):
+                self.service().import_asset(row)
+        self.assertEqual('pending', self.store.get(row['id'])['state'])
+        self.assertTrue(self.store.cached_path(row).exists())
+        self.assertFalse(self.source.deletes)
+
+    def test_requeued_foreign_temporary_stays_blocked(self):
+        row = self.cached()
+        self.destination.objects['foreign'] = b'x'
+        self.destination.identities['foreign'] = {'inode': 9}
+        self.store.queue_temporary(row, 'remote', 'foreign', {'inode': 2})
+        self.service().clean_temporaries()
+        self.store.queue_temporary(row, 'remote', 'foreign', {'inode': 2})
+        self.assertEqual('blocked', self.store.temporary_items()[0]['state'])
+        self.assertIn('foreign', self.destination.objects)
 
     def test_recover_half_upload_and_local_commit_after_restart(self):
         row=self.cached();self.destination.objects['partial']=b'x';self.destination.identities['partial']={'inode':1}

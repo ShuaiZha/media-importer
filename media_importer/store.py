@@ -175,11 +175,11 @@ class Store:
                 members = [self.file_id(destination, asset) for asset in group["members"]]
                 existing = self.db.execute("SELECT members FROM source_groups WHERE id=?", (identifier,)).fetchone()
                 if existing:
-                    members = list(dict.fromkeys(json.loads(existing[0]) + members))
+                    members = list(dict.fromkeys(members + json.loads(existing[0])))
                 self.db.execute("INSERT INTO source_groups VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET members=excluded.members,safe=excluded.safe,reason=excluded.reason",
                                 (identifier, destination, json.dumps(members), int(group["safe"]), group.get("reason")))
                 for file_id in members:
-                    self.db.execute("UPDATE files SET group_id=? WHERE id=? AND group_id IS NULL", (identifier, file_id))
+                    self.db.execute("UPDATE files SET group_id=? WHERE id=?", (identifier, file_id))
 
     def groups(self, destination):
         return [dict(r) for r in self.db.execute("SELECT * FROM source_groups WHERE destination=? ORDER BY rowid", (destination,))]
@@ -188,7 +188,10 @@ class Store:
         with self.db:
             self.db.execute("""INSERT INTO temporary_cleanup
                 (id,file_id,destination,kind,path,identity,state,created_at) VALUES (?,?,?,?,?,?,'pending',?)
-                ON CONFLICT(kind,destination,path) DO UPDATE SET identity=COALESCE(excluded.identity,temporary_cleanup.identity)""",
+                ON CONFLICT(kind,destination,path) DO UPDATE SET
+                    identity=COALESCE(excluded.identity,temporary_cleanup.identity),
+                    state=CASE WHEN temporary_cleanup.state='done' THEN 'pending' ELSE temporary_cleanup.state END,
+                    error=CASE WHEN temporary_cleanup.state='done' THEN NULL ELSE temporary_cleanup.error END""",
                 (uuid.uuid4().hex, row["id"], row["destination"], kind, path, json.dumps(identity) if identity else None, now()))
 
     def temporary_items(self, destination=None):

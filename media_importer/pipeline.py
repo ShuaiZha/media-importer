@@ -40,6 +40,25 @@ def transfer(service):
                 changed = False
                 try:
                     task.boundary()
+                    if task.control and task.control.draining():
+                        with condition:
+                            if stage not in halted:
+                                task.report("draining", "本路当前文件已结束，等待另一条传输停止", current_file=None,
+                                            current_file_id=None, current_bytes=0, current_total_bytes=0, issue=None)
+                                halted.add(stage)
+                            condition.notify_all()
+                            # Keep this worker available if the user cancels the drain
+                            # while the other worker is still transferring its file.
+                            condition.wait(.15)
+                        continue
+                    with condition:
+                        resumed = stage in halted
+                        if resumed:
+                            halted.remove(stage)
+                            generation += 1
+                            condition.notify_all()
+                    if resumed:
+                        task.report("idle", "已取消等待，继续同步", issue=None)
                     require_cache(db)
                     if time.monotonic() < retry_at:
                         pass
@@ -57,6 +76,10 @@ def transfer(service):
                                     if a.identity in known and known[a.identity]["state"] in ("pending", "missing")
                                     and known[a.identity]["id"] not in failed), None)
                         if row:
+                            if task.control:
+                                task.control.refresh()
+                                if task.control.draining():
+                                    continue
                             task.import_asset(row)
                             changed, verified = True, False
                             task.cleanup_groups(cleanup_attempted)
@@ -75,6 +98,10 @@ def transfer(service):
                         row = next((r for r in task.rows() if r["state"] in ("cached", "staged", "publishing")
                                     and r["id"] not in failed), None)
                         if row:
+                            if task.control:
+                                task.control.refresh()
+                                if task.control.draining():
+                                    continue
                             task.observe_destination()
                             task.boundary()
                             task.upload_cached(row)

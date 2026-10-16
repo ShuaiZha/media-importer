@@ -2,6 +2,7 @@ import io
 from http.client import IncompleteRead
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from media_importer.adapters.gopro import GoProSource
 from media_importer.model import SourceError
@@ -68,6 +69,14 @@ class GoProTests(unittest.TestCase):
             with self.assertRaises(SourceError):
                 self.source.identify()
 
+    def test_truncated_metadata_range_is_camera_error(self):
+        response = Response(status=206)
+        with patch.object(response, "read", side_effect=IncompleteRead(b"partial", 8)), \
+             patch.object(self.source, "_open", return_value=response), \
+             patch.object(self.source, "attempts", 1, create=True):
+            with self.assertRaises(SourceError):
+                self.source._read("/videos/DCIM/100GOPRO/GH020001.MP4", 9, {"Range": "bytes=0-7"})
+
     def test_cache_range_requires_exact_partial_response(self):
         asset = footage()
         for status, headers, accepted in (
@@ -84,6 +93,55 @@ class GoProTests(unittest.TestCase):
                 else:
                     with self.assertRaises(SourceError):
                         self.source.read_range(asset, 4, 4)
+
+    @staticmethod
+    def mp4_fixture(with_gumi=True):
+        def box(kind, data):
+            return (len(data) + 8).to_bytes(4, 'big') + kind + data
+        stamp = 1700000000
+        gumi = '0123456789abcdef0123456789abcdef'
+        metadata = box(b'mvhd', b'\0' * 4 + (stamp + 2082844800).to_bytes(4, 'big'))
+        metadata += box(b'udta', box(b'GUMI', bytes.fromhex(gumi)) if with_gumi else b'')
+        body = box(b'ftyp', b'mp41') + box(b'mdat', b'x' * 1024) + box(b'moov', metadata)
+        return body, {'cre': str(stamp), 's': str(len(body)), 'gumi': gumi}
+
+    def test_remaining_chapter_identity_reads_only_mp4_headers(self):
+        body, expected = self.mp4_fixture()
+        reads = []
+        def read(path, limit, headers):
+            start, end = map(int, headers['Range'][6:].split('-'))
+            reads.append((start, end))
+            return body[start:end + 1], 206, {'Content-Range': f'bytes {start}-{end}/{len(body)}'}
+        with patch.object(self.source, 'file_stat', return_value=(len(body), 'unchanged')), \
+             patch.object(self.source, '_read', side_effect=read):
+            self.assertEqual(expected, self.source._mp4_media_info('100GOPRO/GH020001.MP4'))
+        self.assertLess(sum(end - start + 1 for start, end in reads), 128)
+        self.assertTrue(all(end < 20 or start >= 1044 for start, end in reads))
+
+    def test_mp4_fallback_only_for_not_found_video_metadata(self):
+        for status in (404, 500):
+            error = SourceError('metadata unavailable')
+            error.__cause__ = HTTPError('http://camera', status, 'missing', {}, None)
+            for path in ('100GOPRO/GH020001.MP4', '100GOPRO/G0010001.JPG'):
+                with patch.object(self.source, '_json', side_effect=error), \
+                     patch.object(self.source, '_mp4_media_info', return_value={'verified': True}) as fallback:
+                    if status == 404 and path.endswith('.MP4'):
+                        self.assertEqual({'verified': True}, self.source.media_info(path))
+                    else:
+                        with self.assertRaises(SourceError):
+                            self.source.media_info(path)
+                        fallback.assert_not_called()
+
+    def test_mp4_fallback_rejects_missing_identity_and_changed_source(self):
+        for missing, changed in ((True, False), (False, True)):
+            body, _ = self.mp4_fixture(with_gumi=not missing)
+            def read(path, limit, headers):
+                start, end = map(int, headers['Range'][6:].split('-'))
+                return body[start:end + 1], 206, {'Content-Range': f'bytes {start}-{end}/{len(body)}'}
+            with patch.object(self.source, 'file_stat', side_effect=[(len(body), 'before'), (len(body), 'after' if changed else 'before')]), \
+                 patch.object(self.source, '_read', side_effect=read):
+                with self.assertRaises(SourceError):
+                    self.source._mp4_media_info('100GOPRO/GH020001.MP4')
 
 
 if __name__ == "__main__":

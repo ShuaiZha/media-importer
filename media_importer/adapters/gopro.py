@@ -108,7 +108,30 @@ class GoProSource:
             if asset.identity not in assigned:
                 result.append({"id": asset.identity, "members": [asset], "safe": False,
                                "reason": "无法确认附属文件归属，已导入但不自动删除"})
-        return result
+        # HERO9's later chapters can lose /media/info after the first chapter
+        # is deleted. Import the complete recording before removing any part,
+        # and remove the highest chapter first so the first stays available.
+        recordings, order = {}, []
+        for group in result:
+            parent = group["members"][0]
+            match = re.fullmatch(r"(G[HX])(\d{2})(\d{4})\.MP4", PurePosixPath(parent.path).name, re.I)
+            key = (parent.serial, str(PurePosixPath(parent.path).parent), match[1].upper(), match[3], parent.created) if (
+                parent.metadata.get("primary") and match and int(match[2]) > 0 and parent.created) else (group["id"],)
+            if key not in recordings:
+                recordings[key] = []
+                order.append(key)
+            recordings[key].append((int(match[2]) if match else 0, group))
+        combined = []
+        for key in order:
+            chapters = sorted(recordings[key], key=lambda item: item[0], reverse=True)
+            if len(chapters) == 1:
+                combined.append(chapters[0][1])
+                continue
+            safe = all(g["safe"] for _, g in chapters) and len({n for n, _ in chapters}) == len(chapters)
+            combined.append({"id": chapters[-1][1]["id"],
+                             "members": [a for _, g in chapters for a in g["members"]], "safe": safe,
+                             "reason": None if safe else "视频分段或附属关系不明确，保留相机文件"})
+        return combined
 
     @staticmethod
     def reconcile(assets, rows):
@@ -141,6 +164,13 @@ class GoProSource:
             return self.opener.open(Request(self.base + path, headers=headers or {}), timeout=self.timeout)
         except (HTTPError, URLError, OSError, HTTPException) as exc:
             raise SourceError(f"相机请求失败 {path.split('?')[0]}: {exc}") from exc
+
+    def _read(self, path, limit, headers=None):
+        try:
+            with self._open(path, headers) as response:
+                return response.read(limit), response.status, response.headers
+        except (OSError, HTTPException) as exc:
+            raise SourceError("相机元数据读取中断") from exc
 
     def _json(self, path):
         try:
@@ -331,7 +361,13 @@ class GoProSource:
 
     def media_info(self, path):
         # HERO9's HTTP parser requires the path separator to remain unescaped.
-        return self._json("/gopro/media/info?" + urlencode({"path": safe_relative(path)}, safe="/"))
+        try:
+            return self._json("/gopro/media/info?" + urlencode({"path": safe_relative(path)}, safe="/"))
+        except SourceError as exc:
+            if not (isinstance(exc.__cause__, HTTPError) and exc.__cause__.code == 404
+                    and PurePosixPath(path).suffix.lower() == ".mp4"):
+                raise
+            return self._mp4_media_info(path)
 
     @staticmethod
     def gumi(value):
@@ -458,6 +494,61 @@ class GoProSource:
                 response.read(4096)
         except (OSError, HTTPException) as exc:
             raise SourceError("删除响应中断，需要重新列举确认结果") from exc
+
+    def _mp4_media_info(self, path):
+        """Bounded MP4 identity reads when a remaining chapter has no API metadata."""
+        size, modified = self.file_stat(path)
+        consumed, count = 0, 0
+
+        def read(offset, length):
+            nonlocal consumed, count
+            consumed += length
+            count += 1
+            if offset < 0 or length < 1 or offset + length > size or consumed > 65536 or count > 128:
+                raise SourceError("MP4 元数据结构异常，保留素材")
+            data, status, headers = self._read("/videos/DCIM/" + quote(safe_relative(path), safe="/"),
+                                              length + 1, {"Range": f"bytes={offset}-{offset + length - 1}"})
+            if status != 206 or headers.get("Content-Range") != f"bytes {offset}-{offset + length - 1}/{size}" or len(data) != length:
+                raise SourceError("相机未返回准确的 MP4 元数据范围")
+            return data
+
+        def boxes(start, end):
+            while start < end:
+                if end - start < 8:
+                    raise SourceError("MP4 元数据边界无效")
+                header = read(start, 8)
+                length, kind, width = int.from_bytes(header[:4], "big"), header[4:], 8
+                if length == 1:
+                    length, width = int.from_bytes(read(start + 8, 8), "big"), 16
+                if length == 0:
+                    length = end - start
+                if length < width or start + length > end:
+                    raise SourceError("MP4 元数据长度无效")
+                yield kind, start + width, start + length
+                start += length
+
+        created, gumi = None, None
+        for kind, start, end in boxes(0, size):
+            if kind != b"moov":
+                continue
+            for child, begin, finish in boxes(start, end):
+                if child == b"mvhd":
+                    version = read(begin, 1)[0]
+                    if version not in (0, 1) or finish - begin < (12 if version else 8) or created is not None:
+                        raise SourceError("MP4 创建时间不可确认")
+                    created = int.from_bytes(read(begin + 4, 8 if version else 4), "big") - 2082844800
+                elif child == b"udta":
+                    for tag, first, last in boxes(begin, finish):
+                        if tag == b"GUMI":
+                            if last - first != 16 or gumi is not None:
+                                raise SourceError("MP4 素材身份不可确认")
+                            gumi = read(first, 16).hex()
+            break
+        if created is None or created < 0 or not gumi or gumi == "0" * 32:
+            raise SourceError("MP4 缺少可确认的创建时间或 GUMI，保留素材")
+        if self.file_stat(path) != (size, modified):
+            raise SourceError("读取元数据时相机素材已变化")
+        return {"cre": str(created), "s": str(size), "gumi": gumi}
 
 
 def create(config, stop=None):
