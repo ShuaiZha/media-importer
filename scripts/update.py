@@ -42,7 +42,7 @@ def fetch_json(url):
 
 def release(version=None):
     if version and not re.fullmatch(r'v?\d+\.\d+\.\d+', version):
-        raise ValueError('版本格式应为 0.10.16 或 v0.10.16，不接受预发布版本')
+        raise ValueError('版本格式应为 0.10.17 或 v0.10.17，不接受预发布版本')
     endpoint = 'tags/v' + version.removeprefix('v') if version else 'latest'
     value = fetch_json(f'https://api.github.com/repos/{REPOSITORY}/releases/{endpoint}')
     tag = value.get('tag_name', '')

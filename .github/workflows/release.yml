@@ -61,8 +61,12 @@ jobs:
           IMAGE: ghcr.io/shuaizha/media-importer@${{ steps.image.outputs.digest }}
           VERSION: ${{ steps.version.outputs.number }}
         run: |
+          docker buildx imagetools inspect "$IMAGE" --raw > /tmp/image-index.json
           for arch in amd64 arm64; do
-            actual=$(docker run --rm --network none --platform "linux/$arch" "$IMAGE" --version)
+            # Classic Docker stores cannot load two platforms under one index
+            # digest. Resolve each platform so both published images are tested.
+            platform_digest=$(jq -er --arg arch "$arch" '.manifests | map(select(.platform.os == "linux" and .platform.architecture == $arch)) | if length == 1 then .[0].digest else error("missing or ambiguous platform") end' /tmp/image-index.json)
+            actual=$(docker run --rm --network none --platform "linux/$arch" "${IMAGE%@*}@$platform_digest" --version)
             test "$actual" = "$VERSION"
           done
       - name: Publish stable manifest and release
