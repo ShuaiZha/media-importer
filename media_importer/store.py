@@ -60,6 +60,8 @@ class Store:
         """)
         with self.db:
             self.db.execute("PRAGMA user_version=5")
+        from .runs import initialize
+        initialize(self.db)
 
     def close(self):
         self.db.close()
@@ -110,7 +112,7 @@ class Store:
             self.db.execute("INSERT OR REPLACE INTO meta VALUES ('status', ?)",
                             (json.dumps(status, ensure_ascii=False),))
 
-    def batch(self, destination, assets):
+    def batch(self, destination, assets, media_scope='all'):
         fingerprint = destination + ":" + ",".join(sorted(a.identity for a in assets))
         batch_id = uuid.uuid5(uuid.NAMESPACE_URL, fingerprint).hex
         with self.db:
@@ -121,6 +123,9 @@ class Store:
                 self.db.execute("INSERT OR IGNORE INTO files (id, destination, asset_id, asset, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
                                 (file_id, destination, asset.identity, json.dumps(asset.to_dict()), now(), now()))
                 self.db.execute("INSERT OR IGNORE INTO batch_files VALUES (?, ?)", (batch_id, file_id))
+            if assets:
+                from .runs import reconcile
+                reconcile(self.db, destination, assets[0].source_type, assets[0].serial, media_scope, batch_id)
         self.set_meta("last_batch", batch_id)
         return batch_id
 
@@ -152,6 +157,9 @@ class Store:
             self.db.execute("UPDATE files SET " + ", ".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), file_id))
             if fields.get("state") == "cached":
                 self.db.execute("INSERT OR IGNORE INTO cache_receipts VALUES (?,?)", (file_id, now()))
+            if fields.get('state') == 'uploaded':
+                from .runs import archived
+                archived(self.db, file_id)
 
     def batch_state(self, batch_id, state):
         with self.db:
@@ -161,6 +169,14 @@ class Store:
         if batch_id:
             with self.db:
                 self.db.execute("UPDATE batches SET imported_at=COALESCE(imported_at,?) WHERE id=?", (now(), batch_id))
+                from .runs import imported
+                imported(self.db, batch_id)
+
+    def reporting_run(self, config):
+        from .runs import reconcile
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            return reconcile(self.db, config.destination_id, config.source['type'], config.source['serial'], config.backup['media_scope'])
 
     def cached_path(self, row):
         return self.cache / (row["id"] + ".bin")

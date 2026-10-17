@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .adapters import feishu
-from .bot_cards import (archive_content, card, columns, device_content, feedback, markdown,
+from .bot_cards import (archive_content, card, columns, device_content, feedback, format_time, markdown,
                         note, paragraph, plain, settings_result, status_content)
 from .config import ConfigError
 from .model import now
@@ -19,7 +19,9 @@ from .store import Store
 from .media import MEDIA_SCOPES
 
 
-STATUS_PANELS = {'status': status_content, 'devices': device_content, 'archives': archive_content}
+STATUS_PANELS = {'status': status_content, 'devices': device_content, 'archives': archive_content,
+                 'device_details': lambda view: device_content(view, details=True),
+                 'archive_details': lambda view: archive_content(view, details=True)}
 
 
 class Bot:
@@ -82,6 +84,12 @@ class Bot:
         if item["error"]:
             return card("配置需要处理", [markdown("**当前配置无法读取，控制操作暂不可用。**"),
                                        paragraph(item["error"]), note("请在本机检查 .env 和 settings.json，再从底部菜单重试。")], "red")
+        if notice and page not in ('transfer', 'notifications', 'cleanup'):
+            if isinstance(notice, str):
+                notice = {'title': '操作提示', 'detail': notice, 'level': 'info'}
+            color = {'error': 'red', 'warning': 'orange', 'success': 'green', 'info': 'blue'}[notice['level']]
+            return card(notice['title'], ([paragraph(notice['detail'])] if notice.get('detail') else []) +
+                        [self.buttons(self.button('查看状态', {'panel': 'status'}))], color, shared=True)
         values, rev = item["config"], item["revision"]
         elements = feedback(notice) if notice else []
         title = {"transfer": "传输设置", "notifications": "通知设置", "cleanup": "原片处理",
@@ -99,54 +107,48 @@ class Bot:
                          self.buttons(*(self.button("切换为" + label,
                              {"changes": {"backup": {"source_transport": key}}, "page": page}, rev)
                              for key, label in modes.items() if key != transport)),
-                         note("切换前先停止同步。USB：插线并开机；Wi-Fi：先在电脑手动连接相机热点。飞书不切换电脑网络，选择连接方式也不会开启同步。"),
+                         note("切换前先停止同步。USB 插线开机；Wi-Fi 需在电脑手动连接相机热点。"),
                          {"tag": "hr"}, markdown("🎞️ **同步内容 · " + MEDIA_SCOPES[scope] + "**"),
                          self.buttons(*(self.button(label, {"changes": {"backup": {"media_scope": key}}, "page": page}, rev)
                                         for key, label in MEDIA_SCOPES.items() if key != scope)),
-                         note("视频包含 LRV，照片包含 RAW；可确认关联的缩略图等附属文件随素材导入。未知、关联不明的其他文件请选「全部素材」。"),
-                         note("切换范围后，当前文件处理到边界再应用；已有完整缓存继续上传，未选类别原片不删除。"),
+                         note("视频包含 LRV，照片包含 RAW；其他文件请选择「全部素材」。"),
+                         note("已有完整缓存继续上传；未选类别原片保留。"),
                          {"tag": "hr"}, markdown("**控制上传速度与缓存占用**"),
                          note("上传限速、缓存额度填 0 表示不限；磁盘预留用于保留可用空间。"),
                          self.form("transfer", fields, rev), {"tag": "hr"},
-                         note("保存后后台自动应用。传输中的文件可能会中断并从头重传，已完整导入的缓存保留。")]
+                         note("保存后自动应用；中断文件从头重传，完整缓存保留。")]
         elif page == "notifications":
             opts = values["notifications"]
             elements += [markdown("📷 **连接提醒已" + ("开启**" if opts["connection_events"] else "关闭**")),
-                         note("独立于同步开关：核对绑定身份后提醒已连接；连续 3 次不可访问才提醒连接断开。同一状态不反复发送。"),
+                         note("连接变化时提醒，不受同步开关影响。"),
                          self.buttons(self.button(("关闭" if opts["connection_events"] else "开启") + "连接提醒",
                              {"changes": {"notifications": {"connection_events": not opts["connection_events"]}}, "page": page}, rev)),
                          {"tag": "hr"}, markdown("**传输通知已" + ("开启**" if opts["enabled"] else "关闭**")),
-                         note("进度更新同一张卡片；导入完成、归档完成、失败和缓存连续 6 小时无上传进展分别提醒。同一问题不重复刷屏，恢复后更新原问题卡。关闭传输通知或同步后不发送这些提醒，连接提醒不受影响。"),
+                         note("进度更新同一张卡；可拔相机、归档完成、持续故障和缓存积压单独提醒。"),
                          self.buttons(self.button(("关闭" if opts["enabled"] else "开启") + "传输通知",
                                                   {"changes": {"notifications": {"enabled": not opts["enabled"]}}, "page": page}, rev)),
                          {"tag": "hr"},
-                         note("进度更新间隔 60–86400 秒；300 秒即 5 分钟。完成和失败不受此间隔限制。"),
+                         note("进度间隔 60–86400 秒；300 秒为 5 分钟。完成和故障即时提醒。"),
                          self.form("notifications", [("progress_interval_seconds", "进度更新间隔 · 秒", opts["progress_interval_seconds"]),
                                                       ("keyword", "消息前缀 · 可留空", opts["keyword"])], rev)]
         elif page == "cleanup":
             b = values["backup"]
             elements += [columns("**相机原片**\n" + ("完整导入后删除" if b["delete_source_after_import"] else "保留，不自动删除"),
                                  "**本地完整缓存**\n正式归档后自动清理"), {"tag": "hr"},
-                         paragraph("原片删除以整组素材为单位：所选类别的主文件和附属文件完整导入缓存、核对通过后才执行。未选类别原片保留。"),
-                         note("同步关闭时不删除原片；未归档的完整缓存始终保留。")]
+                         paragraph("所选素材及附属文件完整导入、核对后才删除。未选类别原片保留。"),
+                         note("同步关闭时停止删除；未归档的完整缓存保留。")]
             action = {"changes": {"backup": {"delete_source_after_import": False}}, "page": page} if b["delete_source_after_import"] else {"panel": "confirm_delete"}
-            elements += [self.buttons(self.button("改为保留原片" if b["delete_source_after_import"] else "查看开启删除的确认说明", action, rev))]
+            elements += [self.buttons(self.button("改为保留原片" if b["delete_source_after_import"] else "开启导入后删除", action, rev))]
         elif page == "confirm_delete":
             elements += [markdown("**远端归档完成前，缓存盘可能是唯一副本。**"),
-                         paragraph("开启后，同步期间所选类别的素材组完整导入并核对通过就会删除相机原片，不等待上传。此规则也适用于已有的合格完整缓存；未选类别原片保留。"),
-                         note("上传失败仍保留完整缓存。关联不明、身份变化或核对失败时，保留相机原片。"),
+                         paragraph("所选素材完整导入并核对后立即删除原片，不等待远端上传；已有合格缓存也适用。未选类别原片保留。"),
+                         note("上传失败保留缓存；素材关联或身份不确定时保留原片。"),
                          {"tag": "hr"},
                          self.buttons(self.button("取消，保持原设置", {"panel": "cleanup"}),
                                       self.button("确认开启导入后删除", {"changes": {"backup": {"delete_source_after_import": True}}, "page": "cleanup"}, rev, danger=True))]
         elif page == "help":
-            elements += [markdown("**点击底部菜单即可操作，无需记住命令。**"),
-                         markdown("📊 **状态**"),
-                         paragraph("运行总览：两路进度、能否拔相机、是否需要处理\n设备与存储：相机状态、缓存盘与 SMB 连接\n归档结果：最近一次结果、实际位置与待清理事项"),
-                         markdown("🔄 **同步**"), paragraph("开启后持续等待相机和新素材，重连自动处理。「停止同步」立即停止两路；运行总览中的「传完当前文件再停」只完成两路当前文件，不启动下一个。两种停止都暂停原片删除。"),
-                         note("问题卡可重新检查连接、查看全部异常。缓存核验需先停止同步，不删除或覆盖素材。"),
-                         markdown("⚙️ **设置**"), paragraph("传输设置：连接方式、素材类别与限速 / 原片处理 / 通知设置"),
-                         note("USB：插线并开机；Wi-Fi：电脑先手动连接相机热点。收到连接提醒后，点击「同步 → 开启同步」开始导入。默认不开启同步；完成后可从同步菜单停止。"),
-                         note("参数在卡片中填写并保存；开启原片删除需要再次确认。")]
+            elements += [paragraph("状态：进度、设备与存储、归档结果\n同步：开启或停止传输\n设置：连接方式、同步类别、原片处理与通知"),
+                         note("菜单即可操作，无需记住命令。停止同步会保留任务和完整缓存。")]
         elif page == 'issues':
             view = snapshot(self.directory, self.settings)
             entries = list(view['issues']) + [{'path': '未完成临时文件', 'error': x.get('error') or '等待清理'} for x in view['temporary_cleanup']]
@@ -169,26 +171,36 @@ class Bot:
             view = snapshot(self.directory, self.settings)
             title, color, content = STATUS_PANELS[page](view)
             elements += content
+            actions = []
             if page == 'status' and values['backup']['enabled']:
                 if values['backup'].get('stop_after_current'):
-                    elements += [self.buttons(self.button('取消等待，继续同步', {'changes': {'backup': {'enabled': True}}}, rev),
-                                              self.button('立即停止', {'changes': {'backup': {'enabled': False}}}, rev))]
+                    actions += [self.button('继续同步', {'changes': {'backup': {'enabled': True}}}, rev),
+                                self.button('立即停止', {'changes': {'backup': {'enabled': False}}}, rev)]
                 else:
-                    elements += [self.buttons(self.button('传完当前文件再停', {'changes': {'backup': {'stop_after_current': True}}}, rev))]
-            if page == 'devices' or view['attention']['required'] or view['issues'] or view['temporary_cleanup']:
-                elements += self.problem_actions(view, rev)
-            elements += [self.buttons(self.button('刷新', {'panel': page, 'refresh': True}))]
+                    actions.append(self.button('传完当前文件再停', {'changes': {'backup': {'stop_after_current': True}}}, rev))
+            if page == 'devices':
+                actions += [self.button('连接详情', {'panel': 'device_details'}), self.button('检查连接', {'operation': 'check'}, rev)]
+            elif page == 'device_details':
+                actions += [self.button('返回概览', {'panel': 'devices'}), self.button('检查连接', {'operation': 'check'}, rev)]
+            elif page == 'archives':
+                actions.append(self.button('文件详情', {'panel': 'archive_details'}))
+            elif page == 'archive_details':
+                actions.append(self.button('返回结果', {'panel': 'archives'}))
+            if len(actions) < 2 and (view['attention']['required'] or view['issues'] or view['temporary_cleanup']):
+                actions.append(self.button('查看待处理', {'panel': 'issues'}))
+            actions.append(self.button('刷新', {'panel': page, 'refresh': True}))
+            elements.append(self.buttons(*actions))
         if isinstance(notice, dict) and notice["level"] == "error":
             color = "red"
             title += " · 未执行" if notice.get('operation') else " · 未保存"
         elif isinstance(notice, dict) and notice["level"] == "warning":
             color = "orange"
-        return card(title, elements, color, shared=page in STATUS_PANELS)
+        return card(title, elements, color, shared=True)
 
     def problem_actions(self, view, revision):
         actions = [self.button('重新检查连接', {'operation': 'check'}, revision)]
         if view.get('issues') or view.get('temporary_cleanup'):
-            actions.append(self.button('查看全部异常', {'panel': 'issues'}))
+            actions.append(self.button('查看待处理', {'panel': 'issues'}))
         if any(f.get('cache_state') == 'unverified' for f in view.get('files', [])):
             actions.append(self.button('核验缓存', {'operation': 'verify_cache'}, revision))
         return [self.buttons(*actions)]
@@ -202,21 +214,26 @@ class Bot:
         labels = {'configuration': '配置', 'database': '任务记录', 'cache': '缓存盘',
                   'source': '相机', 'destination': 'SMB', 'notification': '飞书'}
         states = {'ok': '通过', 'waiting': '等待处理', 'error': '需要处理'}
-        elements = [markdown('**' + states.get(result.get('state'), '检查中') + '**')]
+        elements = []
+        checks = result.get('checks', {})
+        passed = sum(x['state'] == 'ok' for x in checks.values())
+        if checks:
+            elements.append(paragraph(f"{passed} / {len(checks)} 项通过"))
         if result.get('message'):
             elements.append(paragraph(result['message']))
-        for name, check in result.get('checks', {}).items():
-            elements += [markdown('**' + labels.get(name, name) + ' · ' + states.get(check['state'], '未知') + '**'), paragraph(check['message'])]
+        for name, check in checks.items():
+            if check['state'] != 'ok':
+                elements += [markdown('**' + labels.get(name, name) + ' · ' + states.get(check['state'], '未知') + '**'), paragraph(check['message'])]
         if 'verified' in result:
-            elements += [paragraph(f"已核验 {len(result['verified'])} 个，仍待处理 {len(result['pending'])} 个。文件与原片均保留。")]
-            for item in result['pending'][:5]:
+            elements.append(paragraph(f"已核验 {len(result['verified'])} 个 · 待处理 {len(result['pending'])} 个"))
+            for item in result['pending'][:3]:
                 elements.append(paragraph(item['path'] + '\n' + item['reason']))
         actions = [self.button('查看当前状态', {'panel': 'status'})]
         if result.get('pending'):
-            actions.append(self.button('查看全部异常', {'panel': 'issues'}))
-        elements += [note('检查结束 · ' + str(row['updated_at'])), self.buttons(*actions)]
-        return card('缓存核验结果' if row['kind'] == 'verify_cache' else '连接检查结果', elements,
-                    'green' if result.get('state') == 'ok' else 'orange')
+            actions.append(self.button('查看待处理', {'panel': 'issues'}))
+        elements += [note('检查结束 · ' + format_time(row['updated_at'])), self.buttons(*actions)]
+        return card(('缓存核验结果' if row['kind'] == 'verify_cache' else '连接检查结果') + ' · ' + states.get(result.get('state'), '检查中'), elements,
+                    'green' if result.get('state') == 'ok' else 'orange', shared=True)
 
     def form(self, kind, fields, revision):
         inputs = [{"tag": "input", "name": key, "label": plain(label), "default_value": str(int(value)) if isinstance(value, float) and value.is_integer() else str(value),
@@ -253,7 +270,7 @@ class Bot:
                     "停止同步": {"changes": {"backup": {"enabled": False}}},
                     "传完再停": {"changes": {"backup": {"stop_after_current": True}}},
                     "关闭同步": {"changes": {"backup": {"enabled": False}}}}
-        action = dict(commands.get(command, {"panel": "help", "notice": "未识别这条消息，可直接使用底部菜单。"}))
+        action = dict(commands.get(command, {"panel": "help", "notice": "请使用底部的「状态」「同步」「设置」菜单。"}))
         if "changes" in action:
             action["revision"] = self.settings.read()["revision"]
             try:
@@ -279,6 +296,9 @@ class Bot:
             return {"toast": {"type": "error", "content": "卡片已过期，请从底部菜单获取新卡片"}}
         payload = json.loads(row["payload"])
         payload["revision"] = row["revision"]
+        context_id = event.get('context', {}).get('open_message_id')
+        if isinstance(context_id, str) and re.fullmatch(r'om_[A-Za-z0-9_-]{1,128}', context_id):
+            payload['response_message_id'] = context_id
         if payload.get('refresh'):
             message_id = event.get('context', {}).get('open_message_id')
             if (payload.get('panel') not in STATUS_PANELS or not isinstance(message_id, str) or
@@ -290,21 +310,48 @@ class Bot:
             if len(json.dumps(payload["values"], ensure_ascii=False)) > 2048:
                 return {"toast": {"type": "error", "content": "输入内容过长"}}
         self.enqueue("card:" + event_id, payload)
-        return {"toast": {"type": "info", "content": "正在刷新此卡片" if payload.get('refresh') else "已收到，处理结果将发送到单聊"}}
+        return {"toast": {"type": "info", "content": "正在刷新此卡片" if payload.get('refresh') else "已收到，正在处理"}}
 
     def process_one(self):
         with self.db() as db:
             for result in db.execute("SELECT id FROM maintenance_requests WHERE state='done'").fetchall():
+                saved = db.execute('SELECT value FROM meta WHERE key=?', ('bot_reply:' + self.scope + ':' + result['id'],)).fetchone()
+                receipt = json.loads(saved[0]) if saved else {}
                 db.execute("INSERT OR IGNORE INTO bot_jobs (id,scope,payload,created) VALUES (?,?,?,?)",
                            ('maintenance-result:' + result['id'], self.scope,
-                            json.dumps({'panel': 'maintenance_result', 'operation_id': result['id']}), time.time()))
+                            json.dumps({'panel': 'maintenance_result', 'operation_id': result['id'],
+                                        'response_message_id': receipt.get('id')}), time.time()))
                 db.execute("UPDATE maintenance_requests SET state='reported' WHERE id=?", (result['id'],))
-            job = db.execute("SELECT * FROM bot_jobs WHERE scope=? AND state IN ('queued','applied') AND retry_at<=? ORDER BY created LIMIT 1",
+            job = db.execute("SELECT * FROM bot_jobs WHERE scope=? AND state IN ('queued','applied','waiting') AND retry_at<=? ORDER BY created LIMIT 1",
                              (self.scope, time.time())).fetchone()
         if job is None:
             return False
         try:
             payload = json.loads(job['payload'])
+            waiting = False
+            if job['state'] == 'waiting':
+                view = snapshot(self.directory, self.settings)
+                changes = payload['changes_applied']
+                revision = payload['applied_revision']
+                stopping = any(c['state'] == 'pausing' for c in view['controls'].values())
+                item = self.settings.read()
+                drained = changes.get('backup', {}).get('stop_after_current') and item.get('config') and not item['config']['backup']['enabled']
+                if drained:
+                    changes = {'backup': {'enabled': False}}
+                    revision = item['revision']
+                obsolete = bool(item.get('error') or item['revision'] != revision)
+                ready = view['running'] and not view['configuration'].get('pending') and view['configuration'].get('applied_revision') == revision and not stopping
+                if changes.get('backup', {}).get('stop_after_current') and not obsolete:
+                    ready = False
+                if not ready and not obsolete:
+                    with self.db() as db:
+                        db.execute('UPDATE bot_jobs SET retry_at=? WHERE id=?', (time.time() + 1, job['id']))
+                    return False
+                notice = {'title': '设置已有更新', 'detail': '以当前设置为准。', 'level': 'info'} if obsolete else settings_result(changes, True, False)
+                response = self.panel(payload.get('page', payload.get('form', 'status')), notice)
+                payload['wait_for_apply'] = False
+                with self.db() as db:
+                    db.execute("UPDATE bot_jobs SET state='applied',response=?,payload=? WHERE id=?", (json.dumps(response, ensure_ascii=False), json.dumps(payload, ensure_ascii=False), job['id']))
             if job["state"] == "queued":
                 page, notice = payload.get("panel", payload.get("page", "status")), payload.get("notice")
                 try:
@@ -320,7 +367,7 @@ class Bot:
                         from .operations import enqueue
                         with self.db() as db:
                             enqueue(db, job['id'], payload['operation'], self.settings.token()[1])
-                        notice = '检查请求已收到，结果会发送到此单聊。若传输服务未运行，请先启动 Docker Compose。'
+                        notice = {'title': '正在核验缓存' if payload['operation'] == 'verify_cache' else '正在检查连接', 'detail': '完成后更新此消息。', 'level': 'info'}
                     changes = payload.get("changes")
                     if "form" in payload:
                         page = payload["form"]
@@ -351,20 +398,43 @@ class Bot:
                                 break
                             time.sleep(.2)
                         notice = settings_result(changes, applied, stopping)
+                        waiting = not applied or stopping or bool(changes.get('backup', {}).get('stop_after_current'))
+                        payload.update(changes_applied=changes, applied_revision=item['revision'], wait_for_apply=waiting)
+                        if applied and changes.get('backup', {}).get('enabled') is True and item['config']['notifications']['enabled']:
+                            # The notification worker owns the single live progress card.
+                            from .notifications import NotificationWorker, _database, _digest
+                            from .config import Config
+                            config = Config.from_values(item['config'])
+                            scope = _digest([config.destination_id, config.source['type'], config.source['serial']])
+                            with _database(self.directory) as outgoing, outgoing:
+                                NotificationWorker(self.directory, self.settings, threading.Event())._enqueue(
+                                    outgoing, 'started:control:' + self.scope + ':' + job['id'], 'started', scope, '传输进度', '', time.time())
+                            with self.db() as db:
+                                db.execute("UPDATE bot_jobs SET state='done',error=NULL WHERE id=?", (job['id'],))
+                            return True
                 except (ConfigError, ValueError) as exc:
                     notice = {"title": "检查未执行" if payload.get('operation') else "本次修改未保存", "detail": str(exc),
                               "level": "error", "operation": bool(payload.get('operation'))}
                 response = self.panel(page, notice, payload.get('operation_id'), payload.get('offset', 0))
                 with self.db() as db:
-                    db.execute("UPDATE bot_jobs SET state='applied',response=? WHERE id=?", (json.dumps(response, ensure_ascii=False), job["id"]))
-            else:
+                    db.execute("UPDATE bot_jobs SET state='applied',response=?,payload=? WHERE id=?", (json.dumps(response, ensure_ascii=False), json.dumps(payload, ensure_ascii=False), job["id"]))
+            elif job['state'] != 'waiting':
                 response = json.loads(job["response"])
-            if payload.get('refresh'):
-                self.updater(self.credentials, payload['message_id'], response)
-            else:
-                self.sender(self.credentials, response, event_id="control:" + self.scope + ":" + job["id"])
+                waiting = payload.get('wait_for_apply', False)
+            receipt_key = 'bot_reply:' + self.scope + ':' + job['id']
             with self.db() as db:
-                db.execute("UPDATE bot_jobs SET state='done',error=NULL WHERE id=?", (job["id"],))
+                saved = db.execute('SELECT value FROM meta WHERE key=?', (receipt_key,)).fetchone()
+            receipt = json.loads(saved[0]) if saved else {}
+            message_id = receipt.get('id') or payload.get('message_id') or payload.get('response_message_id')
+            if message_id:
+                self.updater(self.credentials, message_id, response)
+            else:
+                message_id = self.sender(self.credentials, response, event_id="control:" + self.scope + ":" + job["id"])
+            with self.db() as db:
+                if isinstance(message_id, str):
+                    db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', (receipt_key, json.dumps({'id': message_id})))
+                db.execute("UPDATE bot_jobs SET state=?,error=NULL,retry_at=? WHERE id=?",
+                           ('waiting' if waiting and isinstance(message_id, str) else 'done', time.time() + 1, job['id']))
             return True
         except Exception:
             # Never log raw event bodies, credentials, URLs, or SDK exceptions.

@@ -230,7 +230,7 @@ class CacheStatusTests(unittest.TestCase):
         self.assertTrue(recent['complete'])
         self.assertEqual(1, recent['archived_files'])
         self.assertTrue(recent['archives'][0]['location'].endswith(path))
-        text = json.dumps(archive_content(state), ensure_ascii=False)
+        text = json.dumps(archive_content(state, details=True), ensure_ascii=False)
         self.assertIn('GH010001_2.MP4', text)
         self.assertNotIn(ENV['DESTINATION_PASSWORD'], text)
         self.assertEqual(0, state['batch']['completed_files'])

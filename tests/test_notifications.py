@@ -40,7 +40,7 @@ class WorkerTests(unittest.TestCase):
         self.view['health']['source'] = {'online': True}
         self.view['stages']['import'] = {'phase': 'idle'}
         self.tick(1)
-        self.assertTrue(any('问题已恢复' in str(call) for call in self.updater.call_args_list))
+        self.assertTrue(any('已恢复' in str(call) for call in self.updater.call_args_list))
 
     def test_missing_or_unverified_complete_cache_is_actionable(self):
         self.view['files'] = [{'id': self.rows[0]['id'], 'state': 'cached', 'cache_state': 'unverified'}]
@@ -48,7 +48,7 @@ class WorkerTests(unittest.TestCase):
         self.assertIn('完整缓存需要核验', str(self.sender.call_args))
         self.view['files'][0].update(cache_state='verified', cache_available=True)
         self.tick(1)
-        self.assertTrue(any('问题已恢复' in str(call) for call in self.updater.call_args_list))
+        self.assertTrue(any('缓存核验已通过' in str(call) for call in self.updater.call_args_list))
 
     def test_recovery_never_patches_a_different_recipients_message(self):
         self.view['health']['destination'] = {'online': False, 'issue': {'code': 'network'}}
@@ -60,7 +60,7 @@ class WorkerTests(unittest.TestCase):
         self.settings.notification_credentials.return_value = credentials
         self.view['health']['destination'] = {'online': True}
         self.tick(1)
-        self.assertFalse(any('问题已恢复' in str(call) for call in self.updater.call_args_list))
+        self.assertFalse(any('已恢复' in str(call) for call in self.updater.call_args_list))
 
     def test_backlog_alert_once_per_stall_and_recovery_updates_original_card(self):
         self.view['backlog'] = {'files': 2, 'bytes': 32, 'source_removed_files': 1, 'verified_files': 2}
@@ -78,7 +78,7 @@ class WorkerTests(unittest.TestCase):
         self.view['stages']['upload'].update(phase='uploading', current_file_id=self.rows[0]['id'], current_bytes=8)
         self.tick(1)
         self.tick(1)
-        self.assertTrue(any('问题已恢复' in str(call) for call in self.updater.call_args_list))
+        self.assertTrue(any('已恢复' in str(call) for call in self.updater.call_args_list))
 
     def test_old_bytes_retried_are_not_progress_and_stop_does_not_alert(self):
         self.view['backlog'] = {'files': 1, 'bytes': 16, 'verified_files': 1}
@@ -104,10 +104,10 @@ class WorkerTests(unittest.TestCase):
         item['error'] = None
         self.view['stages']['upload'] = {'phase': 'uploading', 'current_file_id': item['id'], 'current_bytes': 5}
         self.tick(1)
-        self.assertFalse(any('问题已恢复' in str(call) for call in self.updater.call_args_list))
+        self.assertFalse(any('已恢复' in str(call) for call in self.updater.call_args_list))
         item['state'] = 'uploaded'
         self.tick(1)
-        self.assertTrue(any('问题已恢复' in str(call) for call in self.updater.call_args_list))
+        self.assertTrue(any('相关文件已处理成功' in str(call) for call in self.updater.call_args_list))
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -154,8 +154,11 @@ class WorkerTests(unittest.TestCase):
         self.worker.tick(copy.deepcopy(self.view))
 
     def archive(self, rows=None, cleanup="pending"):
+        observations = {f['id']: f for f in self.view['files']}
         for row in rows or self.rows:
             self.store.update(row["id"], state="uploaded", cleanup=cleanup)
+            observations[row['id']] = {'id': row['id'], 'cache_state': 'missing', 'state': 'uploaded', 'cleanup': cleanup}
+        self.view['files'] = list(observations.values())
 
     def test_historical_completion_is_suppressed_including_first_enable(self):
         self.archive()
@@ -193,7 +196,7 @@ class WorkerTests(unittest.TestCase):
         self.tick(2)
         self.assertEqual(1, self.sender.call_count)
         self.assertIn("归档完成", self.sender.call_args.args[1]["header"]["title"]["content"])
-        self.assertIn("原片保留", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn("未执行删除 2 个", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.worker = self.make_worker()
         self.tick(2)
         self.assertEqual(1, self.sender.call_count)
@@ -204,15 +207,19 @@ class WorkerTests(unittest.TestCase):
         self.tick(10)
         self.sender.assert_not_called()
 
-    def test_previous_batch_completion_is_found_after_current_batch_switch(self):
+    def test_new_scan_joins_unfinished_round_and_cannot_report_partial_completion(self):
         self.tick()
         newer = self.store.batch(self.config.destination_id, [footage(3)])
-        self.view["batch"]["id"] = newer
-        self.view["status"]["source_work"] = True  # New-batch importing must not delay the old result.
+        self.assertNotEqual(self.batch, newer)
+        self.assertEqual(self.batch, self.store.reporting_run(self.config))
         self.archive()
         self.tick(2)
+        self.sender.assert_not_called()
+        self.archive(self.store.files(batch_id=newer))
+        self.view['batch'].update(total_files=3, completed_files=3)
+        self.tick(2)
         self.assertEqual(1, self.sender.call_count)
-        self.assertIn("2 个文件", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn('3 个文件', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
 
     def test_completion_waits_for_source_cleanup_then_reports_pending_honestly(self):
         self.tick()
@@ -225,10 +232,13 @@ class WorkerTests(unittest.TestCase):
         self.view["status"]["source_work"] = False
         self.view["status"]["phase"] = "completed"
         self.store.update(self.rows[0]["id"], cache_cleanup_error="test cleanup failure")
+        # File cleanup faults are separate from archive completion, each sent once.
         self.tick(1)
-        self.assertIn("已正式归档", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
-        self.assertIn("原片清理待处理 2", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
-        self.assertIn("缓存清理待处理 1", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.tick(1)
+        self.tick(1)
+        self.assertIn("归档完成", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn("原片：清理待处理 2", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn("缓存：已清理 1 个 · 清理待处理 1", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
 
     def test_progress_requires_interval_change_and_active_transfer(self):
         self.tick()
@@ -429,7 +439,7 @@ class WorkerTests(unittest.TestCase):
         self.view["policy"]["delete_source"] = True
         self.sender.side_effect = RuntimeError("offline")
         self.tick(1)
-        self.assertIn("原片清理待处理", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn("原片：清理待处理", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.store.update(self.rows[0]["id"], state="pending")
         self.sender.side_effect = None
         self.tick(31)
@@ -437,8 +447,8 @@ class WorkerTests(unittest.TestCase):
         self.archive(cleanup="deleted")
         self.tick(5)
         self.assertEqual(2, self.sender.call_count)
-        self.assertIn("原片清理完成", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
-        self.assertNotIn("原片清理待处理", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn("原片：已删除 2 个", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertNotIn("原片：清理待处理", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
 
     def test_completion_waiting_for_rearchive_does_not_block_progress_delivery(self):
         self.tick()
@@ -450,7 +460,7 @@ class WorkerTests(unittest.TestCase):
         self.sender.side_effect = None
         self.tick(301)
         self.assertEqual(2, self.sender.call_count)
-        self.assertIn("传输进度", self.sender.call_args.args[1]["header"]["title"]["content"])
+        self.assertIn("正在归档", self.sender.call_args.args[1]["header"]["title"]["content"])
         self.archive()
         self.tick(5)
         self.assertEqual(3, self.sender.call_count)
@@ -477,9 +487,14 @@ class WorkerTests(unittest.TestCase):
         self.assertNotIn(CREDENTIALS["receive_id"], str(caught.exception))
 
     def test_import_complete_event_is_distinct_durable_and_not_repeated(self):
-        self.tick();self.store.import_completed(self.batch);self.tick(5)
+        self.tick()
+        for row in self.rows:
+            self.store.update(row['id'], state='cached')
+        self.view['unplug'] = {'ready': True, 'can_disconnect': True}
+        self.store.import_completed(self.batch)
+        self.tick(5)
         self.assertEqual(1,self.sender.call_count)
-        self.assertIn('相机导入完成',self.sender.call_args.args[1]["header"]["title"]["content"])
+        self.assertIn('相机可以拔走',self.sender.call_args.args[1]["header"]["title"]["content"])
         self.worker=self.make_worker();self.tick(5);self.assertEqual(1,self.sender.call_count)
         self.archive();self.tick(5);self.assertEqual(2,self.sender.call_count)
         self.assertIn('归档完成',self.sender.call_args.args[1]["header"]["title"]["content"])
@@ -585,7 +600,7 @@ class WorkerTests(unittest.TestCase):
         self.archive()
         self.tick(1)
         content = json.dumps(self.sender.call_args.args[1], ensure_ascii=False)
-        self.assertIn('实际归档位置', content)
+        self.assertIn('归档位置', content)
         self.assertIn('Camera-serial', content)
 
     def test_finished_progress_card_does_not_follow_later_camera_changes(self):
@@ -607,3 +622,55 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(1, self.sender.call_count)
         self.assertEqual(2, self.updater.call_count)
         self.assertNotIn('同步已关闭', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
+
+    def test_completed_card_updates_cleanup_on_same_message_without_resending(self):
+        self.tick()
+        self.archive(cleanup='deleted')
+        self.view['files'][0]['cache_state'] = 'verified'
+        self.tick(1)
+        self.assertEqual(1, self.sender.call_count)
+        self.assertTrue(self.sender.call_args.args[1]['config']['update_multi'])
+        self.assertIn('清理待处理 1 个', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.view['files'][0]['cache_state'] = 'missing'
+        self.worker = self.make_worker()
+        self.tick(5)
+        self.assertEqual(1, self.sender.call_count)
+        self.assertEqual('om_testprogress', self.updater.call_args.args[1])
+        self.assertIn('缓存：已清理 2 个', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
+        self.tick(5)
+        self.assertEqual(1, self.updater.call_count)
+
+    def test_import_ready_event_requires_safe_disconnect_and_no_source_operation(self):
+        self.tick()
+        for row in self.rows:
+            self.store.update(row['id'], state='cached')
+        self.store.import_completed(self.batch)
+        self.view['unplug'] = {'ready': True, 'can_disconnect': False}
+        self.view['status']['source_work'] = True
+        self.tick(1)
+        self.sender.assert_not_called()
+        self.view['status']['source_work'] = False
+        self.view['unplug']['can_disconnect'] = True
+        self.tick(1)
+        self.assertIn('相机可以拔走', self.sender.call_args.args[1]['header']['title']['content'])
+
+    def test_import_ready_retry_is_cancelled_when_a_new_round_supersedes_it(self):
+        self.tick()
+        for row in self.rows:
+            self.store.update(row['id'], state='cached')
+        self.store.import_completed(self.batch)
+        self.view['unplug'] = {'ready': True, 'can_disconnect': True}
+        self.sender.side_effect = RuntimeError('offline')
+        self.tick(1)
+        self.view['batch']['id'] = 'next-round'
+        self.view['unplug'] = {'ready': False, 'can_disconnect': False}
+        self.sender.side_effect = None
+        self.tick(31)
+        with self.worker_db() as db:
+            row = db.execute("SELECT state FROM notification_events WHERE kind='imported'").fetchone()
+        self.assertEqual('cancelled', row[0])
+        self.assertEqual(1, self.sender.call_count)
+
+    def worker_db(self):
+        from media_importer.notifications import _database
+        return _database(self.directory)

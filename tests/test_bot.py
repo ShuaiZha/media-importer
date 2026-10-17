@@ -136,7 +136,7 @@ class BotTests(unittest.TestCase):
             self.assertTrue(response['config']['update_multi'])
             buttons = [button for e in response['elements'] if e['tag'] == 'action' for button in e['actions']]
             self.assertIn('刷新', [b['text']['content'] for b in buttons])
-            self.assertTrue(all(b['text']['content'] in ('刷新', '重新检查连接') for b in buttons))
+            self.assertTrue(all(b['text']['content'] in ('刷新', '检查连接', '连接详情', '文件详情', '查看待处理') for b in buttons))
             refresh = next(b for b in buttons if b['text']['content'] == '刷新')
             with self.bot.db() as db:
                 payload = json.loads(db.execute('SELECT payload FROM bot_actions WHERE token=?',
@@ -155,7 +155,7 @@ class BotTests(unittest.TestCase):
 
     def test_refresh_replaces_the_clicked_message_and_retry_does_not_send_a_new_one(self):
         before = self.path.read_bytes()
-        value = self.bot.panel('devices')['elements'][-1]['actions'][0]['value']
+        value = next(b['value'] for b in self.bot.panel('devices')['elements'][-1]['actions'] if b['text']['content'] == '刷新')
         event = self.callback(value)
         event['event']['context'] = {'open_message_id': 'om_status_test'}
         reply = self.bot.receive_card(event)
@@ -175,7 +175,7 @@ class BotTests(unittest.TestCase):
         self.assertEqual(before, self.path.read_bytes())
 
     def test_refresh_requires_a_valid_original_message_and_owner(self):
-        value = self.bot.panel()['elements'][-1]['actions'][0]['value']
+        value = next(b['value'] for b in self.bot.panel()['elements'][-1]['actions'] if b['text']['content'] == '刷新')
         for message_id in (None, 'https://example.invalid', 'om_bad/other'):
             event = self.callback(value)
             event['event']['context'] = {'open_message_id': message_id}
@@ -239,5 +239,60 @@ class BotTests(unittest.TestCase):
             name: {'phase': 'paused', 'message': '同步关闭，任务与缓存保留'}
             for name in ('import', 'upload')})
         text = json.dumps(self.bot.panel(), ensure_ascii=False)
-        self.assertIn('等待队列更新', text)
+        self.assertIn('等待传输', text)
         self.assertNotIn('同步关闭，任务与缓存保留', text)
+
+    def test_settings_apply_acknowledges_and_updates_original_card_without_resave(self):
+        from media_importer.model import now
+        value = self.bot.action({'changes': {'limits': {'max_cache_gib': 60}}, 'page': 'transfer'}, self.settings.read()['revision'])
+        event = self.callback(value)
+        event['event']['context'] = {'open_message_id': 'om_original_settings'}
+        self.bot.receive_card(event)
+        with patch('media_importer.bot.time.monotonic', side_effect=[1, 6]):
+            self.assertTrue(self.bot.process_one())
+        self.sender.assert_not_called()
+        self.assertIn('等待生效', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
+        saved = self.path.read_bytes()
+        self.store.set_meta('service', {'running': True})
+        self.store.status(worker_heartbeat_at=now(), configuration={'applied_revision': self.settings.read()['revision'], 'pending': False})
+        with self.bot.db() as db:
+            db.execute('UPDATE bot_jobs SET retry_at=0')
+        self.assertTrue(self.bot.process_one())
+        self.assertEqual(2, self.updater.call_count)
+        self.assertEqual('om_original_settings', self.updater.call_args.args[1])
+        self.assertNotIn('等待生效', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
+        self.assertEqual(saved, self.path.read_bytes())
+        self.assertTrue(self.updater.call_args.args[2]['config']['update_multi'])
+
+    def test_connection_check_result_updates_original_receipt(self):
+        from media_importer.model import now
+        value = self.bot.action({'operation': 'check'}, self.settings.read()['revision'])
+        event = self.callback(value)
+        event['event']['context'] = {'open_message_id': 'om_device_check'}
+        self.bot.receive_card(event)
+        self.assertTrue(self.bot.process_one())
+        self.assertIn('正在检查连接', self.updater.call_args.args[2]['header']['title']['content'])
+        with self.store.db:
+            self.store.db.execute("UPDATE maintenance_requests SET state='done', result=?, updated_at=?",
+                                 (json.dumps({'state': 'ok', 'checks': {'source': {'state': 'ok', 'message': 'test'}}}), now()))
+        self.assertTrue(self.bot.process_one())
+        self.sender.assert_not_called()
+        self.assertEqual('om_device_check', self.updater.call_args.args[1])
+        self.assertIn('1 / 1 项通过', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
+        self.assertTrue(self.updater.call_args.args[2]['config']['update_multi'])
+
+    def test_start_uses_one_live_progress_delivery_when_notifications_are_enabled(self):
+        from media_importer.model import now
+        self.settings.update_preferences({'notifications': {'enabled': True}})
+        self.store.set_meta('service', {'running': True})
+        self.bot.receive_message(self.message('开启同步'))
+        from media_importer.status import snapshot as actual_snapshot
+        def applied(*args):
+            self.store.status(worker_heartbeat_at=now(), configuration={'applied_revision': self.settings.read()['revision'], 'pending': False})
+            return actual_snapshot(*args)
+        with patch('media_importer.bot.snapshot', side_effect=applied):
+            self.assertTrue(self.bot.process_one())
+        self.sender.assert_not_called()
+        with self.store.db:
+            events = self.store.db.execute("SELECT kind FROM notification_events").fetchall()
+        self.assertEqual(['started'], [r[0] for r in events])

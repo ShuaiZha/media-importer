@@ -21,6 +21,21 @@ def age(stamp):
         return float('inf')
 
 
+def cleanup_summary(files, delete_source=False):
+    """Observed outcomes, kept separate from the user's deletion preference."""
+    archived = [f for f in files if f['state'] == 'uploaded']
+    return {
+        'source_deleted': sum(f['cleanup'] == 'deleted' for f in files),
+        'source_absent': sum(f['cleanup'] == 'absent' for f in files),
+        'source_pending': sum(delete_source and f.get('selected', True) and f.get('imported')
+                              and f['cleanup'] not in ('deleted', 'absent') for f in files),
+        'source_not_deleted': sum(f['cleanup'] not in ('deleted', 'absent') for f in files),
+        'cache_cleared': sum(f.get('cache_state') == 'missing' and not f.get('cache_cleanup_error') for f in archived),
+        'cache_pending': sum(f.get('cache_state') in ('verified', 'unverified') or bool(f.get('cache_cleanup_error')) for f in archived),
+        'cache_unknown': sum(f.get('cache_state') in (None, 'unavailable') and not f.get('cache_cleanup_error') for f in archived),
+    }
+
+
 def attention(live, enabled, configuration, health, files, stages):
     """Explain whether waiting is enough; do not turn normal pauses into faults."""
     if configuration.get('error'):
@@ -55,7 +70,7 @@ def snapshot(directory, settings):
     item = settings.read()
     config = Config.from_values(item['config']) if item['config'] else None
     path = Path(directory) / 'state.sqlite3'
-    meta, rows, batch_id, batch_ids, temporaries, batches = {}, [], None, set(), [], []
+    meta, rows, batch_id, batch_ids, temporaries, batches, rounds = {}, [], None, set(), [], [], []
     receipts = {}
     destination = config.destination_id if config else None
     serial = config.source['serial'] if config else None
@@ -86,9 +101,16 @@ def snapshot(directory, settings):
                 ids = {r[0] for r in db.execute('SELECT file_id FROM batch_files WHERE batch_id=?', (entry['id'],))}
                 if ids.intersection(r['id'] for r in rows):
                     batches.append({**dict(entry), 'file_ids': ids})
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='transfer_runs'").fetchone():
+                from .runs import read
+                rounds = read(db, destination, source_type, serial)
             temporaries = [dict(r) for r in db.execute("SELECT * FROM temporary_cleanup WHERE state!='done'")]
         finally:
             db.close()
+    current_round = next((r for r in rounds if not r['historical'] and r['selection'] == media_scope),
+                         next((r for r in rounds if r['historical']), None))
+    reporting_ids = current_round['file_ids'] if current_round else batch_ids
+    reporting_id = current_round['id'] if current_round else batch_id
     state = dict(meta.get('status', {}))
     service = meta.get('service', {})
     live = bool(service.get('running') and age(state.get('worker_heartbeat_at', state.get('updated_at'))) < 15)
@@ -129,7 +151,7 @@ def snapshot(directory, settings):
                                            row['asset_id'], meta.get('cache_identity'))
         cached = evidence['valid']
         stored = row['state'] == 'uploaded' or cached
-        member = row['id'] in batch_ids and row['id'] in selected
+        member = row['id'] in reporting_ids
         if member:
             total += size
             committed += size if row['state'] == 'uploaded' else 0
@@ -268,20 +290,23 @@ def snapshot(directory, settings):
                         if f['state'] == 'uploaded' and f['remote_path']})
     planned = sorted({archive_location(target, Asset.from_dict(json.loads(r['asset'])).device_directory)
                       for r in rows})
-    recent = next((b for b in batches if b['state'] == 'uploaded'), batches[0] if batches else None)
+    recent = next((r for r in rounds if r['finished_at']), next((r for r in rounds if r['historical']), current_round))
+    if not rounds:
+        recent = next((b for b in batches if b['state'] == 'uploaded'), batches[0] if batches else None)
     recent_result = None
     if recent:
         members = [f for f in files if f['id'] in recent['file_ids']]
         complete = bool(members and all(f['state'] == 'uploaded' for f in members))
-        previous = meta.get('last_result') or {}
         recent_result = {'batch_id': recent['id'], 'complete': complete, 'total_files': len(members),
+                         'historical': bool(recent.get('historical')), 'total_bytes': sum(f['size'] for f in members),
                          'archived_files': sum(f['state'] == 'uploaded' for f in members),
                          'imported_files': sum(f['imported'] for f in members),
                          'failed_files': sum(bool(f['error']) for f in members),
                          'pending_files': sum(f['state'] != 'uploaded' for f in members),
                          'source_deleted': sum(f['cleanup'] in ('deleted', 'absent') for f in members),
                          'cache_cleanup_pending': sum(f['state'] == 'uploaded' and bool(f['cache_state'] in ('verified', 'unverified') or f['cache_cleanup_error']) for f in members),
-                         'finished_at': (previous.get('finished_at') if previous.get('batch_id') == recent['id'] else recent['updated_at']) if complete else None,
+                         'finished_at': (recent.get('finished_at') or recent.get('updated_at')) if complete else None,
+                         'cleanup': cleanup_summary(members, bool(values.get('backup', {}).get('delete_source_after_import'))),
                          'archives': [{'source': f['path'], 'location': archive_location(target, f['remote_path'])}
                                       for f in members if f['state'] == 'uploaded' and f['remote_path']]}
     waiting = [f for f in files if f['state'] != 'uploaded' and (f['cache_available'] or f['state'] in ('cached', 'staged', 'publishing'))]
@@ -306,7 +331,10 @@ def snapshot(directory, settings):
             'archive': {'locations': locations, 'planned_locations': planned or [archive_location(target)]}, 'recent_result': recent_result,
             'policy': {'delete_source': bool(values.get('backup', {}).get('delete_source_after_import', False)),
                        'cleanup_cache': True},
-            'batch': {'id': batch_id, 'scanned': bool(inventory.get('scanned') and scope_current), 'verified': bool(inventory.get('verified') and scope_current), 'total_files': len(batch_files),
+            'cleanup': cleanup_summary(batch_files, bool(values.get('backup', {}).get('delete_source_after_import'))),
+            'batch': {'id': reporting_id, 'scan_batch_id': batch_id, 'historical': bool(current_round and current_round['historical']),
+                      'file_ids': [f['id'] for f in batch_files],
+                      'scanned': bool(inventory.get('scanned') and scope_current), 'verified': bool(inventory.get('verified') and scope_current), 'total_files': len(batch_files),
                       'completed_files': sum(f['state'] == 'uploaded' for f in batch_files),
                       'total_bytes': total, 'confirmed_bytes': committed, 'in_flight_bytes': in_flight,
                       'percent': 100 * (committed + in_flight) / total if total else 0,
@@ -316,7 +344,7 @@ def snapshot(directory, settings):
                       'cached_files': sum(f['cache_available'] and f['state'] != 'uploaded' for f in batch_files)},
             'totals': {'total_files': len(files), 'uploaded_files': sum(f['state'] == 'uploaded' for f in files),
                        'uploaded_bytes': sum(f['size'] for f in files if f['state'] == 'uploaded'),
-                       'pending_files': sum(f['state'] != 'uploaded' for f in files),
+                       'pending_files': sum(f['state'] != 'uploaded' for f in active_files),
                        'cache_cleanup_pending': sum(f['state'] == 'uploaded' and bool(f['cache_state'] in ('verified', 'unverified') or f['cache_cleanup_error']) for f in files),
                        'pending_cleanup': sum(bool(values.get('backup', {}).get('delete_source_after_import')) and f['selected'] and f['imported'] and f['cleanup'] not in ('deleted', 'absent') for f in files)},
             'disk': disk, 'files': files, 'last_result': meta.get('last_result'), 'last_error': meta.get('last_error'),

@@ -128,8 +128,12 @@ class WholeFileTransportTests(unittest.TestCase):
         self.assertEqual(before,next(iter(self.client.files.values()))['data'])
 
     def test_source_changes_are_rejected_before_staging(self):
+        original_time = self.local.stat().st_mtime_ns
         def progress(n,t):
-            if n>=16:self.local.write_bytes(b'x'*64)
+            if n>=16:
+                self.local.write_bytes(b'x'*64)
+                # tmpfs can coalesce very fast writes into the same clock tick.
+                os.utime(self.local, ns=(original_time + 1_000_000_000, original_time + 1_000_000_000))
         with self.assertRaises(LocalCacheChanged):self.run_upload(progress=progress)
         self.assertFalse(self.staged)
 

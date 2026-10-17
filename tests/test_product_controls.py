@@ -155,6 +155,18 @@ class MaintenanceTests(unittest.TestCase):
     tearDown = test_bot.BotTests.tearDown
     callback = test_bot.BotTests.callback
 
+    def test_check_and_cache_verification_results_display_beijing_time(self):
+        for kind in ('check', 'verify_cache'):
+            with self.subTest(kind=kind):
+                self.request(kind, identifier=kind)
+                with self.store.db:
+                    self.store.db.execute(
+                        "UPDATE maintenance_requests SET state='done', result=?, updated_at=? WHERE id=?",
+                        (json.dumps({'state': 'ok', 'checks': {}}), '2026-10-16T16:58:23+00:00', kind))
+                text = json.dumps(self.bot.maintenance_panel(kind), ensure_ascii=False)
+                self.assertIn('检查结束 · 10-17 00:58:23 北京时间', text)
+                self.assertNotIn('+00:00', text)
+
     def test_check_card_queues_work_and_later_replies_once(self):
         before = self.path.read_bytes()
         action = self.bot.action({'operation': 'check'}, self.settings.read()['revision'])
@@ -259,4 +271,4 @@ class MaintenanceTests(unittest.TestCase):
         text = json.dumps(result, ensure_ascii=False)
         self.assertIn('传完当前文件后停止', text)
         self.assertIn('立即停止', text)
-        self.assertIn('取消等待，继续同步', text)
+        self.assertIn('继续同步', text)

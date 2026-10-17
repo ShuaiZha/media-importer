@@ -3,7 +3,7 @@ import json
 import unittest
 
 from media_importer.bot_cards import (archive_content, device_content, settings_result,
-                                      status_content, progress_bar, progress_card, event_card)
+                                      status_content, progress_bar, progress_card, event_card, format_time)
 
 
 def view():
@@ -21,6 +21,39 @@ def view():
 
 
 class CommandCardTests(unittest.TestCase):
+    def test_message_time_converts_offsets_to_beijing_across_midnight(self):
+        for value in ('2026-10-16T16:58:23+00:00', '2026-10-16T16:58:23Z',
+                      '2026-10-17T00:58:23+08:00', '2026-10-16T09:58:23-07:00'):
+            with self.subTest(value=value):
+                self.assertEqual('10-17 00:58:23 北京时间', format_time(value))
+
+    def test_message_time_does_not_guess_missing_or_invalid_timezone(self):
+        for value in (None, '', 'invalid', 0, '2026-10-16T16:58:23',
+                      '9999-12-31T23:59:59+00:00'):
+            with self.subTest(value=value):
+                self.assertEqual('时间未知', format_time(value))
+
+    def test_all_message_views_display_beijing_time_without_changing_snapshot(self):
+        state = view()
+        stamp = state['observed_at'] = '2026-10-16T16:58:23+00:00'
+        for name in ('source', 'destination'):
+            state['health'][name]['checked_at'] = stamp
+        state['preflight'] = {'state': 'ok', 'finished_at': stamp}
+        state['recent_result'] = {'complete': True, 'total_files': 2, 'archived_files': 2,
+                                 'pending_files': 0, 'failed_files': 0, 'source_deleted': 0,
+                                 'cache_cleanup_pending': 0, 'archives': [], 'finished_at': stamp}
+        before = copy.deepcopy(state)
+        messages = [status_content(state), device_content(state), archive_content(state),
+                    progress_card(state, 300)]
+        messages += [event_card(kind, kind, '示例', state) for kind in
+                     ('connected', 'disconnected', 'imported', 'completed', 'failed', 'backlog', 'recovered', 'test')]
+        for message in messages:
+            text = json.dumps(message, ensure_ascii=False)
+            self.assertIn('10-17 00:58:23 北京时间', text)
+            self.assertNotIn('UTC', text)
+            self.assertNotIn(stamp, text)
+        self.assertEqual(before, state)
+
     def test_paused_card_keeps_completed_counts_but_hides_old_live_speed(self):
         state=view(); state['configuration']['sync_enabled']=False
         for name in state['controls']:
@@ -40,9 +73,9 @@ class CommandCardTests(unittest.TestCase):
         state=view(); state['health']['source'].update(stale=True)
         state['health']['destination'].update(online=None)
         state['disk']['free_bytes']=None
-        text=json.dumps(status_content(state),ensure_ascii=False)
-        self.assertIn('相机 待更新',text)
-        self.assertIn('目的地 待更新',text)
+        text=json.dumps(device_content(state),ensure_ascii=False)
+        self.assertIn('相机 · 待更新',text)
+        self.assertIn('SMB · 待更新',text)
         self.assertNotIn('磁盘可用 0',text)
 
     def test_upload_bytes_are_not_mistaken_for_committed_archive(self):
@@ -87,8 +120,8 @@ class CommandCardTests(unittest.TestCase):
             text = json.dumps(content, ensure_ascii=False)
             self.assertIn('█████░░░░░', text)
             self.assertIn('██░░░░░░░░', text)
-            self.assertIn('**💾 导入到缓存 · 50.0%**', text)
-            self.assertIn('**📁 归档到存储 · 25.0%**', text)
+            self.assertIn('**💾 导入 · 50.0%**', text)
+            self.assertIn('**📁 归档 · 25.0%**', text)
             self.assertIn('**0 / 2**', text)
         self.assertTrue(progress_card(state, 300)['config']['update_multi'])
 
@@ -124,7 +157,8 @@ class CommandCardTests(unittest.TestCase):
         self.assertNotIn('启动自检', overview)
         self.assertNotIn('smb://', overview)
         self.assertNotIn('serial-example', overview)
-        self.assertIn('serial-example', json.dumps(device_content(state), ensure_ascii=False))
+        self.assertNotIn('serial-example', json.dumps(device_content(state), ensure_ascii=False))
+        self.assertIn('serial-example', json.dumps(device_content(state, details=True), ensure_ascii=False))
         self.assertIn('smb://storage/share/Camera', json.dumps(archive_content(state), ensure_ascii=False))
 
     def test_import_complete_does_not_turn_pending_archive_green(self):
@@ -175,11 +209,12 @@ class CommandCardTests(unittest.TestCase):
                                   'archives': [{'source': '100MEDIA/clip.mp4', 'location': 'smb://storage/share/clip_1.mp4'}]}
         state['issues'] = [{'path': '100MEDIA/clip.mp4', 'cache_cleanup_error': '磁盘离线'}]
         state['totals'].update(uploaded_files=1, uploaded_bytes=512, pending_files=0, cache_cleanup_pending=1)
-        text = json.dumps(archive_content(state), ensure_ascii=False)
+        state['recent_result']['cleanup'] = {'source_not_deleted': 1, 'cache_pending': 1}
+        text = json.dumps(archive_content(state, details=True), ensure_ascii=False)
         self.assertIn('已正式归档 **1 / 1**', text)
         self.assertIn('clip.mp4 → clip_1.mp4', text)
-        self.assertIn('缓存待清理 1', text)
-        self.assertIn('磁盘离线', text)
+        self.assertIn('缓存：清理待处理 1', text)
+        self.assertIn('待处理 1 个文件', text)
 
     def test_previous_success_does_not_make_new_pending_archives_look_complete(self):
         state = view()

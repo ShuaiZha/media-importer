@@ -158,11 +158,14 @@ def transfer(service):
             task.report("applying_config", str(exc), issue=None)
         except BaseException as exc:
             with condition:
-                errors.append(exc)
+                coordinated_stop = isinstance(exc, Cancelled) and finished.is_set() and not service.stop.is_set()
+                if not coordinated_stop:
+                    errors.append(exc)
                 finished.set()
                 condition.notify_all()
-            task.report("paused" if isinstance(exc, (Cancelled, SyncDisabled, Reconfigure)) else "failed",
-                        str(exc), issue=None, current_bytes=0, speed_bytes_per_second=0)
+            if not coordinated_stop:
+                task.report("paused" if isinstance(exc, (Cancelled, SyncDisabled, Reconfigure)) else "failed",
+                            str(exc), issue=None, current_bytes=0, speed_bytes_per_second=0)
         finally:
             if stage == "import":
                 db.status(source_work=False)

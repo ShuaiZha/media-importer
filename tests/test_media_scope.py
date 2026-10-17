@@ -99,9 +99,10 @@ class MediaScopeTests(unittest.TestCase):
         self.assertEqual(3, view['selection']['excluded_source_files'])
         self.assertEqual(0, view['queues']['import']['pending_files'])
         text = json.dumps(status_content(view), ensure_ascii=False)
-        self.assertIn('所选类别素材已收齐', text)
+        self.assertIn('相机可以拔走', text)
         self.assertIn('仅视频', text)
-        self.assertIn('未选类别', text)
+        self.assertIn('仅视频', text)
+        self.assertIn('所选类别之外', text)
 
     def test_switching_back_to_all_preserves_finished_files_and_imports_remainder(self):
         self.assertTrue(self.service('photo').cycle()['complete'])
@@ -166,13 +167,13 @@ class MediaScopeTests(unittest.TestCase):
                                 current_file=footage().path, current_bytes=8, current_total_bytes=32,
                                 speed_bytes_per_second=2, progress_updated_at=now())
         view = self.view()
-        self.assertEqual(0, view['batch']['total_files'])
+        self.assertEqual(1, view['batch']['total_files'])
         self.assertEqual(1, view['selection']['cached_outside_scope_files'])
         self.assertEqual(1, view['queues']['upload']['pending_files'])
         for card in (status_content(view), progress_card(view, 300)):
             text = json.dumps(card, ensure_ascii=False)
             self.assertIn('GH010001.MP4', text)
-            self.assertIn('其他类别的完整缓存仍会上传', text)
+            self.assertIn('其他类别的 1 个完整缓存，继续上传', text)
             self.assertNotIn('0 / 0', text)
             self.assertNotIn('本轮更新结束', text)
 
@@ -182,7 +183,7 @@ class MediaScopeTests(unittest.TestCase):
         row = next(r for r in self.store.files() if self.store.asset(r).path == photo().path)
         row['batch_created'] = now()
         text = NotificationWorker._completion([row], self.view())
-        self.assertIn('未选类别原片保留', text)
+        self.assertIn('未执行删除 1', text)
         self.assertNotIn('原片清理待处理', text)
 
     def test_rescan_ignores_new_unselected_files_but_detects_selected_changes(self):
@@ -231,7 +232,7 @@ class MediaScopeTests(unittest.TestCase):
         self.assertFalse(saved.backup['enabled'])
         self.assertFalse(saved.backup['delete_source_after_import'])
         self.assertIn('仅照片', json.dumps(sender.call_args.args[1], ensure_ascii=False))
-        self.assertEqual('同步内容已改为仅照片', settings_result(payload['changes'], True, False)['title'])
+        self.assertEqual('同步内容：仅照片', settings_result(payload['changes'], True, False)['title'])
 
     def test_unselected_failed_pending_file_does_not_notify(self):
         self.service().prepare_imports()

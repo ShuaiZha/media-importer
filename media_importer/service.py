@@ -697,9 +697,9 @@ class Service:
             # a mutation of previous mixed batches or their file identities.
             archived = {r["asset_id"] for r in known if r["state"] == "uploaded"}
             remaining = [a for a in selected if a.identity not in archived]
-            batch_id = self.store.batch(self.destination_id, remaining) if remaining else None
+            batch_id = self.store.batch(self.destination_id, remaining, scope) if remaining else None
         elif additions:
-            batch_id = self.store.batch(self.destination_id, additions)
+            batch_id = self.store.batch(self.destination_id, additions, scope)
         elif batch_id and not any(r["destination"] == self.destination_id and self.store.asset(r).serial == self.config.source["serial"]
                                  for r in self.store.files(batch_id=batch_id)):
             batch_id = None
@@ -708,6 +708,7 @@ class Service:
                           "checked_at": now(), "source_files": len(assets), "new_files": len(additions),
                           "media_scope": scope, "selected_files": len(selected), "excluded_files": len(assets) - len(selected)})
         self.store.save_groups(self.destination_id, groups)
+        self.store.reporting_run(self.config)
         return {"assets": selected, "batch_id": batch_id}
 
     def verify_imports(self, inventory):
@@ -758,6 +759,7 @@ class Service:
         self.store.status(source_work=False, sync_enabled=self.allowed(),
                           active_destination=self.destination_id, active_serial=self.config.source["serial"],
                           active_source_type=self.config.source["type"])
+        self.store.reporting_run(self.config)
         if not self.allowed():
             # Monitoring uses separate read-only clients whose stop events are not the transfer switches.
             self.report("paused", "同步已关闭，只检测连接状态")
