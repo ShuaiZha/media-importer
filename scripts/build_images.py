@@ -11,7 +11,7 @@ from build import build_context
 
 ROOT = Path(__file__).resolve().parents[1]
 ALPINE = "3.24.2"
-VERSION = "0.10.17"
+VERSION = "0.10.18"
 
 
 def download(url, path):

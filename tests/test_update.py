@@ -29,20 +29,25 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(manifest(), update.release('0.10.16'))
             self.assertTrue(fetch.call_args_list[0].args[0].endswith('/tags/v0.10.16'))
 
+    def test_default_update_uses_latest_asset_without_rest_rate_quota(self):
+        with patch.object(update, 'fetch_json', return_value=manifest()) as fetch:
+            self.assertEqual(manifest(), update.release())
+            fetch.assert_called_once_with('https://github.com/ShuaiZha/media-importer/releases/latest/download/release.json')
+
     def test_untrusted_images_and_incompatible_contracts_rejected(self):
         for field, value in [('image', 'evil.example/image@sha256:' + 'd'*64), ('image', update.REGISTRY + ':stable'),
                              ('version', '0.10.17'), ('commit', 'main'), ('updater_version', 2),
                              ('config_version', 9), ('database_version', 9), ('format', 2)]:
             data = manifest(); data[field] = value
             with self.subTest(field=field, value=value), patch.object(update, 'fetch_json', side_effect=[self.response(), data]):
-                with self.assertRaises(ValueError): update.release()
+                with self.assertRaises(ValueError): update.release('0.10.16')
 
     def test_prerelease_and_foreign_asset_urls_rejected(self):
         for field, value in [('prerelease', True), ('draft', True), ('tag_name', 'v1.0.0-rc1'),
                              ('assets', [{'name': 'release.json', 'browser_download_url': 'https://evil.example/release.json'}])]:
             response = self.response(); response[field] = value
             with patch.object(update, 'fetch_json', return_value=response):
-                with self.assertRaises(ValueError): update.release()
+                with self.assertRaises(ValueError): update.release('0.10.16')
 
     def test_external_error_does_not_echo_secret(self):
         with patch.object(update.subprocess, 'run', return_value=type('Result', (), {'returncode': 1, 'stderr': 'private-secret'})()):

@@ -143,7 +143,7 @@ docker compose run --rm --no-deps backup export-cache --output /data/exported-YY
 ```sh
 python3 scripts/manage.py update
 # 可指定已发布的稳定版本；不允许倒退或覆盖本地源码改动：
-python3 scripts/manage.py update --version 0.10.17
+python3 scripts/manage.py update --version 0.10.18
 ```
 
 命令只读取 GitHub 正式发行版，核对发布清单、Git 标签和镜像版本，按摘要下载 ARM64/AMD64 镜像，再停止两个服务、保存一致性快照、快进源码、恢复原来运行的服务并等待健康检查。原来停止的服务保持停止；`.env`、JSON 开关、未完成任务和完整缓存保留，SMB 归档不改动。未完成的单文件传输遵循现有规则，下次从头传输；完整文件不重传。相机连接在重启后重新确认。

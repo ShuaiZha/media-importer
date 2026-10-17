@@ -42,17 +42,25 @@ def fetch_json(url):
 
 def release(version=None):
     if version and not re.fullmatch(r'v?\d+\.\d+\.\d+', version):
-        raise ValueError('版本格式应为 0.10.17 或 v0.10.17，不接受预发布版本')
-    endpoint = 'tags/v' + version.removeprefix('v') if version else 'latest'
-    value = fetch_json(f'https://api.github.com/repos/{REPOSITORY}/releases/{endpoint}')
-    tag = value.get('tag_name', '')
-    if value.get('draft') or value.get('prerelease') or not re.fullmatch(r'v\d+\.\d+\.\d+', tag):
-        raise ValueError('所选版本不是正式稳定版')
-    expected = f'https://github.com/{REPOSITORY}/releases/download/{tag}/release.json'
-    assets = [a for a in value.get('assets', []) if a.get('name') == 'release.json']
-    if len(assets) != 1 or assets[0].get('browser_download_url') != expected:
-        raise ValueError('稳定版缺少受支持的发布清单')
-    manifest = fetch_json(expected)
+        raise ValueError('版本格式应为 0.10.18 或 v0.10.18，不接受预发布版本')
+    if version:
+        value = fetch_json(f'https://api.github.com/repos/{REPOSITORY}/releases/tags/v' + version.removeprefix('v'))
+        tag = value.get('tag_name', '')
+        if value.get('draft') or value.get('prerelease') or tag != 'v' + version.removeprefix('v'):
+            raise ValueError('所选版本不是正式稳定版')
+        expected = f'https://github.com/{REPOSITORY}/releases/download/{tag}/release.json'
+        assets = [a for a in value.get('assets', []) if a.get('name') == 'release.json']
+        if len(assets) != 1 or assets[0].get('browser_download_url') != expected:
+            raise ValueError('稳定版缺少受支持的发布清单')
+        manifest = fetch_json(expected)
+    else:
+        # GitHub's latest-release asset link excludes drafts and prereleases.
+        # Normal updates need no API token or shared anonymous REST rate quota.
+        manifest = fetch_json(f'https://github.com/{REPOSITORY}/releases/latest/download/release.json')
+        version = manifest.get('version', '')
+        if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+            raise ValueError('最新发行清单不是稳定版本')
+        tag = 'v' + version
     if (manifest.get('format') != 1 or manifest.get('version') != tag[1:] or
             manifest.get('updater_version') != UPDATER_VERSION or manifest.get('config_version') != 4 or
             manifest.get('database_version') != 5 or
