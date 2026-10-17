@@ -28,6 +28,7 @@ def describe(exc, stage=None):
     if isinstance(exc, DestinationError) and exc.code:
         code, scope = exc.code, "destination"
         action = {
+            "destination_identity": "连接与原归档身份尚未核对通过，请恢复原连接或检查共享目录；完整缓存保留。",
             "destination_path": "检查目的地目录是否存在。",
             "authentication": "检查目的地账号和 .env 凭据；修改后重新测试连接。",
             "permission": "检查目的地的访问、写入和改名权限。",

@@ -410,8 +410,9 @@ class Bot:
                             from .notifications import NotificationWorker, _database, _digest
                             from .config import Config
                             config = Config.from_values(item['config'])
-                            scope = _digest([config.destination_id, config.source['type'], config.source['serial']])
                             with _database(self.directory) as outgoing, outgoing:
+                                from .destination_binding import identity
+                                scope = _digest([identity(outgoing, config), config.source['type'], config.source['serial']])
                                 NotificationWorker(self.directory, self.settings, threading.Event())._enqueue(
                                     outgoing, 'started:control:' + self.scope + ':' + job['id'], 'started', scope, '传输进度', '', time.time())
                             with self.db() as db:
@@ -476,18 +477,31 @@ def serve(settings, directory):
     # SDK log text can contain signed websocket URLs. Expose our own sanitized status.
     from lark_oapi.core.log import logger
     logger.disabled = True
+    stop = threading.Event()
+    from .workers import Workers
+    import os
+    # The official SDK owns the main event loop and offers no synchronous stop.
+    # Persistent worker failure must terminate PID 1, not leave an idle bot alive.
+    workers = Workers(stop, lambda: os._exit(1))
     def worker():
         db = Store(directory)
+        heartbeat_at, connected = 0, None
         try:
-            while True:
-                db.set_meta("bot", {"heartbeat_at": now(), "connected": client._conn is not None})
+            while not stop.is_set():
+                online = client._conn is not None
+                if time.monotonic() - heartbeat_at >= 5 or connected != online:
+                    db.set_meta("bot", {"heartbeat_at": now(), "connected": online})
+                    heartbeat_at, connected = time.monotonic(), online
                 bot.process_one()
-                time.sleep(.25)
+                stop.wait(.25)
         finally:
             db.close()
-    threading.Thread(target=worker, daemon=True, name="bot-controls").start()
+    worker_thread = workers.start('bot-controls', worker)
     logging.info("飞书控制服务启动；只接受 .env 指定的本人操作")
     try:
         client.start()
     except Exception:
         raise ConfigError("飞书长连接启动失败，请检查 .env、应用状态和网络；详细凭据未写入日志") from None
+    finally:
+        stop.set()
+        worker_thread.join(timeout=3)

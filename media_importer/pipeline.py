@@ -91,11 +91,12 @@ def transfer(service):
                                 retry_at = time.monotonic() + service.config.backup["retry_seconds"]
                     else:
                         # Cleanup failure never changes the archived state or reuploads the file.
-                        for saved in task.rows():
+                        work = task.rows(work=True)
+                        for saved in work:
                             if saved["state"] == "uploaded" and saved["id"] not in cleaned:
                                 task.clean_cache(saved)
                                 cleaned.add(saved["id"])
-                        row = next((r for r in task.rows() if r["state"] in ("cached", "staged", "publishing")
+                        row = next((r for r in work if r["state"] in ("cached", "staged", "publishing")
                                     and r["id"] not in failed), None)
                         if row:
                             if task.control:

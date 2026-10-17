@@ -34,6 +34,7 @@ PROBLEMS = {
     "authentication": ("目的地认证失败", "检查目的地账号和密码，修改后测试连接；完整缓存保留。"),
     "permission": ("目的地权限不足", "检查共享目录的访问、写入和改名权限；完整缓存保留。"),
     "destination_path": ("目的地目录不可用", "检查共享名和目标目录，修改后测试连接。"),
+    "destination_identity": ("目的地身份待核对", "新连接未能确认原归档，请恢复原连接或检查共享目录；完整缓存保留。"),
     "destination_full": ("目的地空间不足", "释放目的地空间或调整配额；完整缓存会保留，程序会自动重试。"),
     "cache_capacity": ("缓存空间或额度不足", "等待上传释放空间，或调整缓存额度及磁盘预留；暂停新导入。"),
     "cache_unavailable": ("缓存盘不可用", "连接原缓存盘并检查挂载和读写权限；两路传输会等待恢复。"),
@@ -66,7 +67,8 @@ def _meta(db, key, default=None):
 
 
 def _put_meta(db, key, value):
-    db.execute("INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)", (key, json.dumps(value, ensure_ascii=False)))
+    db.execute("""INSERT INTO meta (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value
+        WHERE meta.value<>excluded.value""", (key, json.dumps(value, ensure_ascii=False)))
 
 
 @contextmanager
@@ -470,12 +472,13 @@ class NotificationWorker:
         options = values["notifications"]
         from .config import Config
         from .status import snapshot
-        destination = Config.from_values(values).destination_id
-        scope = _digest([destination, values["source"]["type"], values["source"]["serial"]])
         view = view if view is not None else (self.snapshotter or snapshot)(self.directory, self.settings)
         view = {**view, 'configuration': {**view.get('configuration', {}), 'sync_enabled': values['backup']['enabled']}}
         enabled = bool(options["enabled"] and values["backup"]["enabled"])
         with _database(self.directory) as db:
+            from .destination_binding import identity
+            destination = identity(db, Config.from_values(values))
+            scope = _digest([destination, values["source"]["type"], values["source"]["serial"]])
             state = _meta(db, "notification_state", {})
             batches = self._batches(db, destination, values["source"], values['backup']['media_scope'])
             if state.get("scope") != scope:
@@ -711,7 +714,8 @@ class NotificationWorker:
         transfer_enabled = bool(latest.get('backup', {}).get('enabled') and latest.get('notifications', {}).get('enabled'))
         connection_enabled = bool(latest.get('notifications', {}).get('connection_events', True))
         from .config import Config
-        latest_destination = Config.from_values(latest).destination_id
+        from .destination_binding import identity
+        latest_destination = identity(db, Config.from_values(latest))
         if scope != _digest([latest_destination, latest["source"]["type"], latest["source"]["serial"]]):
             return
         options = latest["notifications"]

@@ -9,7 +9,7 @@ from pathlib import Path
 from .config import Config
 from .model import now, Asset
 from .store import cache_bytes
-from .storage import inspect_cache, inspect_cached_file
+from .storage import inspect_cache, observe_cached_file
 from .paths import archive_location
 from .media import MEDIA_SCOPES, selected_file_ids
 
@@ -19,6 +19,25 @@ def age(stamp):
         return max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(stamp)).total_seconds())
     except (ValueError, TypeError):
         return float('inf')
+
+
+def live_state(meta):
+    state = meta.get('status', {})
+    return bool(meta.get('service', {}).get('running') and
+                age(state.get('worker_heartbeat_at', state.get('updated_at'))) < 15 and
+                not any(w.get('critical') and w.get('state') == 'failed' for w in state.get('workers', {}).values()))
+
+
+def healthy(directory):
+    """Health probes never inspect media or construct a full reporting snapshot."""
+    try:
+        db = sqlite3.connect((Path(directory) / 'state.sqlite3').resolve().as_uri() + '?mode=ro', uri=True, timeout=2)
+        try:
+            return live_state({r[0]: json.loads(r[1]) for r in db.execute("SELECT key,value FROM meta WHERE key IN ('status','service')")})
+        finally:
+            db.close()
+    except (OSError, sqlite3.Error, ValueError):
+        return False
 
 
 def cleanup_summary(files, delete_source=False):
@@ -66,7 +85,7 @@ def attention(live, enabled, configuration, health, files, stages):
     for issue in [health['destination'].get('issue')] + [s.get('issue') for s in stages.values()]:
         if not issue:
             continue
-        if issue.get('code') in ('authentication', 'permission', 'destination_path', 'destination_full', 'cache_unavailable'):
+        if issue.get('code') in ('authentication', 'permission', 'destination_path', 'destination_identity', 'destination_full', 'cache_unavailable'):
             return {'required': True, 'message': '需要处理：' + issue['action']}
         if issue.get('code') in ('network', 'source_network', 'source_state', 'cache_capacity'):
             return {'required': False, 'message': '暂时等待，程序会重试：' + issue['action']}
@@ -92,6 +111,9 @@ def snapshot(directory, settings):
             db.execute('PRAGMA query_only=ON')
             db.execute('BEGIN')
             meta = {r['key']: json.loads(r['value']) for r in db.execute('SELECT * FROM meta')}
+            if config:
+                from .destination_binding import identity
+                destination = identity(db, config)
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='cache_receipts'").fetchone():
                 receipts = dict(db.execute('SELECT file_id,imported_at FROM cache_receipts'))
             state = meta.get('status', {})
@@ -122,7 +144,7 @@ def snapshot(directory, settings):
     reporting_id = current_round['id'] if current_round else batch_id
     state = dict(meta.get('status', {}))
     service = meta.get('service', {})
-    live = bool(service.get('running') and age(state.get('worker_heartbeat_at', state.get('updated_at'))) < 15)
+    live = live_state(meta)
     enabled = bool(config and config.backup['enabled'])
     draining = bool(enabled and config.backup.get('stop_after_current'))
     stages = {name: dict(state.get('stages', {}).get(name, {})) for name in ('import', 'upload')}
@@ -157,7 +179,7 @@ def snapshot(directory, settings):
         received = min(size, max(0, progress.get('current_bytes', 0))) if downloading else 0
         evidence = {'state': 'unavailable', 'valid': False, 'bytes': 0, 'reason': cache_health.get('reason')}
         if cache_health['available']:
-            evidence = inspect_cached_file(cache / (row['id'] + '.bin'), json.loads(row['cache_identity'] or 'null'),
+            evidence = observe_cached_file(cache / (row['id'] + '.bin'), json.loads(row['cache_identity'] or 'null'),
                                            row['asset_id'], meta.get('cache_identity'))
         cached = evidence['valid']
         stored = row['state'] == 'uploaded' or cached
@@ -175,6 +197,7 @@ def snapshot(directory, settings):
                       'imported_at': receipts.get(row['id']),
                       'selected': row['id'] in selected,
                       'cleanup': row['cleanup'], 'error': row['error'], 'remote_path': row['remote_path'],
+                      'source_deleted_at': row.get('source_deleted_at'), 'source_absent_at': row.get('source_absent_at'),
                       'error_stage': row.get('error_stage'), 'attempts': row.get('attempts', 0),
                       'cache_cleanup_error': row.get('cache_cleanup_error'), 'cache_path': str(cache / (row['id'] + '.bin')),
                       'in_batch': member, 'current': bool(stage_name), 'cache_available': cached,

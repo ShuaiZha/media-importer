@@ -25,6 +25,8 @@ def run(settings, store, stop=None):
     checks = result["checks"]
     try:
         config = Config.from_values(settings.read()["config"])
+        from .destination_binding import bind
+        config = bind(store, config)
         destination_password()
         checks["configuration"] = item("ok", "连接配置与日常设置有效")
     except (ConfigError, OSError, ValueError, TypeError):
@@ -64,6 +66,15 @@ def run(settings, store, stop=None):
         remote = create_destination(config, stop)
         try:
             remote.check()
+            from .destination_binding import verify_connection
+            import sqlite3
+            from types import SimpleNamespace
+            db = sqlite3.connect((store.directory / 'state.sqlite3').resolve().as_uri() + '?mode=rw', uri=True, timeout=15)
+            db.row_factory = sqlite3.Row
+            try:
+                verify_connection(SimpleNamespace(db=db), config, remote)
+            finally:
+                db.close()
             return item("ok", "SMB 认证和目标目录访问通过；写入与改名权限在实际上传时确认")
         finally:
             remote.close()

@@ -38,6 +38,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
     try:
+        if args.command == 'health':
+            from .status import healthy
+            return 0 if healthy(args.data) else 1
         if args.command in ("bot", "bot-health", "bot-panel"):
             from .bot import serve, healthy, Bot
             from .settings import Settings
@@ -109,12 +112,6 @@ def main(argv=None):
             assets = source.snapshot()
             emit({"files": len(assets), "bytes": sum(a.size for a in assets), "assets": [a.to_dict() for a in assets]})
             return 0
-        if args.command == "health":
-            from .settings import Settings
-            from .status import snapshot
-            result = snapshot(args.data, Settings(args.config))
-            return 0 if result["running"] else 1
-
         destination = create_destination(config, stop)
         try:
             if args.command == "verify-cache":

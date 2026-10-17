@@ -1,5 +1,6 @@
 import logging
 import threading
+import time
 from pathlib import Path
 
 from .adapters import create_source, create_destination, probe_source
@@ -96,13 +97,26 @@ def daemon(config_path, directory, stop):
     store.invalidate_inventory("服务重启后需重新核对相机清单")
     store.status(source_work=False)
     store.set_meta("service", {"running": True, "started_at": now()})
+    from .workers import Workers
+    failed = threading.Event()
+    def fatal():
+        failed.set()
+        stop.set()
+        control.transfer_stop.set()
+        control.changed.set()
+    workers = Workers(stop, fatal)
     def observe():
         from .wireless_control import publish, connection_status
         db = Store(directory)
+        heartbeat_at = 0
         try:
             while not stop.is_set():
                 control.refresh()
-                db.status(worker_heartbeat_at=now(), configuration=control.state())
+                updates = {'configuration': control.state(), 'workers': workers.snapshot()}
+                if time.monotonic() - heartbeat_at >= 5:
+                    updates['worker_heartbeat_at'] = now()
+                    heartbeat_at = time.monotonic()
+                db.status(**updates)
                 config = Config.from_values(control.item["config"]) if control.item and control.item.get("config") and not control.error else None
                 try:
                     if config and config.source.get("transport") == "wifi":
@@ -124,21 +138,13 @@ def daemon(config_path, directory, stop):
             except OSError:
                 pass
             db.close()
-    watcher = threading.Thread(target=observe, daemon=True, name="settings-and-heartbeat")
-    watcher.start()
+    watcher = workers.start('settings-and-heartbeat', observe)
     def notify():
         from .notifications import NotificationWorker
-        try:
-            NotificationWorker(directory, control.settings, stop).run()
-        except Exception:
-            # Notifications are optional: a failure must not end a transfer.
-            # Do not log exception values, which could contain credentials.
-            logging.error("通知工作线程暂不可用；传输服务继续运行")
-    notifier = threading.Thread(target=notify, daemon=True, name="notifications")
-    notifier.start()
+        NotificationWorker(directory, control.settings, stop).run()
+    notifier = workers.start('notifications', notify, critical=False)
     from .operations import serve as maintenance
-    maintainer = threading.Thread(target=maintenance, args=(directory, control, stop), daemon=True, name="maintenance")
-    maintainer.start()
+    maintainer = workers.start('maintenance', lambda: maintenance(directory, control, stop), critical=False)
     try:
         from .preflight import run as startup_check
         checked = startup_check(control.settings, store, stop)
@@ -156,7 +162,7 @@ def daemon(config_path, directory, stop):
                 if store.get_meta("status", {}).get("active_transport", config.source["transport"]) != config.source["transport"]:
                     store.invalidate_inventory("连接方式已切换，需重新核对相机身份与清单")
                     store.status(source={"online": None, "transport": config.source["transport"]})
-                store.status(configuration=control.state(), active_destination=config.destination_id,
+                store.status(configuration=control.state(), active_destination=service.destination_id,
                              active_serial=config.source["serial"], active_source_type=config.source["type"],
                              active_transport=config.source["transport"])
                 with control.work_guard:
@@ -195,3 +201,5 @@ def daemon(config_path, directory, stop):
         store.set_meta("service", {"running": False, "stopped_at": now()})
         store.status(phase="stopped", message="服务已停止，任务与缓存已保留", speed_bytes_per_second=0, eta_seconds=None)
         store.close()
+    if failed.is_set():
+        raise BackupError('关键后台线程持续失败，退出服务以便 Docker 自动重启；任务与完整缓存保留')

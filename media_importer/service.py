@@ -29,6 +29,8 @@ class CacheFull(BackupError):
 
 class Service:
     def __init__(self, config, store, source: MediaSource, destination: ArchiveDestination, stop, control=None, stage=None):
+        from .destination_binding import bind
+        config = bind(store, config)
         self.config, self.store, self.source, self.destination, self.stop = config, store, source, destination, stop
         self.destination_id = config.destination_id
         self._progress_at = 0
@@ -79,6 +81,7 @@ class Service:
     def observe_destination(self):
         try:
             result = self.destination.check()
+            self.verify_destination()
             self.store.status(destination={"online": True, "checked_at": now(), **result})
             return result
         except DestinationError as exc:
@@ -86,8 +89,12 @@ class Service:
             self.store.status(destination={"online": False, "checked_at": now(), "reason": str(exc), "issue": issue})
             raise
 
-    def rows(self):
-        return [row for row in self.store.files(destination=self.destination_id)
+    def verify_destination(self, remote=None):
+        from .destination_binding import verify_connection
+        verify_connection(self.store, self.config, remote or self.destination)
+
+    def rows(self, *, work=False):
+        return [row for row in self.store.files(destination=self.destination_id, work=work)
                 if self.store.asset(row).serial == self.config.source["serial"]
                 and self.store.asset(row).source_type == self.config.source["type"]]
 
@@ -172,12 +179,29 @@ class Service:
             finally:
                 remote.close()
                 store.close()
-        threads = [threading.Thread(target=target, name=name, daemon=True)
-                   for target, name in ((monitor, "source-monitor"), (monitor_destination, "destination-monitor"), (keep_alive, "source-keepalive"))]
-        for thread in threads:
-            thread.start()
+        from .workers import Workers
+        failed = threading.Event()
+        def fatal():
+            failed.set()
+            finished.set()
+            self.stop.set()
+            if self.control:
+                self.control.transfer_stop.set()
+        workers = Workers(finished, fatal)
+        def observed(target):
+            target()
+            if self.stop.is_set():
+                finished.set()
+        targets = [(monitor, 'source-monitor')]
+        if hasattr(self.destination, 'fork'):
+            targets.append((monitor_destination, 'destination-monitor'))
+        if hasattr(self.source, 'keep_alive'):
+            targets.append((keep_alive, 'source-keepalive'))
+        threads = [workers.start(name, lambda target=target: observed(target)) for target, name in targets]
         try:
             yield
+            if failed.is_set():
+                raise BackupError('设备监测线程持续失败，退出服务以恢复；任务与缓存保留')
         finally:
             finished.set()
             for thread in threads:
@@ -310,7 +334,7 @@ class Service:
         return result
 
     def clean_cache(self, row):
-        if row["state"] != "uploaded" or not self.allowed():
+        if row["state"] != "uploaded" or row.get('cache_cleared_at') or not self.allowed():
             return
         with self.cache_guard:
             try:
@@ -323,7 +347,7 @@ class Service:
                         raise CacheUnavailable("缓存身份变化，未清理该文件")
                 unlink_cache(path)
                 fsync_directory(self.store.cache)
-                self.store.update(row["id"], cache_cleanup_error=None)
+                self.store.update(row["id"], cache_cleanup_error=None, cache_cleared_at=now())
             except (OSError, CacheUnavailable) as exc:
                 self.store.update(row["id"], cache_cleanup_error=str(exc))
                 LOG.warning("已归档，缓存待清理: %s", self.store.asset(row).path)
@@ -346,6 +370,7 @@ class Service:
                         unlink_cache(path)
                         fsync_directory(self.store.cache)
                     else:
+                        self.verify_destination(remote)
                         remote.delete_owned(item["path"], json.loads(item["identity"] or "null"))
                     self.store.temporary_result(item["id"])
                 except (BackupError, OSError, ValueError) as exc:
@@ -397,6 +422,7 @@ class Service:
             number += 1
 
     def confirmed_final(self, row, item):
+        self.verify_destination()
         if not self.valid_remote(item, self.store.asset(row).size):
             return False
         # A lost rename acknowledgement must not adopt an unrelated equal-size file.
@@ -412,6 +438,7 @@ class Service:
 
     def upload_cached(self, row):
         self.check_stop()
+        self.verify_destination()
         require_cache(self.store)
         if not self.allowed():
             raise SyncDisabled("同步已关闭")
@@ -649,7 +676,15 @@ class Service:
                         if candidates.get(asset.identity, "不支持安全删除"):
                             self.store.update(row["id"], cleanup="blocked", source_cleanup_error=candidates.get(asset.identity))
                             continue
-                        self.store.update(row["id"], cleanup="deleting", source_cleanup_error=None)
+                        # Some devices remove associated previews with the main
+                        # file. Persist all currently present, verified members
+                        # before the request, so a crash/lost rescan preserves
+                        # evidence for those side effects as well.
+                        present_ids = [r['id'] for r, member in zip(rows, members) if member.path in current]
+                        with self.store.db:
+                            self.store.db.executemany("""UPDATE files SET cleanup='deleting',source_cleanup_error=NULL,
+                                updated_at=? WHERE id=? AND cleanup NOT IN ('deleted','absent')""",
+                                ((now(), identifier) for identifier in present_ids))
                         try:
                             self.source.delete(asset)
                         except SourceError:
@@ -657,7 +692,7 @@ class Service:
                             pass
                         after = {a.path: a for a in self.source_snapshot()}
                         for member_row, member in zip(rows, members):
-                            if member.path not in after:
+                            if member.path in current and member.path not in after:
                                 self.store.update(member_row["id"], cleanup="deleted", source_cleanup_error=None)
                         if asset.path in after:
                             self.store.update(row["id"], cleanup="pending", source_cleanup_error="相机文件仍存在，稍后重新核对")
@@ -697,7 +732,7 @@ class Service:
                 elif row["state"] == "missing":
                     self.store.update(row["id"], state="pending", error=None, error_stage=None)
             elif row["state"] == "uploaded" and self.store.asset(row).path not in paths:
-                self.store.update(row["id"], cleanup="absent")
+                self.store.update(row["id"], cleanup="absent", source_cleanup_error=None)
         known_ids = {r["asset_id"] for r in known}
         additions = [a for a in selected if a.identity not in known_ids]
         batch_id = self.store.get_meta("last_batch")

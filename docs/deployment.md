@@ -106,7 +106,7 @@ docker compose ps
 docker compose logs --tail 100 backup bot
 ```
 
-`validate` 只检查 JSON 及相机、SMB 连接字段格式，不测试账号能否登录。镜像由源码在本机构建，`local/media-importer:0.10.9` 是本地标签；仓库没有可供 `docker pull` 的预构建镜像。首次构建需要访问 Docker Hub、Alpine 软件源和 Python 包源。`scripts/build.py` 只复制构建所需源码到临时目录，避免外接盘的 macOS 元数据导致构建失败，配置和素材不会进入构建目录。Windows 可用 `py -3` 替代 `python3`。
+`validate` 只检查 JSON 及相机、SMB 连接字段格式，不测试账号能否登录。镜像由源码在本机构建，`local/media-importer:0.10.10` 是本地标签；仓库没有可供 `docker pull` 的预构建镜像。首次构建需要访问 Docker Hub、Alpine 软件源和 Python 包源。`scripts/build.py` 只复制构建所需源码到临时目录，避免外接盘的 macOS 元数据导致构建失败，配置和素材不会进入构建目录。Windows 可用 `py -3` 替代 `python3`。
 
 Compose 启动 `backup`（导入、上传和通知）与 `bot`（飞书长连接控制）两个服务，不映射端口，没有网页入口。同步按 JSON 中保存的开关运行。`bot` 建立连接后，继续 [配置事件、回调、菜单和发布](feishu.md#3-配置事件与卡片回调)。若提示“应用未建立长连接”，先检查 `bot` 凭据、容器状态与联网情况，再回后台保存。
 

@@ -3,6 +3,9 @@ import os
 import hashlib
 import shutil
 import uuid
+import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 
 from .model import CacheUnavailable, now
@@ -85,7 +88,11 @@ def initialize_cache(store):
 
 def require_cache(store):
     status = inspect_cache(store.cache, store.get_meta("cache_identity"))
-    store.status(cache=status)
+    from .status import age
+    previous = store.get_meta('status', {}).get('cache', {})
+    if (age(previous.get('checked_at')) >= 5 or
+            any(previous.get(k) != status.get(k) for k in ('available', 'reason', 'path'))):
+        store.status(cache=status)
     if not status["available"]:
         raise CacheUnavailable(status["reason"])
     return status
@@ -145,6 +152,37 @@ def inspect_cached_file(path, expected, asset_id, volume_id):
         result.update(state="missing", reason="完整缓存文件不在原位置")
     except (OSError, CacheUnavailable) as exc:
         result.update(state="unavailable", reason=str(exc))
+    return result
+
+
+_observations = OrderedDict()
+_observation_lock = threading.Lock()
+
+
+def observe_cached_file(path, expected, asset_id, volume_id):
+    """Bounded read cache for display only; transfer/deletion always verify fresh.
+
+    Metadata and volume changes invalidate immediately; sample evidence is read
+    again after 30 seconds even when metadata is unchanged. Nothing is persisted.
+    """
+    import json
+    try:
+        stat = Path(path).lstat()
+        key = (str(path), stat.st_dev, stat.st_ino, stat.st_mode, stat.st_size,
+               stat.st_mtime_ns, stat.st_ctime_ns, asset_id, volume_id, json.dumps(expected, sort_keys=True))
+    except OSError:
+        return inspect_cached_file(path, expected, asset_id, volume_id)
+    stamp = time.monotonic()
+    with _observation_lock:
+        saved = _observations.get(key)
+        if saved and stamp - saved[0] < 30:
+            _observations.move_to_end(key)
+            return dict(saved[1])
+    result = inspect_cached_file(path, expected, asset_id, volume_id)
+    with _observation_lock:
+        _observations[key] = (stamp, dict(result))
+        while len(_observations) > 512:
+            _observations.popitem(last=False)
     return result
 
 

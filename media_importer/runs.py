@@ -92,14 +92,14 @@ def _include_previews(db, identifier):
 
 def archived(db, file_id):
     db.execute("""UPDATE transfer_runs SET finished_at=COALESCE(finished_at,?)
-        WHERE historical=0 AND id IN (SELECT run_id FROM transfer_run_files WHERE file_id=?) AND NOT EXISTS (
+        WHERE historical=0 AND finished_at IS NULL AND id IN (SELECT run_id FROM transfer_run_files WHERE file_id=?) AND NOT EXISTS (
             SELECT 1 FROM transfer_run_files rf JOIN files f ON f.id=rf.file_id
             WHERE rf.run_id=transfer_runs.id AND f.state NOT IN ('uploaded','excluded'))""", (now(), file_id))
 
 
 def imported(db, batch_id):
     db.execute("""UPDATE transfer_runs SET imported_at=COALESCE(imported_at,?)
-        WHERE id IN (SELECT rf.run_id FROM transfer_run_files rf JOIN batch_files bf ON bf.file_id=rf.file_id WHERE bf.batch_id=?)
+        WHERE imported_at IS NULL AND id IN (SELECT rf.run_id FROM transfer_run_files rf JOIN batch_files bf ON bf.file_id=rf.file_id WHERE bf.batch_id=?)
         AND NOT EXISTS (SELECT 1 FROM transfer_run_files rf JOIN files f ON f.id=rf.file_id
             WHERE rf.run_id=transfer_runs.id AND f.state NOT IN ('cached','staged','publishing','uploaded','excluded'))""", (now(), batch_id))
 

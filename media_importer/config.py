@@ -125,4 +125,4 @@ class Config:
 
     @property
     def destination_id(self):
-        return destination_identity(self.destination)
+        return self.destination.get('archive_id') or destination_identity(self.destination)

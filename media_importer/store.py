@@ -61,8 +61,11 @@ class Store:
         with self.db:
             self.db.execute('BEGIN IMMEDIATE')
             self.db.execute("PRAGMA user_version=5")
-            if 'role' not in {r[1] for r in self.db.execute('PRAGMA table_info(files)')}:
-                self.db.execute("ALTER TABLE files ADD COLUMN role TEXT NOT NULL DEFAULT 'original'")
+            columns = {r[1] for r in self.db.execute('PRAGMA table_info(files)')}
+            for name, definition in {'role': "TEXT NOT NULL DEFAULT 'original'", 'source_deleted_at': 'TEXT',
+                                     'source_absent_at': 'TEXT', 'cache_cleared_at': 'TEXT'}.items():
+                if name not in columns:
+                    self.db.execute(f'ALTER TABLE files ADD COLUMN {name} {definition}')
         from .runs import initialize
         initialize(self.db)
 
@@ -71,7 +74,8 @@ class Store:
 
     def set_meta(self, key, value):
         with self.db:
-            self.db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, json.dumps(value, ensure_ascii=False)))
+            self.db.execute("""INSERT INTO meta VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                WHERE meta.value<>excluded.value""", (key, json.dumps(value, ensure_ascii=False)))
 
     def get_meta(self, key, default=None):
         row = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
@@ -80,6 +84,9 @@ class Store:
     def status(self, **updates):
         # The device monitor and worker own separate SQLite connections.
         # Serialize the read/merge/write so connection updates cannot erase progress.
+        current = self.get_meta('status', {})
+        if all(key in current and current[key] == value for key, value in updates.items()):
+            return current
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             status = self.get_meta("status", {})
@@ -94,6 +101,9 @@ class Store:
 
     def stage_status(self, stage, **updates):
         # Each transfer owns its connection. Merge within the same write transaction.
+        current = self.get_meta('status', {}).get('stages', {}).get(stage, {})
+        if all(key in current and current[key] == value for key, value in updates.items()):
+            return
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             status = self.get_meta("status", {})
@@ -108,6 +118,9 @@ class Store:
         return cache_bytes(self.cache)
 
     def invalidate_inventory(self, reason):
+        previous = self.get_meta('status', {}).get('inventory', {})
+        if previous.get('verified') is False and previous.get('invalidated_reason') == reason:
+            return
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             status = self.get_meta("status", {})
@@ -134,11 +147,12 @@ class Store:
         self.set_meta("last_batch", batch_id)
         return batch_id
 
-    def files(self, destination=None, batch_id=None):
+    def files(self, destination=None, batch_id=None, *, work=False):
         if batch_id:
             rows = self.db.execute("SELECT f.* FROM files f JOIN batch_files b ON f.id=b.file_id WHERE b.batch_id=? ORDER BY f.rowid", (batch_id,)).fetchall()
         elif destination:
-            rows = self.db.execute("SELECT * FROM files WHERE destination=? ORDER BY rowid", (destination,)).fetchall()
+            pending = " AND (state NOT IN ('uploaded','excluded') OR (state='uploaded' AND cache_cleared_at IS NULL))" if work else ''
+            rows = self.db.execute("SELECT * FROM files WHERE destination=?" + pending + " ORDER BY rowid", (destination,)).fetchall()
         else:
             rows = self.db.execute("SELECT * FROM files ORDER BY rowid").fetchall()
         return [dict(r) for r in rows]
@@ -154,11 +168,26 @@ class Store:
     def update(self, file_id, **fields):
         allowed = {"state", "remote_path", "temp_path", "cleanup", "error",
                    "remote_identity", "cache_identity", "group_id", "source_cleanup_error", "error_stage", "attempts",
-                   "cache_cleanup_error"}
+                   "cache_cleanup_error", "cache_cleared_at"}
         if not fields or not set(fields) <= allowed:
             raise ValueError("Invalid state update")
-        fields["updated_at"] = now()
         with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            previous = self.get(file_id)
+            if previous is None:
+                raise ValueError('Unknown file')
+            # Absence is a current observation; it cannot erase a confirmed
+            # deletion fact. Old "absent" rows cannot be retroactively inferred.
+            if fields.get('cleanup') == 'absent':
+                if not previous['source_absent_at']:
+                    fields['source_absent_at'] = now()
+                if previous['cleanup'] in ('deleting', 'deleted') or previous['source_deleted_at']:
+                    fields['cleanup'] = 'deleted'
+            if fields.get('cleanup') == 'deleted' and not previous['source_deleted_at'] and previous['cleanup'] != 'deleted':
+                fields['source_deleted_at'] = now()
+            if all(previous.get(k) == v for k, v in fields.items()):
+                return
+            fields["updated_at"] = now()
             self.db.execute("UPDATE files SET " + ", ".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), file_id))
             if fields.get("state") == "cached":
                 self.db.execute("INSERT OR IGNORE INTO cache_receipts VALUES (?,?)", (file_id, now()))
@@ -168,12 +197,12 @@ class Store:
 
     def batch_state(self, batch_id, state):
         with self.db:
-            self.db.execute("UPDATE batches SET state=?, updated_at=? WHERE id=?", (state, now(), batch_id))
+            self.db.execute("UPDATE batches SET state=?, updated_at=? WHERE id=? AND state<>?", (state, now(), batch_id, state))
 
     def import_completed(self, batch_id):
         if batch_id:
             with self.db:
-                self.db.execute("UPDATE batches SET imported_at=COALESCE(imported_at,?) WHERE id=?", (now(), batch_id))
+                self.db.execute("UPDATE batches SET imported_at=? WHERE id=? AND imported_at IS NULL", (now(), batch_id))
                 from .runs import imported
                 imported(self.db, batch_id)
 
