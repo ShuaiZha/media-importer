@@ -33,11 +33,22 @@ def main(argv=None):
     commands.add_parser("bot")
     commands.add_parser("bot-health")
     commands.add_parser("bot-panel")
+    for command in ('recover-cache', 'export-cache'):
+        recover = commands.add_parser(command)
+        recover.add_argument('--output', required=True, help='缓存目录之外的新目录；不覆盖原记录')
     sync = commands.add_parser("sync")
     sync.add_argument("state", choices=("on", "off"))
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
     try:
+        if args.command in ('recover-cache', 'export-cache'):
+            from .recovery import recover
+            with worker_lock(args.data) as acquired:
+                if not acquired:
+                    raise BackupError('请先停止传输和机器人服务，再恢复或导出缓存')
+                emit(recover(Path(args.data) / 'cache', args.output, args.config,
+                             export=args.command == 'export-cache'))
+            return 0
         if args.command == 'health':
             from .status import healthy
             return 0 if healthy(args.data) else 1
@@ -86,7 +97,7 @@ def main(argv=None):
                     if progress.get("current_file"):
                         print(f"{label}: {progress['current_file']} ({progress.get('current_bytes', 0)} / {progress.get('current_total_bytes', 0)} bytes)")
                 print(result["unplug"]["message"])
-                print("飞书发送：状态 / 设置 / 停止同步；或使用 docker compose exec backup python3 -m media_importer sync off")
+                print("飞书发送：状态 / 开启同步 / 停止同步 / 原片处理；或使用 docker compose exec backup python3 -m media_importer sync off")
             return 0
         if args.command == "check":
             from .preflight import run

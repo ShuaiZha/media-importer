@@ -20,8 +20,6 @@
 
 所有示例地址、序列号和凭据都需要换成自己的值。`192.0.2.10` 与 `storage.example.com` 是文档示例，不是可以直接连接的服务。
 
-无线连接使用同一套配置和记录，在 Mac 手动连接相机热点即可；蓝牙脚本可选，详见 [无线模式](wireless.md)。以下默认按 USB 部署。
-
 ## 首次部署
 
 推荐先准备飞书 App ID、App Secret 与本人 Open ID，克隆项目后运行 `python3 scripts/setup.py`（Python 3.9+；Windows 可用 `py -3 scripts/setup.py`）。向导读取相机序列号、检查缓存目录写入，生成 `.env` 和 JSON，随后构建镜像并从容器检查相机、SMB 与飞书认证。密码不回显，已有配置或任务记录会拒绝覆盖。
@@ -106,7 +104,7 @@ docker compose ps
 docker compose logs --tail 100 backup bot
 ```
 
-`validate` 只检查 JSON 及相机、SMB 连接字段格式，不测试账号能否登录。镜像由源码在本机构建，`local/media-importer:0.10.10` 是本地标签；仓库没有可供 `docker pull` 的预构建镜像。首次构建需要访问 Docker Hub、Alpine 软件源和 Python 包源。`scripts/build.py` 只复制构建所需源码到临时目录，避免外接盘的 macOS 元数据导致构建失败，配置和素材不会进入构建目录。Windows 可用 `py -3` 替代 `python3`。
+`validate` 只检查 JSON 及相机、SMB 连接字段格式，不测试账号能否登录。镜像由源码在本机构建，`local/media-importer:0.10.13` 是本地标签；仓库没有可供 `docker pull` 的预构建镜像。首次构建需要访问 Docker Hub、Alpine 软件源和 Python 包源。`scripts/build.py` 只复制构建所需源码到临时目录，避免外接盘的 macOS 元数据导致构建失败，配置和素材不会进入构建目录。Windows 可用 `py -3` 替代 `python3`。
 
 Compose 启动 `backup`（导入、上传和通知）与 `bot`（飞书长连接控制）两个服务，不映射端口，没有网页入口。同步按 JSON 中保存的开关运行。`bot` 建立连接后，继续 [配置事件、回调、菜单和发布](feishu.md#3-配置事件与卡片回调)。若提示“应用未建立长连接”，先检查 `bot` 凭据、容器状态与联网情况，再回后台保存。
 
@@ -122,27 +120,42 @@ docker compose exec backup python3 -m media_importer check --json
 
 两项服务最终应显示 `healthy`。这表示进程/长连接正常，不代表所有外部设备均在线；`check` 会分别报告相机、缓存、SMB 与飞书认证结果，等待或失败时退出码为 `2`。首次检查会登记缓存卷身份，但不会传输素材或发送测试消息。SMB 写入、改名和飞书收件人仍需实际验证。
 
-在飞书单聊点击「状态 → 运行总览」，再点击卡片的「刷新」：应更新原消息，同步状态应与 JSON 一致。可通过「同步 → 停止同步」停止传输；关闭状态会持久化，普通重启不会重新开启。也可从本机主动发送一张状态卡测试发送权限和接收人：
+在飞书单聊点击「状态 → 查看状态」，再点击卡片的「刷新」：应更新原消息，同步状态应与 JSON 一致。可通过「同步 → 停止同步」停止传输；关闭状态会持久化，普通重启不会重新开启。也可从本机主动发送一张状态卡测试发送权限和接收人：
 
 ```sh
 docker compose exec bot python3 -m media_importer bot-panel
 ```
 
-首次传输验收前先停止同步，再准备仅含可丢弃小素材的测试卡和独立 SMB 子目录，保持「原片处理 → 保留原片」。**开启同步会处理所选类别的全部待导入素材及已有完整缓存，没有“只选某个测试文件”的入口。** 同步内容默认为全部素材，可在「传输设置」切换为仅视频或仅照片。如要验证通知，先在「设置 → 通知设置」开启传输通知，再在「同步 → 开启同步」开始；完成后停止同步，并在归档结果中检查实际文件位置。
+首次传输验收前先停止同步，再准备仅含可丢弃小素材的测试卡和独立 SMB 子目录，保持「原片处理 → 保留原片」。**开启同步会处理所选类别的全部待导入素材及已有完整缓存，没有“只选某个测试文件”的入口。** 同步内容默认为全部素材，可在 JSON 的 `backup.media_scope` 中设置为 `video` 或 `photo`。如要验证通知，先在 JSON 设置 `notifications.enabled: true`，再在「同步 → 开启同步」开始；完成后停止同步，核对 SMB 实际文件位置。
 
 ## 配置与数据
 
 | 文件 | 内容 |
 | --- | --- |
 | `.env` | 相机、SMB、飞书连接与凭据，以及宿主机挂载路径 |
-| `config/settings.json` | 同步、USB／手动 Wi-Fi 选择、素材类别、导入后删除原片、传输限制与通知设置，版本 4 |
-| `data/state.sqlite3` | 文件与素材组身份、任务、归档记录、待清理事项，数据库版本 5 |
+| `config/settings.json` | 同步、素材类别、导入后删除原片、传输限制与通知设置，版本 4 |
+| `data/state.sqlite3` | 未完成任务、待清理事项与必要的去重及通知投递信息；整轮完成后清理明细，数据库版本 5 |
 | 配置的缓存目录 | 完整缓存、未完成下载、核验元数据和隐藏卷标识，迁移时作为整体保留 |
 
 表中配置与数据路径是默认值；自定义挂载时以 `.env` 为准。`.env` 只读挂载进容器，不进入镜像或 JSON。修改后运行 `docker compose up -d --force-recreate`；**`docker compose restart` 不重新解析挂载配置**。值包含空格、`$`、`#` 时使用单引号，不用 `source .env`。不要把真实凭据发到飞书或提交仓库。
 
-日常设置通过飞书保存到 JSON，校验后原子替换并自动应用。修改传输限制可能中断当前未完成文件，下次从头重传。默认缓存额度 50 GiB、磁盘预留 10 GiB、上传不限速；缓存额度或上传限速填 `0` 表示不限。自动通知默认关闭，开启后的进度间隔默认 300 秒。
+飞书只修改同步和删除原片两个开关，原子保存后由后台应用。其余偏好直接编辑 `config/settings.json`，后台自动读取；JSON 无效时停止启动新任务并报告原因，不覆盖原配置。建议先停止同步再修改，避免当前文件因配置应用而中断。
 
-同步默认关闭；手动启停后的设置会持久化，普通重启沿用已保存的开关。连接方式由 `backup.source_transport` 保存为 `usb` 或 `wifi`，实际地址仍读取 `.env` 的 `SOURCE_URL` 和 `SOURCE_WIRELESS_URL`；旧 JSON 未保存此项时沿用 `.env` 的 `SOURCE_TRANSPORT`。切换前先停止同步，不需要重建容器。维护或升级前也先停止同步。归档后清理对应完整缓存是固定行为，一次只运行一套使用同一数据目录和飞书应用的服务。
+| JSON 字段 | 用途与默认值 |
+| --- | --- |
+| `backup.enabled` | 同步开关，默认 `false` |
+| `backup.delete_source_after_import` | 完整导入后删除原片，默认 `false` |
+| `backup.media_scope` | `all` / `video` / `photo`，默认 `all` |
+| `backup.archive_previews` | 归档确认关联的 LRV、THM，默认 `false` |
+| `limits.upload_mib_per_second` | 上传限速，默认 `0`（不限） |
+| `limits.max_cache_gib` | 缓存额度，默认 `50`；`0` 表示不限 |
+| `limits.min_free_disk_gib` | 磁盘预留，默认 `10` |
+| `notifications.enabled` | 自动进度与结果提醒，默认 `false` |
+| `notifications.connection_events` | 相机连接提醒，默认 `true` |
+| `notifications.progress_interval_seconds` | 进度间隔，默认 `300`，范围 60–86400 秒 |
+
+沿用版本 4 配置，现有配置、任务和完整缓存无需重建。`backup.source_transport` 固定为 `usb`；无线相关旧 `.env` 值可留存，但不再使用。其他已有重试参数仍有效；`backup.stop_after_current` 仅保留为文件中的维护选项，不再提供机器人入口。真实配置不会被升级覆盖。USB 相机地址使用 `.env` 的 `SOURCE_URL`。
+
+同步和原片开关在普通重启后保持。归档后清理对应完整缓存是固定行为；同一数据目录和飞书应用只运行一套服务。
 
 部署遇到问题时，查看[故障排查](operations.md#故障排查)或[飞书常见问题](feishu.md#常见问题)。

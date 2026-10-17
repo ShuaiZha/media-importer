@@ -86,6 +86,8 @@ class SmbSession:
             result = function(*args, **kwargs)
             if self.timed_out:
                 raise SmbError("SMB 操作超时")
+            if getattr(self, 'on_activity', None):
+                self.on_activity()
             return result
         finally:
             self.call_started = None

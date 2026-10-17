@@ -141,7 +141,7 @@ class MediaScopeTests(unittest.TestCase):
         self.assertEqual({a.path for a in self.assets[3:]}, set(self.source.assets))
         self.assertEqual(6, len(self.destination.uploads))
         self.assertTrue(all(r['state'] == 'uploaded' for r in self.store.files()))
-        self.assertEqual(0, self.view()['totals']['pending_cleanup'])
+        self.assertEqual(0, self.view()['work']['pending_cleanup'])
 
     def test_no_selected_files_is_empty_scan_not_previous_mixed_batch(self):
         self.source = FakeSource([footage()])
@@ -213,26 +213,6 @@ class MediaScopeTests(unittest.TestCase):
         self.assertTrue(control.enabled())
         self.assertFalse(control.allowed('delete_source_after_import'))
 
-    def test_feishu_buttons_save_scope_without_enabling_sync_or_deletion(self):
-        self.settings.set_enabled(False)
-        sender = Mock()
-        bot = Bot(self.settings, self.store.directory, sender=sender)
-        card = bot.panel('transfer')
-        self.assertIn('同步内容 · 全部素材', json.dumps(card, ensure_ascii=False))
-        button = next(b for e in card['elements'] if e['tag'] == 'action' for b in e['actions'] if b['text']['content'] == '仅照片')
-        with bot.db() as db:
-            action = db.execute('SELECT * FROM bot_actions WHERE token=?', (button['value']['token'],)).fetchone()
-            payload = json.loads(action['payload'])
-            payload['revision'] = action['revision']
-        bot.enqueue('choose-photo', payload)
-        with patch('media_importer.bot.time.monotonic', side_effect=[1, 6]):
-            self.assertTrue(bot.process_one())
-        saved = Config.load(self.path)
-        self.assertEqual('photo', saved.backup['media_scope'])
-        self.assertFalse(saved.backup['enabled'])
-        self.assertFalse(saved.backup['delete_source_after_import'])
-        self.assertIn('仅照片', json.dumps(sender.call_args.args[1], ensure_ascii=False))
-        self.assertEqual('同步内容：仅照片', settings_result(payload['changes'], True, False)['title'])
 
     def test_unselected_failed_pending_file_does_not_notify(self):
         self.service().prepare_imports()

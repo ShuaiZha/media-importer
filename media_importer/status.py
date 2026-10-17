@@ -25,6 +25,9 @@ def live_state(meta):
     state = meta.get('status', {})
     return bool(meta.get('service', {}).get('running') and
                 age(state.get('worker_heartbeat_at', state.get('updated_at'))) < 15 and
+                not any(w.get('state') == 'stalled' or w.get('state') == 'active' and
+                        age(w.get('activity_at')) > w.get('timeout_seconds', 120)
+                        for w in state.get('transfer_health', {}).values()) and
                 not any(w.get('critical') and w.get('state') == 'failed' for w in state.get('workers', {}).values()))
 
 
@@ -72,7 +75,7 @@ def attention(live, enabled, configuration, health, files, stages):
         return {'required': True, 'message': '需要处理：传输服务未响应，请在本机检查 Docker。'}
     uncertain = [f for f in files if f['cache_state'] == 'unverified' and f['state'] != 'uploaded']
     if uncertain:
-        return {'required': True, 'message': f'需要处理：{len(uncertain)} 个完整缓存待核验，文件已保留，未计入完成。请接回原相机和存储卡，停止同步后点击「核验缓存」。'}
+        return {'required': True, 'message': f'需要处理：{len(uncertain)} 个完整缓存待核验，其他正常文件继续上传。请检查原缓存或备份；停止同步后按维护文档在本机核验缓存。'}
     if any(f['cache_state'] == 'unverified' and f['state'] == 'uploaded' for f in files):
         return {'required': True, 'message': '需要处理：已归档文件的残留缓存身份不符，已保留待核验；归档完成数量不受影响。'}
     if not health['cache']['available']:
@@ -90,7 +93,7 @@ def attention(live, enabled, configuration, health, files, stages):
         if issue.get('code') in ('network', 'source_network', 'source_state', 'cache_capacity'):
             return {'required': False, 'message': '暂时等待，程序会重试：' + issue['action']}
     if any(f['error'] or f['cache_cleanup_error'] or f['source_cleanup_error'] for f in files):
-        return {'required': False, 'message': '有文件待重试或待清理，其他可处理文件继续；详情见「状态 → 归档结果」。'}
+        return {'required': False, 'message': '有文件待重试或待清理，其他可处理文件继续；具体原因见本机日志。'}
     return {'required': False, 'message': '无需处理：程序会继续导入和归档，暂时断网会自动重试。'}
 
 
@@ -98,7 +101,7 @@ def snapshot(directory, settings):
     item = settings.read()
     config = Config.from_values(item['config']) if item['config'] else None
     path = Path(directory) / 'state.sqlite3'
-    meta, rows, batch_id, batch_ids, temporaries, batches, rounds = {}, [], None, set(), [], [], []
+    meta, rows, batch_id, batch_ids, temporaries, rounds = {}, [], None, set(), [], []
     receipts = {}
     destination = config.destination_id if config else None
     serial = config.source['serial'] if config else None
@@ -128,18 +131,13 @@ def snapshot(directory, settings):
                 candidate = db.execute('SELECT id FROM batches WHERE destination=? ORDER BY created_at DESC LIMIT 1', (destination,)).fetchone()
             batch_id = candidate[0] if candidate else None
             batch_ids = {r[0] for r in db.execute('SELECT file_id FROM batch_files WHERE batch_id=?', (batch_id,))}
-            for entry in db.execute('SELECT * FROM batches WHERE destination=? ORDER BY updated_at DESC', (destination,)):
-                ids = {r[0] for r in db.execute('SELECT file_id FROM batch_files WHERE batch_id=?', (entry['id'],))}
-                if ids.intersection(r['id'] for r in rows):
-                    batches.append({**dict(entry), 'file_ids': ids})
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='transfer_runs'").fetchone():
                 from .runs import read
                 rounds = read(db, destination, source_type, serial)
             temporaries = [dict(r) for r in db.execute("SELECT * FROM temporary_cleanup WHERE state!='done'")]
         finally:
             db.close()
-    current_round = next((r for r in rounds if not r['historical'] and r['selection'] == media_scope),
-                         next((r for r in rounds if r['historical']), None))
+    current_round = next((r for r in rounds if not r['historical'] and r['selection'] == media_scope), None)
     reporting_ids = current_round['file_ids'] if current_round else batch_ids
     reporting_id = current_round['id'] if current_round else batch_id
     state = dict(meta.get('status', {}))
@@ -199,6 +197,7 @@ def snapshot(directory, settings):
                       'cleanup': row['cleanup'], 'error': row['error'], 'remote_path': row['remote_path'],
                       'source_deleted_at': row.get('source_deleted_at'), 'source_absent_at': row.get('source_absent_at'),
                       'error_stage': row.get('error_stage'), 'attempts': row.get('attempts', 0),
+                      'error_code': row.get('error_code'), 'retry_at': row.get('retry_at', 0),
                       'cache_cleanup_error': row.get('cache_cleanup_error'), 'cache_path': str(cache / (row['id'] + '.bin')),
                       'in_batch': member, 'current': bool(stage_name), 'cache_available': cached,
                       'cache_state': evidence['state'], 'cache_reason': evidence['reason'], 'cache_bytes': evidence['bytes'],
@@ -263,9 +262,6 @@ def snapshot(directory, settings):
             if observation.get('transport', 'usb') != transport:
                 observation.update(online=None, stale=True)
             observation['transport'] = transport
-            if observation['transport'] == 'wifi':
-                from .wireless_control import connection_status
-                observation['wireless'] = connection_status(directory, serial)
             telemetry = dict(observation.get('telemetry', {}))
             telemetry['stale'] = age(telemetry.get('observed_at')) > interval or observation['stale']
             telemetry['available'] = bool(telemetry.get('available') and not telemetry['stale'] and observation.get('online'))
@@ -285,11 +281,7 @@ def snapshot(directory, settings):
     all_imported = all(f['imported'] for f in files if f['selected'])
     reading = (state.get('source_work') or state.get('maintenance_running') or state.get('phase') in ('scanning', 'checking_cleanup', 'cleaning_source')
                or stages['import'].get('phase') in ('downloading', 'scanning', 'verifying'))
-    # Wireless monitoring deliberately releases the camera after the inventory
-    # was verified. Expired telemetry must remain unknown, but does not undo
-    # durable import completion while the independent upload queue continues.
-    source_released = bool(config and config.source.get('transport') == 'wifi')
-    ready = bool(live and (source_released or state.get('source', {}).get('online'))
+    ready = bool(live and state.get('source', {}).get('online')
                  and inventory.get('verified') and inventory.get('scanned') and scope_current
                  and cache_health['available'] and all_imported and not reading
                  and inventory.get('batch_id') == batch_id and inventory.get('destination') == destination
@@ -299,7 +291,7 @@ def snapshot(directory, settings):
         subject = '本轮素材' if media_scope == 'all' else '本轮所选类别素材'
         unplug_message = subject + '已收齐，可以拔走相机；电脑与缓存盘请保持可用，剩余素材' + ('将继续上传' if enabled else '待开启同步后上传')
         if all(f['state'] == 'uploaded' for f in files if f['selected']):
-            unplug_message = subject + '已全部归档，可以拔走相机。'
+            unplug_message = subject + '已全部归档，可以拔走相机。' if batch_files else '当前没有待导入素材，可以拔走相机。'
         if media_scope != 'all':
             unplug_message += ' 未选类别不在本轮备份范围，原片保留。'
         if ignored:
@@ -326,31 +318,17 @@ def snapshot(directory, settings):
         target = json.loads(destination) if destination else {}
     except (ValueError, TypeError):
         target = {}
+    binding = meta.get('destination_binding', {})
+    from .adapters import destination_identity
+    if config and binding.get('connection') == destination_identity(config.destination):
+        target = config.destination
     locations = sorted({archive_location(target, str(Path(f['remote_path']).parent)) for f in files
                         if f['state'] == 'uploaded' and f['remote_path']})
     planned = sorted({archive_location(target, Asset.from_dict(json.loads(r['asset'])).device_directory)
                       for r in rows})
-    recent = next((r for r in rounds if r['finished_at']), next((r for r in rounds if r['historical']), current_round))
-    if not rounds:
-        recent = next((b for b in batches if b['state'] == 'uploaded'), batches[0] if batches else None)
-    recent_result = None
-    if recent:
-        all_members = [f for f in files if f['id'] in recent['file_ids']]
-        members = [f for f in all_members if f['state'] != 'excluded']
-        complete = bool(members and all(f['state'] == 'uploaded' for f in members))
-        recent_result = {'batch_id': recent['id'], 'complete': complete, 'total_files': len(members),
-                         'excluded_preview_files': sum(f['state'] == 'excluded' for f in all_members),
-                         'historical': bool(recent.get('historical')), 'total_bytes': sum(f['size'] for f in members),
-                         'archived_files': sum(f['state'] == 'uploaded' for f in members),
-                         'imported_files': sum(f['imported'] for f in members),
-                         'failed_files': sum(bool(f['error']) for f in members),
-                         'pending_files': sum(f['state'] != 'uploaded' for f in members),
-                         'source_deleted': sum(f['cleanup'] in ('deleted', 'absent') for f in members),
-                         'cache_cleanup_pending': sum(f['state'] == 'uploaded' and bool(f['cache_state'] in ('verified', 'unverified') or f['cache_cleanup_error']) for f in members),
-                         'finished_at': (recent.get('finished_at') or recent.get('updated_at')) if complete else None,
-                         'cleanup': cleanup_summary(all_members, bool(values.get('backup', {}).get('delete_source_after_import'))),
-                         'archives': [{'source': f['path'], 'location': archive_location(target, f['remote_path'])}
-                                      for f in members if f['state'] == 'uploaded' and f['remote_path']]}
+    anchor = meta.get('destination_anchor', {})
+    if not planned and anchor.get('destination') == destination:
+        planned = [archive_location(target, str(Path(anchor['path']).parent))]
     waiting = [f for f in files if f['state'] != 'uploaded' and (f['cache_available'] or f['state'] in ('cached', 'staged', 'publishing'))]
     local_only = [f for f in waiting if f['cache_available'] and f['cleanup'] in ('deleted', 'absent')]
     stamps = [f['imported_at'] for f in waiting if f['imported_at'] and age(f['imported_at']) != float('inf')]
@@ -364,6 +342,7 @@ def snapshot(directory, settings):
                     or f['state'] == 'excluded' and f['cleanup_selected'] and f['source_cleanup_error']]
     all_cleanup = cleanup_summary(files, bool(values.get('backup', {}).get('delete_source_after_import')))
     return {'running': live, 'observed_at': now(), 'status': state, 'stages': stages, 'preflight': meta.get('preflight'), 'backlog': backlog,
+            'metadata_backup': meta.get('metadata_backup'),
             'selection': {'scope': media_scope, 'label': MEDIA_SCOPES[media_scope],
                           'archive_previews': bool(values.get('backup', {}).get('archive_previews')),
                           'round_archive_previews': bool(current_round.get('archive_previews', True)) if current_round else None,
@@ -375,7 +354,7 @@ def snapshot(directory, settings):
             'configuration': configuration, 'controls': controls, 'health': health, 'queues': queues, 'storage': storage,
             'unplug': {'ready': ready, 'can_disconnect': can_disconnect, 'message': unplug_message},
             'attention': attention(live, enabled, configuration, health, active_files, stages),
-            'archive': {'locations': locations, 'planned_locations': planned or [archive_location(target)]}, 'recent_result': recent_result,
+            'archive': {'locations': locations, 'planned_locations': planned or [archive_location(target)]},
             'policy': {'delete_source': bool(values.get('backup', {}).get('delete_source_after_import', False)),
                        'cleanup_cache': True},
             'cleanup': cleanup_summary(round_files, bool(values.get('backup', {}).get('delete_source_after_import'))),
@@ -390,14 +369,11 @@ def snapshot(directory, settings):
                       'unverified_files': sum(f['cache_state'] == 'unverified' for f in batch_files),
                       'import_in_flight_bytes': importing, 'import_percent': 100 * (imported + importing) / total if total else 0,
                       'cached_files': sum(f['cache_available'] and f['state'] != 'uploaded' for f in batch_files)},
-            'totals': {'total_files': sum(f['state'] != 'excluded' for f in files),
-                       'excluded_preview_files': sum(f['state'] == 'excluded' for f in files),
-                       'uploaded_files': sum(f['state'] == 'uploaded' for f in files),
-                       'uploaded_bytes': sum(f['size'] for f in files if f['state'] == 'uploaded'),
+            'work': {
                        'pending_files': sum(f['state'] not in ('uploaded', 'excluded') for f in active_files),
                        'cache_cleanup_pending': sum(f['state'] == 'uploaded' and bool(f['cache_state'] in ('verified', 'unverified') or f['cache_cleanup_error']) for f in files),
                        'pending_cleanup': all_cleanup['source_pending'],
                        'pending_preview_cleanup': all_cleanup['preview_pending']},
-            'disk': disk, 'files': files, 'last_result': meta.get('last_result'), 'last_error': meta.get('last_error'),
+            'disk': disk, 'files': files, 'last_error': meta.get('last_error'),
             'temporary_cleanup': temporaries, 'issues': [f for f in active_files if f['error'] or f['cache_cleanup_error'] or f['source_cleanup_error'] or f['cache_state'] == 'unverified'
                 or f['state'] in ('cached', 'staged', 'publishing') and f['cache_state'] == 'missing']}

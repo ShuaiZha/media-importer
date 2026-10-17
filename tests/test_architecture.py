@@ -204,7 +204,7 @@ class ArchitectureTests(unittest.TestCase):
         settings.read.return_value = {'config': self.changed().values, 'revision': 'test', 'error': None}
         view = snapshot(self.store.directory, settings)
         self.assertIn(row['id'], {f['id'] for f in view['files']})
-        self.assertEqual(1, view['totals']['uploaded_files'])
+        self.assertEqual(1, sum(f['state'] == 'uploaded' for f in view['files']))
 
     def test_cleared_cache_not_cleaned_again_next_cycle_or_restart(self):
         row = self.archived()

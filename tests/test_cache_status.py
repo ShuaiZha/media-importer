@@ -13,7 +13,7 @@ from media_importer.settings import Settings
 from media_importer.status import snapshot
 from media_importer.storage import cache_evidence, file_identity, inspect_cached_file
 from media_importer.store import Store
-from media_importer.bot_cards import archive_content, status_content
+from media_importer.bot_cards import status_content
 from test_bot import ENV
 from test_service import configuration, footage, FakeSource, FakeDestination
 
@@ -38,7 +38,11 @@ class CacheStatusTests(unittest.TestCase):
         self.store.update(self.row['id'], cleanup='deleted')
         self.assertIsNone(self.view()['backlog']['oldest_age_seconds'])
         self.assertEqual(1, self.view()['backlog']['unknown_age_files'])
+        previous = self.path.stat().st_mtime_ns
         self.path.write_bytes(b'z' * footage().size)
+        # Display observations invalidate on metadata changes; avoid relying on
+        # the filesystem assigning a new timestamp within the same clock tick.
+        os.utime(self.path, ns=(previous + 1_000_000, previous + 1_000_000))
         self.assertEqual(0, self.view()['backlog']['source_removed_files'])
         self.assertEqual(0, self.view()['backlog']['verified_files'])
 
@@ -187,36 +191,7 @@ class CacheStatusTests(unittest.TestCase):
         self.store.status(inventory={'scanned': False, 'verified': False})
         self.assertFalse(self.view()['unplug']['ready'])
 
-    def test_wireless_verified_import_survives_expired_observation_without_claiming_online(self):
-        self.settings.update_preferences({'backup': {'source_transport': 'wifi'}})
-        self.cache()
-        self.settings.set_enabled(True)
-        self.store.status(inventory={'scanned': True, 'verified': True, 'batch_id': self.batch,
-                                     'destination': self.config.destination_id, 'serial': footage().serial},
-                          source={'online': True, 'checked_at': '2020-01-01T00:00:00+00:00'})
-        state = self.view()
-        self.assertTrue(state['unplug']['ready'])
-        self.assertTrue(state['unplug']['can_disconnect'])
-        self.assertTrue(state['health']['source']['stale'])
-        self.assertIsNone(state['health']['source']['online'])
-        self.assertIn('剩余素材将继续上传', state['unplug']['message'])
-        self.store.update(self.row['id'], state='uploaded')
-        self.assertIn('本轮素材已全部归档', self.view()['unplug']['message'])
-        self.store.status(source_work=True)
-        self.assertFalse(self.view()['unplug']['can_disconnect'])
-        self.store.status(source_work=False, inventory={'scanned': True, 'verified': False})
-        self.assertFalse(self.view()['unplug']['ready'])
 
-    def test_wireless_expired_observation_does_not_hide_missing_cache(self):
-        self.settings.update_preferences({'backup': {'source_transport': 'wifi'}})
-        self.cache()
-        self.settings.set_enabled(True)
-        self.store.status(inventory={'scanned': True, 'verified': True, 'batch_id': self.batch,
-                                     'destination': self.config.destination_id, 'serial': footage().serial},
-                          source={'online': True, 'checked_at': '2020-01-01T00:00:00+00:00'})
-        self.path.unlink()
-        self.assertFalse(self.view()['unplug']['ready'])
-        self.assertTrue(self.view()['attention']['required'])
 
     def test_recent_archive_uses_real_suffixed_path_and_survives_next_pending_batch(self):
         path = footage().device_directory + '/GH010001_2.MP4'
@@ -225,23 +200,20 @@ class CacheStatusTests(unittest.TestCase):
         newest = self.store.batch(self.config.destination_id, [footage(2)])
         self.store.status(batch_id=newest)
         state = self.view()
-        recent = state['recent_result']
-        self.assertEqual(self.batch, recent['batch_id'])
-        self.assertTrue(recent['complete'])
-        self.assertEqual(1, recent['archived_files'])
-        self.assertTrue(recent['archives'][0]['location'].endswith(path))
-        text = json.dumps(archive_content(state, details=True), ensure_ascii=False)
-        self.assertIn('GH010001_2.MP4', text)
+        self.assertNotIn('recent_result', state)
+        self.assertTrue(state['archive']['locations'][0].endswith(footage().device_directory))
+        text = json.dumps(status_content(state), ensure_ascii=False)
+        self.assertTrue(any(f['remote_path'] == path for f in state['files']))
         self.assertNotIn(ENV['DESTINATION_PASSWORD'], text)
         self.assertEqual(0, state['batch']['completed_files'])
 
     def test_incomplete_record_never_invents_success_or_actual_destination_file(self):
         state = self.view()
-        self.assertFalse(state['recent_result']['complete'])
-        self.assertIsNone(state['recent_result']['finished_at'])
+        self.assertEqual(0, state['batch']['completed_files'])
+        self.assertNotIn('recent_result', state)
         self.assertFalse(state['archive']['locations'])
-        text = json.dumps(archive_content(state), ensure_ascii=False)
-        self.assertIn('尚无已归档文件', text)
+        text = json.dumps(status_content(state), ensure_ascii=False)
+        self.assertIn('已完成 **0 / 1**', text)
         self.assertIn('smb://192.0.2.20:445/media/media/HERO9-', text)
 
     def test_unverified_leftover_never_reverses_archive_or_hides_pending_cleanup(self):
@@ -250,7 +222,7 @@ class CacheStatusTests(unittest.TestCase):
         state = self.view()
         self.assertEqual(1, state['batch']['completed_files'])
         self.assertEqual(1, state['batch']['imported_files'])
-        self.assertEqual(1, state['recent_result']['cache_cleanup_pending'])
+        self.assertEqual(1, state['work']['cache_cleanup_pending'])
         self.assertIn('归档完成数量不受影响', state['attention']['message'])
 
     def test_expired_service_and_permission_failure_explain_required_action(self):

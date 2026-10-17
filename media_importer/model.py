@@ -30,6 +30,14 @@ class CacheUnavailable(BackupError):
     pass
 
 
+class CacheFileError(CacheUnavailable):
+    """One file needs attention; the cache volume and other files remain usable."""
+
+
+class TransferStalled(BackupError):
+    """A transfer stopped making progress and its attempt was cancelled."""
+
+
 class DestinationError(BackupError):
     def __init__(self, message, code=None):
         super().__init__(message)

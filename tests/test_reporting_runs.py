@@ -46,21 +46,16 @@ class ReportingRunTests(unittest.TestCase):
         self.assertEqual(32, self.view()['batch']['completed_files'])
         self.assertEqual(0, self.view()['queues']['upload']['pending_files'])
 
-    def test_new_files_after_completion_start_new_round_without_losing_history(self):
+    def test_new_round_has_its_own_progress_without_history_query(self):
         self.store.update(self.row['id'], state='uploaded', remote_path='Camera-serial/original.MP4')
-        first = self.view()['recent_result']
-        self.assertTrue(first['complete'])
-        with patch('media_importer.store.now', return_value='2030-01-01T00:00:00+00:00'):
-            self.store.update(self.row['id'], cleanup='deleted', cache_cleanup_error=None)
-        self.assertEqual(first['finished_at'], self.view()['recent_result']['finished_at'])
         new = self.store.batch(self.config.destination_id, [footage(2)])
         self.store.status(batch_id=new)
         view = self.view()
         self.assertEqual((1, 0), (view['batch']['total_files'], view['batch']['completed_files']))
         self.assertEqual(new, view['batch']['id'])
-        self.assertEqual(self.batch, view['recent_result']['batch_id'])
-        self.assertEqual(2, view['totals']['total_files'])
-        self.assertEqual(1, view['totals']['pending_files'])
+        self.assertNotIn('recent_result', view)
+        self.assertNotIn('totals', view)
+        self.assertEqual(1, view['work']['pending_files'])
 
     def test_additive_migration_keeps_files_and_complete_cache_and_separates_history(self):
         self.cache()
@@ -81,9 +76,7 @@ class ReportingRunTests(unittest.TestCase):
         self.assertEqual(1, view['batch']['total_files'])
         self.assertFalse(view['batch']['historical'])
         self.assertEqual(1, view['batch']['imported_files'])
-        self.assertTrue(view['recent_result']['historical'])
-        self.assertIsNone(view['recent_result']['finished_at'])
-        self.assertEqual(1, view['recent_result']['total_files'])
+        self.assertNotIn('recent_result', view)
         self.assertEqual('Camera-serial/history.MP4', self.store.get(old['id'])['remote_path'])
 
     def test_complete_bytes_do_not_mean_formal_archive_and_bad_cache_is_not_imported(self):

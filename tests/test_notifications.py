@@ -134,7 +134,7 @@ class WorkerTests(unittest.TestCase):
             "queues": {"import": {"pending_files": 1}, "upload": {"pending_files": 2}},
             "health": {"source": {"online": True}, "destination": {"online": True}, "cache": {"available": True}},
             "policy": {"delete_source": False, "cleanup_cache": True},
-            "files": [], "totals": {"pending_files": 2},
+            "files": [], "work": {"pending_files": 2},
         }
         self.worker = self.make_worker()
         # These cases exercise an already armed worker. Startup is covered below.

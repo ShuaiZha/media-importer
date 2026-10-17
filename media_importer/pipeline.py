@@ -1,9 +1,12 @@
 """Independent single-file workers; SQLite and the bounded cache are the handoff."""
 import threading
 import time
+import os
+import errno
 
 from .issues import describe
-from .model import BackupError, SourceBlocked, CacheUnavailable, Cancelled, now
+from .model import BackupError, SourceBlocked, CacheUnavailable, CacheFileError, TransferStalled, Cancelled, now
+from .liveness import Activity, CombinedStop
 from .runtime import Reconfigure, SyncDisabled
 from .storage import require_cache
 from .store import Store
@@ -18,15 +21,26 @@ def transfer(service):
     idle = {"import": None, "upload": None}
     errors = []
     halted = set()
+    rate = service.config.limits['upload_mib_per_second']
+    base = max(120, service.config.source.get('timeout_seconds', 20) * service.config.source.get('request_attempts', 3) + 30)
+    activity = Activity(getattr(service, 'activity_timeouts', {'import': base, 'upload': max(base, 1 / rate + 30) if rate else base}))
+    attempt_stop = CombinedStop(finished, service.stop, service.control.transfer_stop if service.control else None)
+    cancel_grace = getattr(service, 'cancel_grace', 30)
     service.store.status(phase="transferring", message="两路队列独立运行", source_work=False)
 
     def worker(stage):
         nonlocal generation
+        activity.begin(stage, 'starting')
         db = Store(service.store.directory)
-        remote = service.destination.fork() if stage == "upload" and hasattr(service.destination, "fork") else service.destination
-        task = Service(service.config, db, service.source, remote, service.stop, service.control, stage=stage)
+        remote = service.destination.fork(stop=attempt_stop) if hasattr(service.destination, "fork") else service.destination
+        source = service.source.fork(stop=attempt_stop) if stage == 'import' and hasattr(service.source, 'fork') else service.source
+        task = Service(service.config, db, source, remote, service.stop, service.control, stage=stage)
         task.pipeline_stop = finished
         task.cache_guard = service.cache_guard
+        task.activity = activity
+        if stage == 'import':
+            source.on_activity = lambda: activity.touch(stage)
+        remote.on_activity = lambda: activity.touch(stage)
         cleanup_attempted = set()
         failed, cleaned = set(), set()
         inventory, verified = None, False
@@ -39,6 +53,7 @@ def transfer(service):
                 row = None
                 changed = False
                 try:
+                    activity.begin(stage)
                     task.boundary()
                     if task.control and task.control.draining():
                         with condition:
@@ -47,6 +62,7 @@ def transfer(service):
                                             current_file_id=None, current_bytes=0, current_total_bytes=0, issue=None)
                                 halted.add(stage)
                             condition.notify_all()
+                            activity.idle(stage)
                             # Keep this worker available if the user cancels the drain
                             # while the other worker is still transferring its file.
                             condition.wait(.15)
@@ -74,7 +90,8 @@ def transfer(service):
                         known = {r["asset_id"]: r for r in task.rows()}
                         row = next((known[a.identity] for a in inventory["assets"]
                                     if a.identity in known and known[a.identity]["state"] in ("pending", "missing")
-                                    and known[a.identity]["id"] not in failed), None)
+                                    and known[a.identity]["id"] not in failed
+                                    and known[a.identity].get('retry_at', 0) <= time.time()), None)
                         if row:
                             if task.control:
                                 task.control.refresh()
@@ -97,7 +114,7 @@ def transfer(service):
                                 task.clean_cache(saved)
                                 cleaned.add(saved["id"])
                         row = next((r for r in work if r["state"] in ("cached", "staged", "publishing")
-                                    and r["id"] not in failed), None)
+                                    and r["id"] not in failed and r.get('retry_at', 0) <= time.time()), None)
                         if row:
                             if task.control:
                                 task.control.refresh()
@@ -120,14 +137,27 @@ def transfer(service):
                 except (Reconfigure, SyncDisabled):
                     raise
                 except (BackupError, OSError, ValueError) as exc:
+                    if row and isinstance(exc, OSError) and exc.errno in (
+                            errno.ENOENT, errno.EACCES, errno.EPERM, errno.EISDIR, errno.ENOTDIR, errno.ELOOP):
+                        try:
+                            require_cache(db)
+                        except CacheUnavailable as unavailable:
+                            exc = unavailable
+                        else:
+                            exc = CacheFileError('此文件无法读取或写入，请检查文件权限；其他文件继续')
                     message = remote.redact(str(exc)) if hasattr(remote, "redact") else str(exc)
                     issue = describe(exc, stage)
                     issue["message"] = message
                     if row:
-                        db.update(row["id"], error=message, error_stage=stage, attempts=row["attempts"] + 1)
+                        attempts = db.get(row['id'])['attempts'] + 1
+                        delay = min(3600, service.config.backup['retry_seconds'] * 2 ** min(attempts - 1, 7))
+                        db.update(row["id"], error=message, error_stage=stage, attempts=attempts,
+                                  error_code=issue['code'], retry_at=time.time() + delay if issue['scope'] == 'file' else 0)
                     db.set_meta("last_error", {"time": now(), "file": db.asset(row).path if row else None,
                                                "message": message, "stage": stage})
-                    if isinstance(exc, (CacheUnavailable, OSError)):
+                    if isinstance(exc, CacheFileError):
+                        phase = 'failed'
+                    elif isinstance(exc, (CacheUnavailable, OSError)):
                         phase = "waiting_cache"
                     elif stage == "import":
                         phase = "waiting_source" if row is None or isinstance(exc, SourceBlocked) else "failed"
@@ -140,6 +170,7 @@ def transfer(service):
                     else:
                         retry_at = time.monotonic() + service.config.backup["retry_seconds"]
                 finally:
+                    activity.idle(stage)
                     if stage == "import":
                         db.status(source_work=False)
                 with condition:
@@ -184,12 +215,31 @@ def transfer(service):
                 finished.set()
                 condition.notify_all()
 
-    threads = [threading.Thread(target=guarded_worker, args=(stage,), name=stage + "-worker") for stage in idle]
+    threads = [threading.Thread(target=guarded_worker, args=(stage,), name=stage + "-worker", daemon=True) for stage in idle]
     for thread in threads:
         thread.start()
     try:
+        published_at = 0
         with condition:
             while not finished.is_set():
+                if attempt_stop.is_set():
+                    errors.append(Cancelled('传输已取消，任务与完整缓存保留'))
+                    finished.set()
+                    condition.notify_all()
+                    break
+                stalled = activity.expired()
+                if stalled:
+                    errors.insert(0, TransferStalled('传输长时间无有效活动，已取消本次尝试并重建连接；完整缓存保留'))
+                    for stage in stalled:
+                        service.store.stage_status(stage, phase='waiting_retry', issue=describe(errors[0], stage),
+                                                   speed_bytes_per_second=0, eta_seconds=None)
+                    service.store.status(transfer_health=activity.snapshot())
+                    finished.set()
+                    condition.notify_all()
+                    break
+                if time.monotonic() - published_at >= 5:
+                    service.store.status(transfer_health=activity.snapshot())
+                    published_at = time.monotonic()
                 # Empty-queue observations must include the latest cache commit.
                 if all(name in halted or value == generation for name, value in idle.items()):
                     finished.set()
@@ -198,8 +248,17 @@ def transfer(service):
                 condition.wait(.15)
     finally:
         finished.set()
+        deadline = time.monotonic() + cancel_grace
         for thread in threads:
-            thread.join()
+            thread.join(max(0, deadline - time.monotonic()))
+        if any(thread.is_alive() for thread in threads):
+            service.store.status(transfer_health=activity.snapshot(), phase='unresponsive',
+                                 message='传输线程取消后仍未退出，正在重启服务；完整缓存保留')
+            # Python cannot safely kill an arbitrary blocked thread. Leave
+            # durable intents for startup recovery and let Compose restart.
+            getattr(service, 'hard_exit', os._exit)(75)
+            raise TransferStalled('传输线程无法退出，需要重新启动服务')
+        service.store.status(transfer_health=activity.snapshot())
     if errors:
         raise errors[0]
     service.store.status(transfers_finished_at=now())

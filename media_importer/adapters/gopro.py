@@ -42,16 +42,16 @@ def make_asset(serial, path, size, created, modified, gumi, primary, parent_gumi
 
 def defaults():
     return {"type": "gopro", "url": "", "serial": "", "timeout_seconds": 20,
-            "transport": "usb", "wireless_url": "http://10.5.5.9:8080", "request_attempts": 3}
+            "transport": "usb", "request_attempts": 3}
 
 
 def validate(values):
     from ..config import ConfigError
     for key, value in defaults().items():
         values.setdefault(key, value)
-    if values["transport"] not in ("usb", "wifi"):
-        raise ConfigError("SOURCE_TRANSPORT 必须为 usb 或 wifi")
-    for key in ("url", "wireless_url"):
+    if values["transport"] != "usb":
+        raise ConfigError("当前仅支持 USB；请将 SOURCE_TRANSPORT 设为 usb")
+    for key in ("url",):
         url = urlsplit(values[key])
         if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in ("", "/"):
             raise ConfigError(f"source.{key} 必须是包含协议和端口的相机地址，不含路径或凭据")
@@ -68,7 +68,7 @@ class GoProSource:
     def __init__(self, config, stop=None):
         self.config = config
         self.transport = config.source.get("transport", "usb")
-        self.base = config.source.get("wireless_url", "http://10.5.5.9:8080") if self.transport == "wifi" else config.source["url"]
+        self.base = config.source["url"]
         self.serial = config.source["serial"]
         self.timeout = config.source["timeout_seconds"]
         self.stop = stop
@@ -180,7 +180,10 @@ class GoProSource:
     def _open(self, path, headers=None):
         self._check_stop()
         try:
-            return self.opener.open(Request(self.base + path, headers=headers or {}), timeout=self.timeout)
+            response = self.opener.open(Request(self.base + path, headers=headers or {}), timeout=self.timeout)
+            if getattr(self, 'on_activity', None):
+                self.on_activity()
+            return response
         except HTTPError as exc:
             error = SourceConnectionError if exc.code in (408, 429, 500, 502, 503, 504) else SourceError
             raise error(f"相机请求失败 {path.split('?')[0]}: HTTP {exc.code}") from exc
@@ -192,7 +195,10 @@ class GoProSource:
         for attempt in range(self.attempts):
             try:
                 with self._open(path, headers) as response:
-                    return response.read(limit), response.status, response.headers
+                    body = response.read(limit)
+                    if getattr(self, 'on_activity', None):
+                        self.on_activity()
+                    return body, response.status, response.headers
             except (SourceConnectionError, OSError, HTTPException) as exc:
                 if attempt + 1 == self.attempts:
                     raise SourceConnectionError("相机读取超时或中断，稍后自动重试") from exc

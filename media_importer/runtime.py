@@ -1,4 +1,5 @@
 import logging
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -106,7 +107,6 @@ def daemon(config_path, directory, stop):
         control.changed.set()
     workers = Workers(stop, fatal)
     def observe():
-        from .wireless_control import publish, connection_status
         db = Store(directory)
         heartbeat_at = 0
         try:
@@ -117,26 +117,10 @@ def daemon(config_path, directory, stop):
                     updates['worker_heartbeat_at'] = now()
                     heartbeat_at = time.monotonic()
                 db.status(**updates)
-                config = Config.from_values(control.item["config"]) if control.item and control.item.get("config") and not control.error else None
-                try:
-                    if config and config.source.get("transport") == "wifi":
-                        publish(directory, config, control.enabled() and not stop.is_set(), db.get_meta("status", {}))
-                        db.status(wireless=connection_status(directory, config.source["serial"]))
-                    elif (Path(directory) / "wireless/control.json").exists():
-                        publish(directory, config, False, {})
-                except OSError:
-                    # Let the lease expire; a radio helper must not keep acting
-                    # when the original data disk becomes inaccessible.
-                    logging.warning("无线控制状态暂不可写，请检查数据盘")
                 stop.wait(1)
         finally:
             control.transfer_stop.set()
             control.changed.set()
-            try:
-                if (Path(directory) / "wireless/control.json").exists():
-                    publish(directory, None, False, {})
-            except OSError:
-                pass
             db.close()
     watcher = workers.start('settings-and-heartbeat', observe)
     def notify():
@@ -144,7 +128,7 @@ def daemon(config_path, directory, stop):
         NotificationWorker(directory, control.settings, stop).run()
     notifier = workers.start('notifications', notify, critical=False)
     from .operations import serve as maintenance
-    maintainer = workers.start('maintenance', lambda: maintenance(directory, control, stop), critical=False)
+    maintainer = workers.start('maintenance', lambda: maintenance(directory, stop), critical=False)
     try:
         from .preflight import run as startup_check
         checked = startup_check(control.settings, store, stop)
@@ -167,6 +151,10 @@ def daemon(config_path, directory, stop):
                              active_transport=config.source["transport"])
                 with control.work_guard:
                     service.recover_interrupted()
+                    try:
+                        service.settle()
+                    except (BackupError, OSError, sqlite3.Error):
+                        logging.warning('任务收尾暂未完成，原任务记录保留')
                 with service.monitoring():
                     while not stop.is_set():
                         control.refresh()
@@ -177,6 +165,10 @@ def daemon(config_path, directory, stop):
                             with control.work_guard:
                                 service.clean_temporaries()
                                 result = service.safe_cycle()
+                                try:
+                                    service.settle()
+                                except (BackupError, OSError, sqlite3.Error):
+                                    logging.warning('任务收尾暂未完成，原任务记录保留')
                         except Cancelled:
                             if stop.is_set():
                                 break

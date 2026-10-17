@@ -48,7 +48,9 @@ class SmbDestination:
 
     def session(self):
         from ..deployment import destination_password
-        return SmbSession(self.config, destination_password(), self.stop)
+        session = SmbSession(self.config, destination_password(), self.stop)
+        session.on_activity = getattr(self, 'on_activity', None)
+        return session
 
     def redact(self, text):
         from ..deployment import destination_password

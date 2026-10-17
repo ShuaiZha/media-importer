@@ -19,7 +19,7 @@ def entry(root, path):
     relative = path.relative_to(root).as_posix()
     info = path.stat()
     result = {"path": relative, "bytes": info.st_size}
-    if relative.startswith("cache/"):
+    if relative.startswith("cache/") and path.suffix in ('.bin', '.download'):
         result["evidence"] = cache_evidence(path, relative, "migration-bundle")
     else:
         result["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()

@@ -9,7 +9,7 @@ from collections import deque
 from contextlib import contextmanager
 from pathlib import PurePosixPath
 
-from .model import (BackupError, SourceError, SourceBlocked, CacheUnavailable, Cancelled,
+from .model import (BackupError, SourceError, SourceBlocked, CacheUnavailable, CacheFileError, Cancelled,
                     DestinationError, NameConflict, now)
 from .store import Store, fsync_directory
 from .runtime import Reconfigure, SyncDisabled
@@ -41,6 +41,26 @@ class Service:
         self.stage = stage
         self.pipeline_stop = None
         self.cache_guard = threading.RLock()
+        self.activity = None
+
+    def checkpoint(self, row):
+        from .recovery import checkpoint
+        with self.cache_lock():
+            checkpoint(self.store, self.store.get(row['id']))
+
+    @contextmanager
+    def cache_lock(self):
+        acquired = self.cache_guard.acquire(blocking=False)
+        if not acquired:
+            if self.activity:
+                with self.activity.waiting(self.stage):
+                    self.cache_guard.acquire()
+            else:
+                self.cache_guard.acquire()
+        try:
+            yield
+        finally:
+            self.cache_guard.release()
 
     def transfer_status(self, **updates):
         if self.stage:
@@ -131,13 +151,7 @@ class Service:
                     except SourceError as exc:
                         store.status(source={"online": False, "checked_at": now(), "reason": str(exc),
                                              "transport": self.config.source.get("transport", "usb")})
-                        # A released Wi-Fi camera may sleep while durable caches
-                        # upload. Keep the completed import evidence, but report
-                        # its current connection honestly.
-                        released = (self.config.source.get("transport") == "wifi" and not keep_awake
-                                    and store.get_meta("status", {}).get("inventory", {}).get("verified"))
-                        if not released:
-                            store.invalidate_inventory("相机断开，连接后需重新核对清单")
+                        store.invalidate_inventory("相机断开，连接后需重新核对清单")
                     except Cancelled:
                         break
                     finished.wait(min(5, self.config.backup["poll_seconds"]) if keep_awake else self.config.backup["poll_seconds"])
@@ -223,6 +237,8 @@ class Service:
             self._last_notice = (phase, message)
 
     def progress(self, done, total):
+        if self.activity:
+            self.activity.touch(self.stage)
         if self.control and self.control.transfer_stop.is_set():
             raise Cancelled("同步已停止，保留未完成任务")
         self.check_stop()
@@ -291,6 +307,9 @@ class Service:
                 if expected.get("version") == 2:
                     actual = cache_evidence(path, row["asset_id"], volume)
                     if actual == expected:
+                        if row['state'] in ('cached', 'staged', 'publishing', 'uploaded'):
+                            self.checkpoint(row)
+                        self.store.update(row['id'], error=None, error_stage=None, error_code=None, retry_at=0)
                         result["verified"].append(asset.path)
                         continue
                     # Recover only timestamp drift, and only after a fresh
@@ -326,6 +345,9 @@ class Service:
                 with self.store.db:
                     self.store.db.execute("UPDATE files SET cache_identity=? WHERE id=?",
                                           (json.dumps(evidence), row["id"]))
+                self.store.update(row['id'], error=None, error_stage=None, error_code=None, retry_at=0)
+                if row['state'] in ('cached', 'staged', 'publishing', 'uploaded'):
+                    self.checkpoint(row)
                 result["verified"].append(asset.path)
             except Cancelled:
                 raise
@@ -336,7 +358,7 @@ class Service:
     def clean_cache(self, row):
         if row["state"] != "uploaded" or row.get('cache_cleared_at') or not self.allowed():
             return
-        with self.cache_guard:
+        with self.cache_lock():
             try:
                 require_cache(self.store)
                 if not self.allowed():
@@ -346,9 +368,11 @@ class Service:
                     if not self.cache_valid(row):
                         raise CacheUnavailable("缓存身份变化，未清理该文件")
                 unlink_cache(path)
+                from .recovery import forget
+                forget(self.store, row)
                 fsync_directory(self.store.cache)
                 self.store.update(row["id"], cache_cleanup_error=None, cache_cleared_at=now())
-            except (OSError, CacheUnavailable) as exc:
+            except (OSError, CacheUnavailable, ValueError) as exc:
                 self.store.update(row["id"], cache_cleanup_error=str(exc))
                 LOG.warning("已归档，缓存待清理: %s", self.store.asset(row).path)
 
@@ -382,6 +406,7 @@ class Service:
 
     def recover_interrupted(self):
         """Recover local commit boundaries and queue only interrupted attempts for cleanup."""
+        self.store.status(transfer_health={})
         for row in self.rows():
             partial = self.store.cached_path(row).with_suffix(".download")
             if row["state"] in ("pending", "missing") and row["cache_identity"]:
@@ -402,6 +427,12 @@ class Service:
             if row["state"] == "cached" and row["temp_path"]:
                 self.store.queue_temporary(row, "remote", row["temp_path"], json.loads(row["remote_identity"] or "null"))
                 self.store.update(row["id"], temp_path=None, remote_identity=None)
+            saved = self.store.get(row['id'])
+            if saved['state'] in ('cached', 'staged', 'publishing', 'uploaded') and self.store.cached_path(saved).is_file():
+                try:
+                    self.checkpoint(saved)
+                except (CacheUnavailable, OSError, ValueError):
+                    pass  # Preserve old caches; a bad file must not block startup.
         for stage in ("import", "upload"):
             self.store.stage_status(stage, phase="idle", current_bytes=0, current_total_bytes=0,
                                     current_file=None, current_file_id=None, speed_bytes_per_second=0, eta_seconds=None)
@@ -433,6 +464,8 @@ class Service:
     def commit_uploaded(self, row):
         self.store.update(row["id"], state="uploaded", error=None, error_stage=None)
         row = self.store.get(row["id"])
+        if self.store.cached_path(row).exists():
+            self.checkpoint(row)
         self.clean_cache(row)
         LOG.info("上传完成: %s -> %s", self.store.asset(row).path, row["remote_path"])
 
@@ -452,6 +485,9 @@ class Service:
             remote = self.allocate(row)
             self.store.update(row["id"], remote_path=remote)
             row = self.store.get(row["id"])
+
+        if self.store.cached_path(row).exists() and self.cache_valid(row):
+            self.checkpoint(row)
 
         if row["state"] == "publishing":
             temporary = self.destination.stat(row["temp_path"])
@@ -476,7 +512,8 @@ class Service:
                     self.store.update(row["id"], error="完整缓存丢失且相机原片已清理，需要人工恢复数据", error_stage="import")
                 else:
                     self.store.update(row["id"], state="pending", error="完整缓存待核验，已保留；请核验缓存后继续", error_stage="import")
-                raise CacheUnavailable("完整缓存不可用，请检查原缓存盘和文件；未删除任何完整文件")
+                require_cache(self.store)
+                raise CacheFileError("此文件的完整缓存不可用，请检查原文件或备份；其他完整缓存继续上传")
             self.upload_file(row, cache, asset)
             row = self.store.get(row["id"])
             self.report("publishing", "上传结束，正在核对大小并归档")
@@ -494,6 +531,8 @@ class Service:
                 self.store.update(row["id"], remote_path=self.allocate(row, force_alternative=True))
                 row = self.store.get(row["id"])
             self.store.update(row["id"], state="publishing")
+            if self.store.cached_path(row).exists():
+                self.checkpoint(row)
             try:
                 self.destination.publish(row["temp_path"], row["remote_path"])
                 break
@@ -512,12 +551,15 @@ class Service:
         temporary = str(PurePosixPath(row["remote_path"]).parent /
                         (".media-import-" + row["id"] + "-" + uuid.uuid4().hex + ".partial"))
         self.store.update(row["id"], temp_path=temporary, remote_identity=None, error=None, error_stage=None)
+        self.checkpoint(row)
         self.report("uploading", "正在整文件上传；中断后从头重传", current_file=asset.path,
                     current_file_id=row["id"], current_bytes=0, current_total_bytes=asset.size)
         def created(identity):
             self.store.update(row["id"], remote_identity=json.dumps(identity))
+            self.checkpoint(row)
         def staged(identity):
             self.store.update(row["id"], state="staged", remote_identity=json.dumps(identity), error=None, error_stage=None)
+            self.checkpoint(row)
         try:
             self.destination.upload(cache, temporary, self.progress, created, staged)
         except BaseException:
@@ -539,9 +581,10 @@ class Service:
         partial = cache.with_suffix(".download")
         if self.cache_valid(row):
             self.store.update(row["id"], state="cached", error=None, error_stage=None)
+            self.checkpoint(row)
             return
         if cache.exists() or cache.is_symlink():
-            raise CacheUnavailable("已有完整缓存待核验，未覆盖或重新下载；请核验缓存后继续")
+            raise CacheFileError("已有完整缓存待核验，未覆盖或重新下载；其他文件继续")
         # Only discard our own unfinished download, never a complete unuploaded cache.
         if partial.exists():
             self.store.queue_temporary(row, "local", partial.name)
@@ -592,6 +635,7 @@ class Service:
             # the final path's evidence, after confirming identical content.
             self.store.update(row["id"], state="cached", cache_identity=json.dumps(final_identity),
                               error=None, error_stage=None)
+            self.checkpoint(row)
             committed = True
         finally:
             if not committed:
@@ -604,6 +648,10 @@ class Service:
         if hasattr(self.source, "reconcile"):
             fresh = self.source.reconcile(fresh, self.rows())
         return fresh
+
+    def settle(self):
+        from .lifecycle import settle
+        return settle(self)
 
     def cleanup_groups(self, attempted):
         if not self.allowed("delete_source_after_import"):
@@ -629,7 +677,7 @@ class Service:
                     self.store.update(row["id"], cleanup="blocked", source_cleanup_error=group["reason"])
                 continue
             try:
-                with self.cache_guard:
+                with self.cache_lock():
                     self.boundary()
                     if not self.allowed("delete_source_after_import"):
                         return
@@ -659,6 +707,8 @@ class Service:
                         if not self.cache_valid(row):
                             if row["state"] != "uploaded" or not row["remote_identity"] or not self.confirmed_final(row, self.destination.stat(row["remote_path"])):
                                 raise CacheUnavailable("素材组缺少可确认的完整副本，保留相机原片")
+                        else:
+                            self.checkpoint(row)
                     candidates = self.source.deletion_candidates(members)
                     for row, asset in zip(rows, members):
                         self.boundary()
@@ -694,6 +744,8 @@ class Service:
                         for member_row, member in zip(rows, members):
                             if member.path in current and member.path not in after:
                                 self.store.update(member_row["id"], cleanup="deleted", source_cleanup_error=None)
+                                if self.store.cached_path(member_row).is_file():
+                                    self.checkpoint(member_row)
                         if asset.path in after:
                             self.store.update(row["id"], cleanup="pending", source_cleanup_error="相机文件仍存在，稍后重新核对")
             except (BackupError, OSError) as exc:
@@ -719,6 +771,22 @@ class Service:
         selected = [a for group in groups for a in group["members"]]
         previews = {key for group in groups for key in group.get('preview_ids', [])}
         archive_previews = self.store.preview_policy(self.config)
+        from .lifecycle import indexed, restore_member
+        seen = indexed(self.store, self.config, assets)
+        existing = {r['asset_id'] for r in self.rows()}
+        working_groups = []
+        with self.store.db:
+            for group in groups:
+                members = group['members']
+                needed = any(a.identity not in seen or a.identity in existing for a in members)
+                needed = needed or self.allowed('delete_source_after_import') and any(a.identity in seen for a in members)
+                if needed:
+                    for asset in members:
+                        if asset.identity in seen:
+                            restore_member(self.store, self.destination_id, asset, seen[asset.identity])
+                    working_groups.append(group)
+        groups = working_groups
+        work_assets = [a for group in groups for a in group['members']]
         known = self.rows()
         eligible = selected_file_ids(known, scope)
         available = {a.identity for a in assets}
@@ -734,14 +802,14 @@ class Service:
             elif row["state"] == "uploaded" and self.store.asset(row).path not in paths:
                 self.store.update(row["id"], cleanup="absent", source_cleanup_error=None)
         known_ids = {r["asset_id"] for r in known}
-        additions = [a for a in selected if a.identity not in known_ids]
+        additions = [a for a in work_assets if a.identity not in known_ids]
         batch_id = self.store.get_meta("last_batch")
         prior_batch = self.store.files(batch_id=batch_id) if batch_id else []
         if previous_scope != scope or any(r["id"] not in eligible and r['state'] != 'excluded' for r in prior_batch):
             # A scope change creates a view of the remaining selected work, not
             # a mutation of previous mixed batches or their file identities.
             archived = {r["asset_id"] for r in known if r["state"] == "uploaded"}
-            remaining = [a for a in selected if a.identity not in archived]
+            remaining = [a for a in work_assets if a.identity not in archived]
             batch_id = self.store.batch(self.destination_id, remaining, scope, preview_ids=previews, archive_previews=archive_previews) if remaining else None
         elif additions:
             batch_id = self.store.batch(self.destination_id, additions, scope, preview_ids=previews, archive_previews=archive_previews)
@@ -752,11 +820,11 @@ class Service:
                           "batch_id": batch_id, "serial": self.config.source["serial"], "destination": self.destination_id,
                           "checked_at": now(), "source_files": len(assets), "new_files": len(additions),
                           "media_scope": scope, "archive_previews": archive_previews,
-                          "selected_files": sum(self.store.get(self.store.file_id(self.destination_id, a))['state'] != 'excluded' for a in selected),
+                          "selected_files": sum(r['state'] != 'excluded' for r in self.rows() if r['asset_id'] in {a.identity for a in selected}),
                           "excluded_files": len(assets) - len(selected)})
         self.store.save_groups(self.destination_id, groups)
         self.store.reporting_run(self.config)
-        return {"assets": selected, "batch_id": batch_id}
+        return {"assets": selected, "batch_id": batch_id, "known_sources": set(seen)}
 
     def verify_imports(self, inventory):
         self.boundary()
@@ -764,6 +832,8 @@ class Service:
         rows = {r["asset_id"]: r for r in self.rows()}
         for asset in inventory["assets"]:
             row = rows.get(asset.identity)
+            if row is None and asset.identity in inventory.get('known_sources', set()):
+                continue
             if row and row['state'] == 'excluded':
                 continue
             if not row or row["state"] not in ("cached", "staged", "publishing", "uploaded"):
@@ -783,7 +853,7 @@ class Service:
         fresh_selected = [a for group in select_groups(self.source.groups(fresh), self.config.backup["media_scope"])
                           for a in group["members"]]
         expected = {a.identity for a in inventory["assets"]
-                    if rows[a.identity]["cleanup"] not in ("deleted", "absent")}
+                    if a.identity not in rows or rows[a.identity]["cleanup"] not in ("deleted", "absent")}
         same = {a.identity for a in fresh_selected} == expected
         state = self.store.get_meta("status", {}).get("inventory", {})
         state.update(verified=same, verified_at=now() if same else None,
@@ -811,6 +881,7 @@ class Service:
         self.store.reporting_run(self.config)
         if not self.allowed():
             # Monitoring uses separate read-only clients whose stop events are not the transfer switches.
+            self.store.status(transfer_health={})
             self.report("paused", "同步已关闭，只检测连接状态")
             for stage in ("import", "upload"):
                 self.store.stage_status(stage, phase="paused", message="同步关闭，任务与完整缓存保留",
@@ -847,10 +918,6 @@ class Service:
         current = self.store.files(batch_id=batch_id)
         result["cleanup_pending"] = sum(r["cleanup"] not in ("deleted", "absent") for r in current)
         result["complete"] = all(r["state"] in ("uploaded", "excluded") for r in current)
-        previous = self.store.get_meta("last_result", {})
-        if previous.get("batch_id") == batch_id and previous.get("complete"):
-            result["finished_at"] = previous["finished_at"]
-        self.store.set_meta("last_result", result)
         import_state = self.store.get_meta("status", {}).get("stages", {}).get("import", {})
         waiting_import = import_state.get("phase", "").startswith("waiting")
         self.report(import_state["phase"] if waiting_import else "completed" if result["complete"] else "waiting_retry",

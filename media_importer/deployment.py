@@ -39,7 +39,6 @@ def connections():
             "serial": text(env, "SOURCE_SERIAL", required=True),
             "timeout_seconds": number(env, "SOURCE_TIMEOUT_SECONDS", 20),
             "transport": text(env, "SOURCE_TRANSPORT", "usb"),
-            "wireless_url": text(env, "SOURCE_WIRELESS_URL", "http://10.5.5.9:8080"),
             "request_attempts": number(env, "SOURCE_REQUEST_ATTEMPTS", 3, integer=True),
         },
         "destination": {

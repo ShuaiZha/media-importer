@@ -2,7 +2,7 @@ import copy
 import json
 import unittest
 
-from media_importer.bot_cards import (archive_content, device_content, settings_result,
+from media_importer.bot_cards import (settings_result,
                                       status_content, progress_bar, progress_card, event_card, format_time)
 
 
@@ -15,7 +15,7 @@ def view():
             'queues': {name: {'pending_files': 2, 'remaining_bytes': 512} for name in ('import', 'upload')},
             'batch': {'scanned': True, 'total_files': 2, 'total_bytes': 1024, 'completed_files': 0,
                       'imported_files': 1, 'import_percent': 50., 'percent': 25.},
-            'totals': {'pending_cleanup': 0, 'cache_cleanup_pending': 0},
+            'work': {'pending_cleanup': 0, 'cache_cleanup_pending': 0},
             'unplug': {'ready': False, 'message': '导入尚未完成'}, 'policy': {'delete_source': False},
             'issues': [], 'temporary_cleanup': [], 'observed_at': '2026-10-15T12:00:00+00:00'}
 
@@ -41,9 +41,9 @@ class CommandCardTests(unittest.TestCase):
         state['preflight'] = {'state': 'ok', 'finished_at': stamp}
         state['recent_result'] = {'complete': True, 'total_files': 2, 'archived_files': 2,
                                  'pending_files': 0, 'failed_files': 0, 'source_deleted': 0,
-                                 'cache_cleanup_pending': 0, 'archives': [], 'finished_at': stamp}
+                                 'cache_cleanup_pending': 0, 'tasks': [], 'finished_at': stamp}
         before = copy.deepcopy(state)
-        messages = [status_content(state), device_content(state), archive_content(state),
+        messages = [status_content(state),
                     progress_card(state, 300)]
         messages += [event_card(kind, kind, '示例', state) for kind in
                      ('connected', 'disconnected', 'imported', 'completed', 'failed', 'backlog', 'recovered', 'test')]
@@ -73,9 +73,9 @@ class CommandCardTests(unittest.TestCase):
         state=view(); state['health']['source'].update(stale=True)
         state['health']['destination'].update(online=None)
         state['disk']['free_bytes']=None
-        text=json.dumps(device_content(state),ensure_ascii=False)
-        self.assertIn('相机 · 待更新',text)
-        self.assertIn('SMB · 待更新',text)
+        text=json.dumps(status_content(state),ensure_ascii=False)
+        self.assertIn('相机 待更新',text)
+        self.assertIn('SMB 待更新',text)
         self.assertNotIn('磁盘可用 0',text)
 
     def test_upload_bytes_are_not_mistaken_for_committed_archive(self):
@@ -148,18 +148,6 @@ class CommandCardTests(unittest.TestCase):
                 if payload in json.dumps(element):
                     self.assertEqual('plain_text', element['text']['tag'])
 
-    def test_overview_leaves_diagnostics_and_history_in_their_own_cards(self):
-        state = view()
-        state['preflight'] = {'state': 'ok', 'finished_at': state['observed_at']}
-        state['health']['source'].update(model_name='Camera', serial_number='serial-example', firmware_version='v123')
-        state['archive'] = {'locations': ['smb://storage/share/Camera'], 'planned_locations': []}
-        overview = json.dumps(status_content(state), ensure_ascii=False)
-        self.assertNotIn('启动自检', overview)
-        self.assertNotIn('smb://', overview)
-        self.assertNotIn('serial-example', overview)
-        self.assertNotIn('serial-example', json.dumps(device_content(state), ensure_ascii=False))
-        self.assertIn('serial-example', json.dumps(device_content(state, details=True), ensure_ascii=False))
-        self.assertIn('smb://storage/share/Camera', json.dumps(archive_content(state), ensure_ascii=False))
 
     def test_import_complete_does_not_turn_pending_archive_green(self):
         state = view()
@@ -177,20 +165,17 @@ class CommandCardTests(unittest.TestCase):
                      'overheating': False, 'cold': False, 'recording': False, 'busy': False,
                      'ready': True, 'storage_status': 'ready'}
         state['health']['source']['telemetry'] = telemetry
-        text = json.dumps(device_content(state), ensure_ascii=False)
+        text = json.dumps(status_content(state), ensure_ascii=False)
         self.assertIn('80%', text)
-        self.assertIn('正在充电', text)
-        self.assertIn('无温度告警', text)
         telemetry.update(overheating=None, cold=None, recording=None, busy=None, storage_status='unknown')
-        text = json.dumps(device_content(state), ensure_ascii=False)
+        text = json.dumps(status_content(state), ensure_ascii=False)
         self.assertNotIn('无温度告警', text)
         self.assertNotIn('存储卡 正常', text)
         self.assertNotIn('就绪', text)
         telemetry['stale'] = True
-        text = json.dumps(device_content(state), ensure_ascii=False)
+        text = json.dumps(status_content(state), ensure_ascii=False)
         self.assertNotIn('80%', text)
         self.assertNotIn('正在充电', text)
-        self.assertIn('状态待更新', text)
 
     def test_missing_cache_disk_is_actionable_in_overview_and_does_not_show_old_space(self):
         state = view()
@@ -198,27 +183,14 @@ class CommandCardTests(unittest.TestCase):
         state['disk'].update(reason='缓存盘未挂载', action='请接回原缓存盘')
         state['attention'] = {'required': True, 'message': '需要处理：请接回原缓存盘'}
         self.assertIn('请接回原缓存盘', json.dumps(status_content(state), ensure_ascii=False))
-        details = json.dumps(device_content(state), ensure_ascii=False)
-        self.assertIn('缓存盘未挂载', details)
+        details = json.dumps(status_content(state), ensure_ascii=False)
+        self.assertIn('缓存盘 不可用', details)
         self.assertNotIn('磁盘可用', details)
 
-    def test_archive_success_survives_cleanup_problem_and_shows_original_and_final_name(self):
-        state = view()
-        state['recent_result'] = {'complete': True, 'total_files': 1, 'archived_files': 1, 'pending_files': 0,
-                                  'failed_files': 0, 'source_deleted': 0, 'cache_cleanup_pending': 1,
-                                  'archives': [{'source': '100MEDIA/clip.mp4', 'location': 'smb://storage/share/clip_1.mp4'}]}
-        state['issues'] = [{'path': '100MEDIA/clip.mp4', 'cache_cleanup_error': '磁盘离线'}]
-        state['totals'].update(uploaded_files=1, uploaded_bytes=512, pending_files=0, cache_cleanup_pending=1)
-        state['recent_result']['cleanup'] = {'source_not_deleted': 1, 'cache_pending': 1}
-        text = json.dumps(archive_content(state, details=True), ensure_ascii=False)
-        self.assertIn('已正式归档 **1 / 1**', text)
-        self.assertIn('clip.mp4 → clip_1.mp4', text)
-        self.assertIn('缓存：清理待处理 1', text)
-        self.assertIn('待处理 1 个文件', text)
 
     def test_previous_success_does_not_make_new_pending_archives_look_complete(self):
         state = view()
         state['recent_result'] = {'complete': True, 'total_files': 1, 'archived_files': 1, 'pending_files': 0,
-                                  'failed_files': 0, 'source_deleted': 0, 'cache_cleanup_pending': 0, 'archives': []}
-        state['totals'].update(uploaded_files=1, pending_files=2)
-        self.assertEqual('blue', archive_content(state)[1])
+                                  'failed_files': 0, 'source_deleted': 0, 'cache_cleanup_pending': 0, 'tasks': []}
+        state['work'].update(pending_files=2)
+        self.assertEqual('blue', status_content(state)[1])

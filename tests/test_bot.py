@@ -97,13 +97,6 @@ class BotTests(unittest.TestCase):
         self.assertFalse(self.settings.read()['config']['backup']['enabled'])
         self.assertIn('过期', json.dumps(self.sender.call_args.args[1],ensure_ascii=False))
 
-    def test_form_validates_bounds_and_only_saves_runtime_fields(self):
-        value=self.bot.action({'form':'notifications'},self.settings.read()['revision'])
-        self.bot.receive_card(self.callback(value, fields={'progress_interval_seconds':'1','keyword':''}))
-        self.bot.process_one()
-        self.assertEqual(300, self.settings.read()['config']['notifications']['progress_interval_seconds'])
-        with self.assertRaises(ConfigError):self.settings.update_preferences({'source':{'url':'http://other'}})
-        with self.assertRaises(ConfigError):self.settings.update_preferences({'limits':{'max_cache_gib':float('nan')}})
 
     def test_replied_failure_does_not_apply_setting_twice(self):
         self.bot.receive_message(self.message('开启同步'))
@@ -131,7 +124,7 @@ class BotTests(unittest.TestCase):
 
     def test_stopped_status_panels_offer_only_refresh_and_safe_checks(self):
         before = self.path.read_bytes()
-        for page in ('status', 'devices', 'archives'):
+        for page in ('status', 'devices', 'tasks'):
             response = self.bot.panel(page)
             self.assertTrue(response['config']['update_multi'])
             buttons = [button for e in response['elements'] if e['tag'] == 'action' for button in e['actions']]
@@ -141,15 +134,15 @@ class BotTests(unittest.TestCase):
             with self.bot.db() as db:
                 payload = json.loads(db.execute('SELECT payload FROM bot_actions WHERE token=?',
                                                (refresh['value']['token'],)).fetchone()[0])
-            self.assertEqual({'panel': page, 'refresh': True}, payload)
+            self.assertEqual({'panel': 'status', 'refresh': True}, payload)
         self.assertEqual(before, self.path.read_bytes())
 
-    def test_three_status_menu_commands_select_distinct_read_only_cards(self):
+    def test_old_status_commands_open_the_single_read_only_card(self):
         before = self.path.read_bytes()
-        for label in ('运行总览', '设备与存储', '归档结果'):
+        for label in ('运行总览', '设备与存储', '当前任务'):
             self.bot.receive_message(self.message(label, event_id=label))
             self.assertTrue(self.bot.process_one())
-            self.assertIn(label, self.sender.call_args.args[1]['header']['title']['content'])
+            self.assertIn('服务待检查', self.sender.call_args.args[1]['header']['title']['content'])
         self.assertEqual(before, self.path.read_bytes())
         self.assertEqual([], self.store.files())
 
@@ -171,7 +164,7 @@ class BotTests(unittest.TestCase):
         self.sender.assert_not_called()
         self.assertEqual(2, self.updater.call_count)
         self.assertEqual('om_status_test', self.updater.call_args.args[1])
-        self.assertEqual('设备与存储', self.updater.call_args.args[2]['header']['title']['content'])
+        self.assertIn('服务待检查', self.updater.call_args.args[2]['header']['title']['content'])
         self.assertEqual(before, self.path.read_bytes())
 
     def test_refresh_requires_a_valid_original_message_and_owner(self):
@@ -185,28 +178,7 @@ class BotTests(unittest.TestCase):
         self.assertEqual('error', self.bot.receive_card(event)['toast']['type'])
         self.assertFalse(self.bot.process_one())
 
-    def test_invalid_form_is_highlighted_and_keeps_values(self):
-        before=self.path.read_bytes()
-        value=self.bot.action({'form':'transfer'}, self.settings.read()['revision'])
-        self.bot.receive_card(self.callback(value, fields={'upload_mib_per_second':'abc','max_cache_gib':'50','min_free_disk_gib':'10'}))
-        self.bot.process_one()
-        response=self.sender.call_args.args[1]
-        self.assertEqual('red', response['header']['template'])
-        self.assertEqual('传输设置 · 未保存', response['header']['title']['content'])
-        self.assertTrue(any(e['tag']=='form' for e in response['elements']))
-        self.assertIn('本次修改未保存', json.dumps(response, ensure_ascii=False))
-        self.assertEqual(before, self.path.read_bytes())
 
-    def test_menu_help_does_not_echo_input_and_forms_keep_decimal_precision(self):
-        self.settings.update_preferences({'limits': {'upload_mib_per_second': 0.123456789}})
-        response=self.bot.panel('transfer')
-        form=next(e for e in response['elements'] if e['tag']=='form')
-        self.assertEqual('0.123456789', form['elements'][0]['default_value'])
-        self.bot.receive_message(self.message('帮助'))
-        self.bot.process_one()
-        reply=self.sender.call_args.args[1]
-        self.assertEqual('使用指南', reply['header']['title']['content'])
-        self.assertIn('无需记住命令', json.dumps(reply, ensure_ascii=False))
 
     def test_expired_and_forged_card_cannot_mutate_settings(self):
         self.assertEqual('error',self.bot.receive_card(self.callback({'token':'forged'}))['toast']['type'])
@@ -222,7 +194,7 @@ class BotTests(unittest.TestCase):
         self.assertNotIn('accidental-secret',str(self.sender.call_args))
 
     def test_configuration_cannot_leak_secret_in_status_card(self):
-        for page in ('status', 'devices', 'archives'):
+        for page in ('status', 'devices', 'tasks'):
             text=json.dumps(self.bot.panel(page), ensure_ascii=False)
             self.assertNotIn(ENV['DESTINATION_PASSWORD'],text)
             self.assertNotIn(ENV['FEISHU_APP_SECRET'],text)
@@ -239,12 +211,12 @@ class BotTests(unittest.TestCase):
             name: {'phase': 'paused', 'message': '同步关闭，任务与缓存保留'}
             for name in ('import', 'upload')})
         text = json.dumps(self.bot.panel(), ensure_ascii=False)
-        self.assertIn('等待传输', text)
+        self.assertIn('等待新素材', text)
         self.assertNotIn('同步关闭，任务与缓存保留', text)
 
     def test_settings_apply_acknowledges_and_updates_original_card_without_resave(self):
         from media_importer.model import now
-        value = self.bot.action({'changes': {'limits': {'max_cache_gib': 60}}, 'page': 'transfer'}, self.settings.read()['revision'])
+        value = self.bot.action({'changes': {'backup': {'delete_source_after_import': True}}, 'page': 'cleanup'}, self.settings.read()['revision'])
         event = self.callback(value)
         event['event']['context'] = {'open_message_id': 'om_original_settings'}
         self.bot.receive_card(event)
@@ -264,22 +236,6 @@ class BotTests(unittest.TestCase):
         self.assertEqual(saved, self.path.read_bytes())
         self.assertTrue(self.updater.call_args.args[2]['config']['update_multi'])
 
-    def test_connection_check_result_updates_original_receipt(self):
-        from media_importer.model import now
-        value = self.bot.action({'operation': 'check'}, self.settings.read()['revision'])
-        event = self.callback(value)
-        event['event']['context'] = {'open_message_id': 'om_device_check'}
-        self.bot.receive_card(event)
-        self.assertTrue(self.bot.process_one())
-        self.assertIn('正在检查连接', self.updater.call_args.args[2]['header']['title']['content'])
-        with self.store.db:
-            self.store.db.execute("UPDATE maintenance_requests SET state='done', result=?, updated_at=?",
-                                 (json.dumps({'state': 'ok', 'checks': {'source': {'state': 'ok', 'message': 'test'}}}), now()))
-        self.assertTrue(self.bot.process_one())
-        self.sender.assert_not_called()
-        self.assertEqual('om_device_check', self.updater.call_args.args[1])
-        self.assertIn('1 / 1 项通过', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
-        self.assertTrue(self.updater.call_args.args[2]['config']['update_multi'])
 
     def test_start_uses_one_live_progress_delivery_when_notifications_are_enabled(self):
         from media_importer.model import now

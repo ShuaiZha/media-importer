@@ -58,8 +58,8 @@ def runtime_config(raw):
     values = _merge(raw, DEFAULTS)
     if values["backup"]["media_scope"] not in MEDIA_SCOPES:
         raise ConfigError("backup.media_scope 必须为 all、video 或 photo")
-    if values["backup"]["source_transport"] not in ("usb", "wifi"):
-        raise ConfigError("backup.source_transport 必须为 usb 或 wifi")
+    if values["backup"]["source_transport"] != "usb":
+        raise ConfigError("当前仅支持 USB；请将 backup.source_transport 设为 usb，并在 .env 的 SOURCE_URL 填写 USB 地址")
     for key in ("poll_seconds", "retry_seconds"):
         if values["backup"][key] < 1:
             raise ConfigError(f"backup.{key} 必须至少为 1")

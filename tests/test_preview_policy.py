@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 from media_importer.adapters.gopro import GoProSource
 from media_importer.bot import Bot
-from media_importer.bot_cards import progress_card, archive_content
+from media_importer.bot_cards import progress_card, status_content
 from media_importer.config import Config, ConfigError, DEFAULTS
 from media_importer.notifications import NotificationWorker
 from media_importer.store import Store
@@ -64,7 +64,7 @@ class PreviewPolicyTests(unittest.TestCase):
         self.assertEqual((1, 1, 1, 32), (view['batch']['total_files'], view['batch']['imported_files'], view['batch']['completed_files'], view['batch']['total_bytes']))
         self.assertTrue(view['unplug']['ready'])
         self.assertFalse(view['issues'])
-        self.assertEqual(0, view['totals']['pending_files'])
+        self.assertEqual(0, view['work']['pending_files'])
         self.assertEqual(0, view['selection']['deferred_files'])
         self.assertEqual(2, view['batch']['excluded_preview_files'])
         for stage in ('import', 'upload'):
@@ -75,7 +75,7 @@ class PreviewPolicyTests(unittest.TestCase):
                 file = next(f for f in view['files'] if f['id'] == row['id'])
                 self.assertFalse(file['imported'])
                 self.assertIsNone(row['remote_path'])
-        for card in (progress_card(view, 300), archive_content(view)):
+        for card in (progress_card(view, 300), status_content(view)):
             text = json.dumps(card, ensure_ascii=False)
             self.assertIn('忽略 2 个预览文件', text)
             self.assertNotIn('3 / 3', text)
@@ -221,35 +221,15 @@ class PreviewPolicyTests(unittest.TestCase):
                 view = self.view()
                 if leftover:
                     self.assertEqual(2, view['cleanup']['preview_pending'])
-                    self.assertEqual(2, view['totals']['pending_preview_cleanup'])
+                    self.assertEqual(2, view['work']['pending_preview_cleanup'])
                     self.assertIn('source:import:source_cleanup', NotificationWorker._problems(view))
-                    self.assertEqual(0, view['totals']['pending_files'])
+                    self.assertEqual(0, view['work']['pending_files'])
                 else:
                     self.assertEqual(2, view['cleanup']['preview_deleted'])
                 # A second isolated camera identity for the next subcase.
                 self.store.close()
                 self.store = Store(self.root / ('leftover' if not leftover else 'done'))
 
-    def test_feishu_toggle_saves_boolean_without_touching_sync_or_delete(self):
-        self.prepare()
-        self.settings.set_enabled(False)
-        sender = Mock()
-        bot = Bot(self.settings, self.store.directory, sender=sender)
-        card = bot.panel('transfer')
-        button = next(b for e in card['elements'] if e['tag'] == 'action' for b in e['actions']
-                      if b['text']['content'] == '开启归档预览文件')
-        with bot.db() as db:
-            action = db.execute('SELECT * FROM bot_actions WHERE token=?', (button['value']['token'],)).fetchone()
-            payload = json.loads(action['payload'])
-            payload['revision'] = action['revision']
-        bot.enqueue('enable-previews', payload)
-        with patch('media_importer.bot.time.monotonic', side_effect=[1, 6]):
-            self.assertTrue(bot.process_one())
-        saved = Config.load(self.path)
-        self.assertTrue(saved.backup['archive_previews'])
-        self.assertFalse(saved.backup['enabled'])
-        self.assertFalse(saved.backup['delete_source_after_import'])
-        self.assertIn('归档预览文件', json.dumps(sender.call_args.args[1], ensure_ascii=False))
 
 
 if __name__ == '__main__':

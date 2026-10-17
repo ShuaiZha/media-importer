@@ -186,6 +186,18 @@ def observe_cached_file(path, expected, asset_id, volume_id):
     return result
 
 
+def is_appledouble(path):
+    """Recognize metadata by both name and signature, never just a prefix."""
+    path = Path(path)
+    try:
+        if path.name.startswith('._') and path.is_file() and not path.is_symlink():
+            with path.open('rb') as handle:
+                return handle.read(4) == b'\x00\x05\x16\x07'
+    except OSError:
+        pass
+    return False
+
+
 def unlink_cache(path):
     """Remove a known task file and only its verified AppleDouble metadata."""
     path = Path(path)

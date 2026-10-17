@@ -96,7 +96,7 @@ def run(settings, store, stop=None):
                     from .notifications import _safe_failure
                     checks[name] = item("waiting" if getattr(exc, "code", "") == "notification_network" else "error", _safe_failure(exc)[1])
                 elif name == "source":
-                    connection = "Mac 是否已连接相机 Wi-Fi" if config and config.source.get("transport") == "wifi" else "USB 网络"
+                    connection = "USB 网络"
                     checks[name] = item("waiting", f"相机不可访问或身份不符；检查开机、{connection}与绑定序列号，完整缓存可继续上传")
                 else:
                     issue = describe(exc, "upload")

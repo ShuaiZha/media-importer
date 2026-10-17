@@ -63,11 +63,15 @@ class Store:
             self.db.execute("PRAGMA user_version=5")
             columns = {r[1] for r in self.db.execute('PRAGMA table_info(files)')}
             for name, definition in {'role': "TEXT NOT NULL DEFAULT 'original'", 'source_deleted_at': 'TEXT',
-                                     'source_absent_at': 'TEXT', 'cache_cleared_at': 'TEXT'}.items():
+                                     'source_absent_at': 'TEXT', 'cache_cleared_at': 'TEXT',
+                                     'error_code': 'TEXT', 'retry_at': 'REAL NOT NULL DEFAULT 0'}.items():
                 if name not in columns:
                     self.db.execute(f'ALTER TABLE files ADD COLUMN {name} {definition}')
         from .runs import initialize
         initialize(self.db)
+        from .lifecycle import initialize as initialize_lifecycle
+        with self.db:
+            initialize_lifecycle(self.db)
 
     def close(self):
         self.db.close()
@@ -168,7 +172,7 @@ class Store:
     def update(self, file_id, **fields):
         allowed = {"state", "remote_path", "temp_path", "cleanup", "error",
                    "remote_identity", "cache_identity", "group_id", "source_cleanup_error", "error_stage", "attempts",
-                   "cache_cleanup_error", "cache_cleared_at"}
+                   "cache_cleanup_error", "cache_cleared_at", "error_code", "retry_at"}
         if not fields or not set(fields) <= allowed:
             raise ValueError("Invalid state update")
         with self.db:
@@ -176,6 +180,8 @@ class Store:
             previous = self.get(file_id)
             if previous is None:
                 raise ValueError('Unknown file')
+            if fields.get('state') in ('cached', 'uploaded') and 'error' in fields and fields['error'] is None:
+                fields.update(error_code=None, retry_at=0)
             # Absence is a current observation; it cannot erase a confirmed
             # deletion fact. Old "absent" rows cannot be retroactively inferred.
             if fields.get('cleanup') == 'absent':
@@ -264,17 +270,6 @@ class Store:
         with self.db:
             self.db.execute("UPDATE temporary_cleanup SET state=?, error=? WHERE id=?",
                             ("blocked" if blocked else "pending" if error else "done", error, identifier))
-
-    def summary(self, destination):
-        rows = self.files(destination=destination)
-        return {
-            "total_files": sum(r['state'] != 'excluded' for r in rows),
-            "excluded_preview_files": sum(r['state'] == 'excluded' for r in rows),
-            "uploaded_files": sum(r["state"] == "uploaded" for r in rows),
-            "pending_files": sum(r["state"] not in ("uploaded", "excluded") for r in rows),
-            "pending_cleanup": sum(r["state"] in ("cached", "staged", "publishing", "uploaded") and r["cleanup"] not in ("deleted", "absent") for r in rows),
-            "uploaded_bytes": sum(self.asset(r).size for r in rows if r["state"] == "uploaded"),
-        }
 
 
 def cache_bytes(directory):

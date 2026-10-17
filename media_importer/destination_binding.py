@@ -53,11 +53,21 @@ def verify_connection(store, config, remote):
     # only. A filename/size match is never enough to adopt another server.
     rows = store.db.execute("""SELECT remote_path,remote_identity,asset FROM files
         WHERE destination=? AND state='uploaded'""", (binding['id'],)).fetchall()
+    anchor = store.get_meta('destination_anchor')
+    if anchor and anchor.get('destination') != binding['id']:
+        anchor = None
+    if anchor:
+        item = remote.stat(anchor['path'])
+        actual = item.get('identity') if item else None
+        if item and actual is None and hasattr(remote, 'file_identity'):
+            actual = remote.file_identity(anchor['path'])
+        if not (item and not item['is_directory'] and item['size'] == anchor['size'] and actual == anchor['identity']):
+            raise DestinationError('新连接与已绑定存储身份不符，请检查共享目录；任务与缓存保留', code='destination_identity')
     remote_work = store.db.execute("""SELECT 1 FROM files WHERE destination=?
         AND (remote_path IS NOT NULL OR temp_path IS NOT NULL OR remote_identity IS NOT NULL) LIMIT 1""", (binding['id'],)).fetchone()
     pending_cleanup = store.db.execute("""SELECT 1 FROM temporary_cleanup WHERE destination=?
         AND kind='remote' AND state<>'done' LIMIT 1""", (binding['id'],)).fetchone()
-    if not rows and (remote_work or pending_cleanup):
+    if not rows and not anchor and (remote_work or pending_cleanup):
         raise DestinationError('连接已变化，但没有可核验的归档；请恢复原连接。新目的地请使用独立数据目录',
                                code='destination_identity')
     for row in rows:
