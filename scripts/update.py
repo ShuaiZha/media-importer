@@ -42,7 +42,7 @@ def fetch_json(url):
 
 def release(version=None):
     if version and not re.fullmatch(r'v?\d+\.\d+\.\d+', version):
-        raise ValueError('版本格式应为 0.10.18 或 v0.10.18，不接受预发布版本')
+        raise ValueError('版本格式应为 0.10.19 或 v0.10.19，不接受预发布版本')
     if version:
         value = fetch_json(f'https://api.github.com/repos/{REPOSITORY}/releases/tags/v' + version.removeprefix('v'))
         tag = value.get('tag_name', '')
@@ -168,11 +168,11 @@ Path('/output/database.json').write_text(json.dumps(result))
 '''
 
 VALIDATE = r'''
-import json, shutil
+import os, shutil
 from pathlib import Path
 from media_importer.config import Config
 from media_importer.store import Store
-from media_importer.storage import inspect_cache
+from media_importer.storage import MARKER, mounted
 Config.load('/config/settings.json')
 root=Path('/tmp/probe');root.mkdir()
 source=Path('/snapshot/state.sqlite3')
@@ -181,7 +181,14 @@ store=Store(root)
 try:
     assert store.db.execute('PRAGMA quick_check').fetchone()[0]=='ok'
     identity=store.get_meta('cache_identity')
-    if identity: assert inspect_cache(Path('/cache'),identity)['available'], 'original cache disk unavailable'
+    cache=Path('/cache')
+    assert cache.is_dir() and mounted(cache), 'original cache mount unavailable'
+    with os.scandir(cache) as entries:next(entries,None)
+    if identity:
+        marker=cache/MARKER
+        assert not marker.is_symlink() and marker.read_text().strip()==identity, 'original cache disk unavailable'
+    # This mount is deliberately read-only. Runtime preflight checks writing
+    # after startup; its W_OK probe must not reject our read-only identity check.
 finally: store.close()
 '''
 

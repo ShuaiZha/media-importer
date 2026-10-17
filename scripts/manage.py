@@ -166,7 +166,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='素材导入助手：稳定版更新、完整备份与迁移')
     commands = parser.add_subparsers(dest='action', required=True)
     upgrade = commands.add_parser('update', help='更新到 GitHub 最新稳定版；保留配置、任务和完整缓存')
-    upgrade.add_argument('--version', help='指定稳定版本，例如 0.10.18；默认最新正式发行版')
+    upgrade.add_argument('--version', help='指定稳定版本，例如 0.10.19；默认最新正式发行版')
     save = commands.add_parser('backup', help='暂停服务，备份配置、任务、完整缓存，然后恢复原服务运行状态')
     save.add_argument('--output', type=Path, required=True, help='新备份目录，建议放在外接盘或另一块磁盘')
     load = commands.add_parser('restore', help='恢复到新的项目与缓存目录，保持两个开关关闭')

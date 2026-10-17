@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -76,6 +77,25 @@ class ReleaseTests(unittest.TestCase):
                     self.assertEqual(5, backup.execute('PRAGMA user_version').fetchone()[0])
             finally:
                 connection.close()
+
+    def test_readonly_cache_validation_accepts_bound_volume_and_rejects_wrong_marker(self):
+        from media_importer.store import Store
+        from media_importer.storage import MARKER
+        with tempfile.TemporaryDirectory() as folder, patch.dict(update.os.environ, {'MEDIA_IMPORTER_REQUIRE_CACHE_MOUNT': '0'}):
+            root = Path(folder)
+            for name in ('snapshot', 'cache', 'tmp'): (root/name).mkdir()
+            store = Store(root/'snapshot')
+            store.set_meta('cache_identity', 'test-original-volume'); store.close()
+            marker = root/'cache'/MARKER; marker.write_text('test-original-volume\n')
+            cached = root/'cache/complete.bin'; cached.write_bytes(b'keep-complete-cache')
+            script = re.sub(r"'/(snapshot|cache|tmp)", lambda m: "'"+(root/m[1]).as_posix(), update.VALIDATE)
+            with patch('media_importer.config.Config.load'), patch('media_importer.storage.mounted', return_value=True), \
+                    patch('os.access', return_value=False):
+                exec(script, {})
+                self.assertEqual(b'keep-complete-cache', cached.read_bytes())
+                shutil.rmtree(root/'tmp/probe')
+                marker.write_text('wrong-volume\n')
+                with self.assertRaises(AssertionError): exec(script, {})
 
 
 class UpdateTests(unittest.TestCase):
