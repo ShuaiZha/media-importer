@@ -59,7 +59,10 @@ class Store:
             );
         """)
         with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
             self.db.execute("PRAGMA user_version=5")
+            if 'role' not in {r[1] for r in self.db.execute('PRAGMA table_info(files)')}:
+                self.db.execute("ALTER TABLE files ADD COLUMN role TEXT NOT NULL DEFAULT 'original'")
         from .runs import initialize
         initialize(self.db)
 
@@ -112,7 +115,7 @@ class Store:
             self.db.execute("INSERT OR REPLACE INTO meta VALUES ('status', ?)",
                             (json.dumps(status, ensure_ascii=False),))
 
-    def batch(self, destination, assets, media_scope='all'):
+    def batch(self, destination, assets, media_scope='all', *, preview_ids=(), archive_previews=True):
         fingerprint = destination + ":" + ",".join(sorted(a.identity for a in assets))
         batch_id = uuid.uuid5(uuid.NAMESPACE_URL, fingerprint).hex
         with self.db:
@@ -120,12 +123,14 @@ class Store:
             self.db.execute("UPDATE batches SET updated_at=? WHERE id=?", (now(), batch_id))
             for asset in assets:
                 file_id = self.file_id(destination, asset)
-                self.db.execute("INSERT OR IGNORE INTO files (id, destination, asset_id, asset, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                                (file_id, destination, asset.identity, json.dumps(asset.to_dict()), now(), now()))
+                preview = asset.identity in preview_ids
+                self.db.execute("INSERT OR IGNORE INTO files (id, destination, asset_id, asset, created_at, updated_at, role, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                (file_id, destination, asset.identity, json.dumps(asset.to_dict()), now(), now(),
+                                 'preview' if preview else 'original', 'excluded' if preview and not archive_previews else 'pending'))
                 self.db.execute("INSERT OR IGNORE INTO batch_files VALUES (?, ?)", (batch_id, file_id))
             if assets:
                 from .runs import reconcile
-                reconcile(self.db, destination, assets[0].source_type, assets[0].serial, media_scope, batch_id)
+                reconcile(self.db, destination, assets[0].source_type, assets[0].serial, media_scope, batch_id, archive_previews)
         self.set_meta("last_batch", batch_id)
         return batch_id
 
@@ -176,7 +181,14 @@ class Store:
         from .runs import reconcile
         with self.db:
             self.db.execute('BEGIN IMMEDIATE')
-            return reconcile(self.db, config.destination_id, config.source['type'], config.source['serial'], config.backup['media_scope'])
+            return reconcile(self.db, config.destination_id, config.source['type'], config.source['serial'], config.backup['media_scope'],
+                             archive_previews=config.backup['archive_previews'])
+
+    def preview_policy(self, config):
+        row = self.db.execute('''SELECT archive_previews FROM transfer_runs WHERE destination=? AND source_type=?
+            AND serial=? AND selection=? AND historical=0 AND finished_at IS NULL ORDER BY rowid DESC LIMIT 1''',
+            (config.destination_id, config.source['type'], config.source['serial'], config.backup['media_scope'])).fetchone()
+        return bool(row[0]) if row else config.backup['archive_previews']
 
     def cached_path(self, row):
         return self.cache / (row["id"] + ".bin")
@@ -227,9 +239,10 @@ class Store:
     def summary(self, destination):
         rows = self.files(destination=destination)
         return {
-            "total_files": len(rows),
+            "total_files": sum(r['state'] != 'excluded' for r in rows),
+            "excluded_preview_files": sum(r['state'] == 'excluded' for r in rows),
             "uploaded_files": sum(r["state"] == "uploaded" for r in rows),
-            "pending_files": sum(r["state"] != "uploaded" for r in rows),
+            "pending_files": sum(r["state"] not in ("uploaded", "excluded") for r in rows),
             "pending_cleanup": sum(r["state"] in ("cached", "staged", "publishing", "uploaded") and r["cleanup"] not in ("deleted", "absent") for r in rows),
             "uploaded_bytes": sum(self.asset(r).size for r in rows if r["state"] == "uploaded"),
         }

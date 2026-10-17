@@ -6,6 +6,7 @@
     "stop_after_current": false,
     "media_scope": "all",
     "source_transport": "usb",
+    "archive_previews": false,
     "poll_seconds": 10,
     "retry_seconds": 30,
     "stability_seconds": 2

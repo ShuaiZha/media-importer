@@ -111,8 +111,12 @@ class Bot:
                          {"tag": "hr"}, markdown("🎞️ **同步内容 · " + MEDIA_SCOPES[scope] + "**"),
                          self.buttons(*(self.button(label, {"changes": {"backup": {"media_scope": key}}, "page": page}, rev)
                                         for key, label in MEDIA_SCOPES.items() if key != scope)),
-                         note("视频包含 LRV，照片包含 RAW；其他文件请选择「全部素材」。"),
+                         note("照片包含 RAW；独立音频等随关联素材导入。其他文件请选择「全部素材」。"),
                          note("已有完整缓存继续上传；未选类别原片保留。"),
+                         {"tag": "hr"}, markdown("**归档预览文件 · " + ("开启**" if values['backup']['archive_previews'] else "关闭**")),
+                         self.buttons(self.button(("关闭" if values['backup']['archive_previews'] else "开启") + "归档预览文件",
+                             {"changes": {"backup": {"archive_previews": not values['backup']['archive_previews']}}, "page": page}, rev)),
+                         note("控制已确认关联的 LRV、THM；孤立或未知文件仍保留。新一轮生效，已登记任务按原规则完成。"),
                          {"tag": "hr"}, markdown("**控制上传速度与缓存占用**"),
                          note("上传限速、缓存额度填 0 表示不限；磁盘预留用于保留可用空间。"),
                          self.form("transfer", fields, rev), {"tag": "hr"},
@@ -135,13 +139,14 @@ class Bot:
             b = values["backup"]
             elements += [columns("**相机原片**\n" + ("完整导入后删除" if b["delete_source_after_import"] else "保留，不自动删除"),
                                  "**本地完整缓存**\n正式归档后自动清理"), {"tag": "hr"},
-                         paragraph("所选素材及附属文件完整导入、核对后才删除。未选类别原片保留。"),
+                         paragraph("整组需要归档的素材完整导入、核对后才删除；忽略的预览文件会随原片清理。未选类别原片保留。"),
                          note("同步关闭时停止删除；未归档的完整缓存保留。")]
             action = {"changes": {"backup": {"delete_source_after_import": False}}, "page": page} if b["delete_source_after_import"] else {"panel": "confirm_delete"}
             elements += [self.buttons(self.button("改为保留原片" if b["delete_source_after_import"] else "开启导入后删除", action, rev))]
         elif page == "confirm_delete":
             elements += [markdown("**远端归档完成前，缓存盘可能是唯一副本。**"),
                          paragraph("所选素材完整导入并核对后立即删除原片，不等待远端上传；已有合格缓存也适用。未选类别原片保留。"),
+                         note("已选择不归档的预览文件会随原片清理，远端不会保留这些预览副本。"),
                          note("上传失败保留缓存；素材关联或身份不确定时保留原片。"),
                          {"tag": "hr"},
                          self.buttons(self.button("取消，保持原设置", {"panel": "cleanup"}),

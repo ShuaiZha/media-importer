@@ -142,6 +142,14 @@ class GoProSource:
             combined.append({"id": chapters[-1][1]["id"],
                              "members": [a for _, g in chapters for a in g["members"]], "safe": safe,
                              "reason": None if safe else "视频分段或附属关系不明确，保留相机文件"})
+        for group in combined:
+            # Only this adapter identifies expendable previews. RAW, audio and
+            # unknown companions remain required, even when not primary media.
+            parents = {a.metadata.get('gumi') for a in group['members'] if a.metadata.get('primary')}
+            group['preview_ids'] = [a.identity for a in group['members']
+                                    if group['safe'] and not a.metadata.get('primary')
+                                    and a.metadata.get('parent_gumi') in parents
+                                    and PurePosixPath(a.path).suffix.lower() in ('.lrv', '.thm')]
         return combined
 
     @staticmethod

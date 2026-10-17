@@ -23,8 +23,17 @@ def age(stamp):
 
 def cleanup_summary(files, delete_source=False):
     """Observed outcomes, kept separate from the user's deletion preference."""
+    previews = [f for f in files if f['state'] == 'excluded']
+    files = [f for f in files if f['state'] != 'excluded']
     archived = [f for f in files if f['state'] == 'uploaded']
+    ready_groups = {f.get('group_id') for f in files if f.get('group_id') and f.get('imported')}
+    ready_groups -= {f.get('group_id') for f in files if not f.get('imported')}
     return {
+        'preview_deleted': sum(f['cleanup'] == 'deleted' for f in previews),
+        'preview_absent': sum(f['cleanup'] == 'absent' for f in previews),
+        'preview_pending': sum(delete_source and f.get('cleanup_selected', True)
+                               and (f.get('group_id') in ready_groups or bool(f.get('source_cleanup_error')))
+                               and f['cleanup'] not in ('deleted', 'absent') for f in previews),
         'source_deleted': sum(f['cleanup'] == 'deleted' for f in files),
         'source_absent': sum(f['cleanup'] == 'absent' for f in files),
         'source_pending': sum(delete_source and f.get('selected', True) and f.get('imported')
@@ -132,6 +141,7 @@ def snapshot(directory, settings):
     cache = Path(directory) / 'cache'
     cache_health = inspect_cache(cache, meta.get('cache_identity'))
     selected = selected_file_ids(rows, media_scope)
+    cleanup_selected = selected_file_ids(rows, media_scope, include_excluded=True)
     files, total, committed, in_flight, imported, importing = [], 0, 0, 0, 0, 0
     for row in rows:
         asset = json.loads(row['asset'])
@@ -151,7 +161,7 @@ def snapshot(directory, settings):
                                            row['asset_id'], meta.get('cache_identity'))
         cached = evidence['valid']
         stored = row['state'] == 'uploaded' or cached
-        member = row['id'] in reporting_ids
+        member = row['id'] in reporting_ids and row['state'] != 'excluded'
         if member:
             total += size
             committed += size if row['state'] == 'uploaded' else 0
@@ -159,6 +169,9 @@ def snapshot(directory, settings):
             imported += size if stored else 0
             importing += received if not stored else 0
         files.append({'id': row['id'], 'path': asset['path'], 'size': size, 'state': row['state'], 'updated_at': row['updated_at'],
+                      'role': row.get('role', 'original'), 'group_id': row['group_id'],
+                      'exclusion_reason': '按本轮设置不归档预览文件' if row['state'] == 'excluded' else None,
+                      'cleanup_selected': row['id'] in cleanup_selected,
                       'imported_at': receipts.get(row['id']),
                       'selected': row['id'] in selected,
                       'cleanup': row['cleanup'], 'error': row['error'], 'remote_path': row['remote_path'],
@@ -170,6 +183,8 @@ def snapshot(directory, settings):
                       'phase': progress.get('phase') if stage_name and row['state'] != 'uploaded' else row['state'],
                       'source_cleanup_error': row.get('source_cleanup_error'), 'transferred_bytes': transferred})
     batch_files = [f for f in files if f['in_batch']]
+    round_files = [f for f in files if f['id'] in reporting_ids]
+    ignored = [f for f in round_files if f['state'] == 'excluded']
     values = item['config'] or {}
     limits = values.get('limits', {})
     reserve = int(limits.get('min_free_disk_gib', 10) * 1024 ** 3)
@@ -264,6 +279,8 @@ def snapshot(directory, settings):
             unplug_message = subject + '已全部归档，可以拔走相机。'
         if media_scope != 'all':
             unplug_message += ' 未选类别不在本轮备份范围，原片保留。'
+        if ignored:
+            unplug_message += f' 已按设置忽略 {len(ignored)} 个预览文件。'
     elif not live:
         unplug_message = '服务未响应，暂不能确认是否仍在读写相机；请先检查 Docker。'
     elif reading:
@@ -295,9 +312,11 @@ def snapshot(directory, settings):
         recent = next((b for b in batches if b['state'] == 'uploaded'), batches[0] if batches else None)
     recent_result = None
     if recent:
-        members = [f for f in files if f['id'] in recent['file_ids']]
+        all_members = [f for f in files if f['id'] in recent['file_ids']]
+        members = [f for f in all_members if f['state'] != 'excluded']
         complete = bool(members and all(f['state'] == 'uploaded' for f in members))
         recent_result = {'batch_id': recent['id'], 'complete': complete, 'total_files': len(members),
+                         'excluded_preview_files': sum(f['state'] == 'excluded' for f in all_members),
                          'historical': bool(recent.get('historical')), 'total_bytes': sum(f['size'] for f in members),
                          'archived_files': sum(f['state'] == 'uploaded' for f in members),
                          'imported_files': sum(f['imported'] for f in members),
@@ -306,7 +325,7 @@ def snapshot(directory, settings):
                          'source_deleted': sum(f['cleanup'] in ('deleted', 'absent') for f in members),
                          'cache_cleanup_pending': sum(f['state'] == 'uploaded' and bool(f['cache_state'] in ('verified', 'unverified') or f['cache_cleanup_error']) for f in members),
                          'finished_at': (recent.get('finished_at') or recent.get('updated_at')) if complete else None,
-                         'cleanup': cleanup_summary(members, bool(values.get('backup', {}).get('delete_source_after_import'))),
+                         'cleanup': cleanup_summary(all_members, bool(values.get('backup', {}).get('delete_source_after_import'))),
                          'archives': [{'source': f['path'], 'location': archive_location(target, f['remote_path'])}
                                       for f in members if f['state'] == 'uploaded' and f['remote_path']]}
     waiting = [f for f in files if f['state'] != 'uploaded' and (f['cache_available'] or f['state'] in ('cached', 'staged', 'publishing'))]
@@ -318,22 +337,28 @@ def snapshot(directory, settings):
                'source_removed_files': len(local_only), 'source_removed_bytes': sum(f['size'] for f in local_only),
                'oldest_imported_at': oldest, 'oldest_age_seconds': age(oldest) if oldest else None,
                'unknown_age_files': sum(not f['imported_at'] for f in waiting)}
-    active_files = [f for f in files if f['selected'] or f['imported'] or f['state'] in ('cached', 'staged', 'publishing')]
+    active_files = [f for f in files if f['selected'] or f['imported'] or f['state'] in ('cached', 'staged', 'publishing')
+                    or f['state'] == 'excluded' and f['cleanup_selected'] and f['source_cleanup_error']]
+    all_cleanup = cleanup_summary(files, bool(values.get('backup', {}).get('delete_source_after_import')))
     return {'running': live, 'observed_at': now(), 'status': state, 'stages': stages, 'preflight': meta.get('preflight'), 'backlog': backlog,
             'selection': {'scope': media_scope, 'label': MEDIA_SCOPES[media_scope],
+                          'archive_previews': bool(values.get('backup', {}).get('archive_previews')),
+                          'round_archive_previews': bool(current_round.get('archive_previews', True)) if current_round else None,
+                          'excluded_preview_files': len(ignored),
                           'applied': scope_current and not configuration['pending'],
                           'cached_outside_scope_files': sum(not f['selected'] for f in waiting),
                           'excluded_source_files': inventory.get('excluded_files') if scope_current and inventory.get('scanned') else None,
-                          'deferred_files': sum(not f['selected'] and not f['imported'] for f in files)},
+                          'deferred_files': sum(not f['selected'] and not f['imported'] and f['state'] != 'excluded' for f in files)},
             'configuration': configuration, 'controls': controls, 'health': health, 'queues': queues, 'storage': storage,
             'unplug': {'ready': ready, 'can_disconnect': can_disconnect, 'message': unplug_message},
             'attention': attention(live, enabled, configuration, health, active_files, stages),
             'archive': {'locations': locations, 'planned_locations': planned or [archive_location(target)]}, 'recent_result': recent_result,
             'policy': {'delete_source': bool(values.get('backup', {}).get('delete_source_after_import', False)),
                        'cleanup_cache': True},
-            'cleanup': cleanup_summary(batch_files, bool(values.get('backup', {}).get('delete_source_after_import'))),
+            'cleanup': cleanup_summary(round_files, bool(values.get('backup', {}).get('delete_source_after_import'))),
             'batch': {'id': reporting_id, 'scan_batch_id': batch_id, 'historical': bool(current_round and current_round['historical']),
                       'file_ids': [f['id'] for f in batch_files],
+                      'excluded_preview_files': len(ignored), 'excluded_preview_bytes': sum(f['size'] for f in ignored),
                       'scanned': bool(inventory.get('scanned') and scope_current), 'verified': bool(inventory.get('verified') and scope_current), 'total_files': len(batch_files),
                       'completed_files': sum(f['state'] == 'uploaded' for f in batch_files),
                       'total_bytes': total, 'confirmed_bytes': committed, 'in_flight_bytes': in_flight,
@@ -342,11 +367,14 @@ def snapshot(directory, settings):
                       'unverified_files': sum(f['cache_state'] == 'unverified' for f in batch_files),
                       'import_in_flight_bytes': importing, 'import_percent': 100 * (imported + importing) / total if total else 0,
                       'cached_files': sum(f['cache_available'] and f['state'] != 'uploaded' for f in batch_files)},
-            'totals': {'total_files': len(files), 'uploaded_files': sum(f['state'] == 'uploaded' for f in files),
+            'totals': {'total_files': sum(f['state'] != 'excluded' for f in files),
+                       'excluded_preview_files': sum(f['state'] == 'excluded' for f in files),
+                       'uploaded_files': sum(f['state'] == 'uploaded' for f in files),
                        'uploaded_bytes': sum(f['size'] for f in files if f['state'] == 'uploaded'),
-                       'pending_files': sum(f['state'] != 'uploaded' for f in active_files),
+                       'pending_files': sum(f['state'] not in ('uploaded', 'excluded') for f in active_files),
                        'cache_cleanup_pending': sum(f['state'] == 'uploaded' and bool(f['cache_state'] in ('verified', 'unverified') or f['cache_cleanup_error']) for f in files),
-                       'pending_cleanup': sum(bool(values.get('backup', {}).get('delete_source_after_import')) and f['selected'] and f['imported'] and f['cleanup'] not in ('deleted', 'absent') for f in files)},
+                       'pending_cleanup': all_cleanup['source_pending'],
+                       'pending_preview_cleanup': all_cleanup['preview_pending']},
             'disk': disk, 'files': files, 'last_result': meta.get('last_result'), 'last_error': meta.get('last_error'),
             'temporary_cleanup': temporaries, 'issues': [f for f in active_files if f['error'] or f['cache_cleanup_error'] or f['source_cleanup_error'] or f['cache_state'] == 'unverified'
                 or f['state'] in ('cached', 'staged', 'publishing') and f['cache_state'] == 'missing']}

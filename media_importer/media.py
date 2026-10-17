@@ -26,12 +26,12 @@ def select_groups(groups, scope):
     return [group for group in groups if scope == "all" or group_category(group["members"]) == scope]
 
 
-def selected_file_ids(rows, scope):
+def selected_file_ids(rows, scope, *, include_excluded=False):
     if scope == "all":
-        return {row["id"] for row in rows}
+        return {row["id"] for row in rows if include_excluded or row['state'] != 'excluded'}
     groups = {}
     for row in rows:
         groups.setdefault(row.get("group_id") or row["id"], []).append(row)
     return {row["id"] for members in groups.values()
             if group_category([Asset.from_dict(json.loads(row["asset"])) for row in members]) == scope
-            for row in members}
+            for row in members if include_excluded or row['state'] != 'excluded'}

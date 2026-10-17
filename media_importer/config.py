@@ -45,7 +45,7 @@ def _merge(raw, defaults, prefix=""):
 DEFAULTS = {
     "version": 4,
     "backup": {"enabled": False, "delete_source_after_import": False, "stop_after_current": False,
-               "media_scope": "all", "source_transport": "usb",
+               "media_scope": "all", "source_transport": "usb", "archive_previews": False,
                "poll_seconds": 10, "retry_seconds": 30, "stability_seconds": 2},
     "limits": {"upload_mib_per_second": 0, "min_free_disk_gib": 10, "max_cache_gib": 50},
     "notifications": {"enabled": False, "connection_events": True, "progress_interval_seconds": 300, "keyword": ""},

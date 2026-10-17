@@ -173,7 +173,7 @@ class NotificationWorker:
 
     @staticmethod
     def _complete(rows):
-        return bool(rows) and all(row["state"] == "uploaded" for row in rows)
+        return any(row['state'] == 'uploaded' for row in rows) and all(row['state'] in ('uploaded', 'excluded') for row in rows)
 
     @staticmethod
     def _cleaning(view, batch_id):
@@ -285,13 +285,16 @@ class NotificationWorker:
 
     @staticmethod
     def _completion(rows, view):
-        total = sum(json.loads(row["asset"])["size"] for row in rows)
+        archived = [r for r in rows if r['state'] != 'excluded']
+        total = sum(json.loads(row["asset"])["size"] for row in archived)
         from .status import cleanup_summary
         from .bot_cards import cleanup_text
         live = {f['id']: f for f in view.get('files', [])}
-        files = [{**live.get(r['id'], {}), **r, 'imported': True} for r in rows]
+        files = [{**live.get(r['id'], {}), **r, 'imported': r['state'] != 'excluded'} for r in rows]
         outcome = cleanup_summary(files, view.get('policy', {}).get('delete_source', False))
-        return f"{len(rows)} 个文件 · {_size(total)}\n" + cleanup_text(outcome)
+        ignored = len(rows) - len(archived)
+        return f"{len(archived)} 个文件 · {_size(total)}\n" + cleanup_text(outcome) + (
+            f'\n按设置忽略 {ignored} 个预览文件' if ignored else '')
 
     @staticmethod
     def _card_key(scope, view, credentials):
@@ -392,15 +395,17 @@ class NotificationWorker:
     @staticmethod
     def _completed_view(view, rows):
         result = copy.deepcopy(view)
-        result['batch'] = {'id': rows[0]['batch_id'], 'scanned': True, 'total_files': len(rows),
-                           'total_bytes': sum(json.loads(r['asset'])['size'] for r in rows),
-                           'completed_files': len(rows), 'imported_files': len(rows),
+        archived = [r for r in rows if r['state'] != 'excluded']
+        result['batch'] = {'id': rows[0]['batch_id'], 'scanned': True, 'total_files': len(archived),
+                           'total_bytes': sum(json.loads(r['asset'])['size'] for r in archived),
+                           'excluded_preview_files': len(rows) - len(archived),
+                           'completed_files': len(archived), 'imported_files': len(archived),
                            'percent': 100, 'import_percent': 100}
         result['stages'] = {name: {'phase': 'completed'} for name in ('import', 'upload')}
         result['queues'] = {name: {'pending_files': 0} for name in ('import', 'upload')}
         from .status import cleanup_summary
         live = {f['id']: f for f in view.get('files', [])}
-        result['cleanup'] = cleanup_summary([{**live.get(r['id'], {}), **r, 'imported': True} for r in rows],
+        result['cleanup'] = cleanup_summary([{**live.get(r['id'], {}), **r, 'imported': r['state'] != 'excluded'} for r in rows],
                                             view.get('policy', {}).get('delete_source', False))
         return result
 
@@ -446,7 +451,7 @@ class NotificationWorker:
                 # Prefer the classified stage error; a generic file alert would duplicate it.
                 if not retrying and not any(p["stage"] == stage for p in found.values()):
                     add("source_file" if stage == "import" else "file", "file", stage)
-            if not cleaning_source and item.get("source_cleanup_error") and item.get('selected', True) and view.get("policy", {}).get("delete_source"):
+            if not cleaning_source and item.get("source_cleanup_error") and item.get('cleanup_selected', item.get('selected', True)) and view.get("policy", {}).get("delete_source"):
                 add("source_cleanup", "source", "import")
             if item.get("state") == "uploaded":
                 if item.get("cache_cleanup_error") and view.get("policy", {}).get("cleanup_cache"):

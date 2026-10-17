@@ -50,6 +50,9 @@ def settings_result(changes, applied, stopping):
         detail = ''
     elif 'media_scope' in backup:
         title, detail = '同步内容：' + MEDIA_SCOPES[backup['media_scope']], '已有完整缓存继续上传。'
+    elif 'archive_previews' in backup:
+        title = '归档预览文件已' + ('开启' if backup['archive_previews'] else '关闭')
+        detail = '新一轮生效；已登记任务和完整缓存按原规则处理。'
     elif 'source_transport' in backup:
         title = '连接方式：' + {'usb': 'USB 直连', 'wifi': '手动 Wi-Fi'}[backup['source_transport']]
         detail = '插线并开启相机。' if backup['source_transport'] == 'usb' else '请先在电脑连接相机热点。'
@@ -189,6 +192,12 @@ def cleanup_text(outcome):
         lines.append('原片：' + ' · '.join(source))
     if cache:
         lines.append('缓存：' + ' · '.join(cache))
+    previews = []
+    for key, label in (('preview_deleted', '已随原片清理'), ('preview_absent', '复查不存在'), ('preview_pending', '清理待处理')):
+        if outcome.get(key):
+            previews.append(f"{label} {outcome[key]} 个")
+    if previews:
+        lines.append('预览文件：' + ' · '.join(previews))
     return '\n'.join(lines)
 
 
@@ -205,7 +214,7 @@ def _title(view):
         return '⏳ 传完当前文件后停止', 'blue'
     if round_complete(view):
         pending = view.get('cleanup', {})
-        if pending.get('source_pending') or pending.get('cache_pending') or pending.get('cache_unknown'):
+        if pending.get('source_pending') or pending.get('preview_pending') or pending.get('cache_pending') or pending.get('cache_unknown'):
             return '✅ 已归档 · 清理待处理', 'orange'
         return ('✅ 历史素材已归档' if view.get('batch', {}).get('historical') else '✅ 本轮已归档'), 'green'
     if any(s.get('phase') in ('uploading', 'publishing') for s in view.get('stages', {}).values()):
@@ -219,6 +228,8 @@ def _overview(view):
     result = headline_elements(view)
     result += progress_elements(view)
     result += backlog_elements(view)
+    if view.get('batch', {}).get('excluded_preview_files'):
+        result.append(note(f"按设置忽略 {view['batch']['excluded_preview_files']} 个预览文件，不计入传输数量。"))
     if view.get('cleanup') and round_complete(view):
         text = cleanup_text(view['cleanup'])
         if text:
@@ -350,6 +361,8 @@ def archive_content(view, *, details=False):
         elements.append(markdown(f"**{label}**\n已正式归档 **{recent['archived_files']} / {recent['total_files']}** 个 · {_size(recent.get('total_bytes'))}"))
         if recent['pending_files'] or recent['failed_files']:
             elements.append(paragraph(f"待归档 {recent['pending_files']} 个 · 异常 {recent['failed_files']} 个"))
+        if recent.get('excluded_preview_files'):
+            elements.append(note(f"按设置忽略 {recent['excluded_preview_files']} 个预览文件。"))
         outcome = cleanup_text(recent.get('cleanup', {}))
         if outcome:
             elements.append(paragraph(outcome))

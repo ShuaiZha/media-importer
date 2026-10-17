@@ -24,7 +24,9 @@ def configuration(**backup):
     raw["destination"] = destination_defaults()
     raw["source"].update(url="http://172.21.123.51:8080", serial="C0000000000123")
     raw["destination"].update(host="192.0.2.20", share="media", username="example_user")
-    raw["backup"].update(enabled=True, delete_source_after_import=False)
+    # Legacy fixtures exercise the explicit full-archive option. Preview-policy
+    # tests separately assert the production default and exclusion path.
+    raw["backup"].update(enabled=True, delete_source_after_import=False, archive_previews=True)
     raw["backup"].update(backup)
     raw["backup"]["stability_seconds"] = 0
     raw["limits"]["min_free_disk_gib"] = 0

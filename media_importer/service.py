@@ -586,7 +586,9 @@ class Service:
                 continue
             rows = [self.store.get(key) for key in json.loads(group["members"])]
             if not rows or any(not r or r["group_id"] != group["id"] or
-                               r["state"] not in ("cached", "staged", "publishing", "uploaded") for r in rows):
+                               r["state"] not in ("cached", "staged", "publishing", "uploaded", "excluded") for r in rows):
+                continue
+            if not any(r['state'] != 'excluded' for r in rows):
                 continue
             members = [self.store.asset(r) for r in rows]
             if (any(a.serial != self.config.source["serial"] or a.source_type != self.config.source["type"] for a in members)
@@ -618,10 +620,15 @@ class Service:
                             if group_ids & identities and (identities - group_ids or not group_now["safe"]):
                                 raise SourceError("素材组出现新增成员或关联变化，核对并导入完成后再清理")
                     verify_members(fresh)
+                    previews = {key for group_now in self.source.groups(fresh) for key in group_now.get('preview_ids', [])}
                     for row, asset in zip(rows, members):
                         actual = by_path.get(asset.path)
                         if actual and actual.identity != asset.identity:
                             raise SourceError("同路径素材身份已变化，保留相机文件")
+                        if row['state'] == 'excluded':
+                            if row['role'] != 'preview' or (actual and asset.identity not in previews):
+                                raise SourceError('预览文件关联已变化，保留相机素材并重新核对')
+                            continue
                         if not self.cache_valid(row):
                             if row["state"] != "uploaded" or not row["remote_identity"] or not self.confirmed_final(row, self.destination.stat(row["remote_path"])):
                                 raise CacheUnavailable("素材组缺少可确认的完整副本，保留相机原片")
@@ -633,7 +640,8 @@ class Service:
                         latest = self.source_snapshot()
                         current = {a.path: a for a in latest}
                         if asset.path not in current:
-                            self.store.update(row["id"], cleanup="deleted" if row["cleanup"] == "deleting" else "absent", source_cleanup_error=None)
+                            recorded = self.store.get(row['id'])['cleanup']
+                            self.store.update(row["id"], cleanup="deleted" if recorded in ("deleting", "deleted") else "absent", source_cleanup_error=None)
                             continue
                         if current[asset.path].identity != asset.identity:
                             raise SourceError("删除前素材身份变化，未执行删除")
@@ -674,6 +682,8 @@ class Service:
         assets = self.source_snapshot()
         groups = select_groups(self.source.groups(assets), scope)
         selected = [a for group in groups for a in group["members"]]
+        previews = {key for group in groups for key in group.get('preview_ids', [])}
+        archive_previews = self.store.preview_policy(self.config)
         known = self.rows()
         eligible = selected_file_ids(known, scope)
         available = {a.identity for a in assets}
@@ -692,21 +702,23 @@ class Service:
         additions = [a for a in selected if a.identity not in known_ids]
         batch_id = self.store.get_meta("last_batch")
         prior_batch = self.store.files(batch_id=batch_id) if batch_id else []
-        if previous_scope != scope or any(r["id"] not in eligible for r in prior_batch):
+        if previous_scope != scope or any(r["id"] not in eligible and r['state'] != 'excluded' for r in prior_batch):
             # A scope change creates a view of the remaining selected work, not
             # a mutation of previous mixed batches or their file identities.
             archived = {r["asset_id"] for r in known if r["state"] == "uploaded"}
             remaining = [a for a in selected if a.identity not in archived]
-            batch_id = self.store.batch(self.destination_id, remaining, scope) if remaining else None
+            batch_id = self.store.batch(self.destination_id, remaining, scope, preview_ids=previews, archive_previews=archive_previews) if remaining else None
         elif additions:
-            batch_id = self.store.batch(self.destination_id, additions, scope)
+            batch_id = self.store.batch(self.destination_id, additions, scope, preview_ids=previews, archive_previews=archive_previews)
         elif batch_id and not any(r["destination"] == self.destination_id and self.store.asset(r).serial == self.config.source["serial"]
                                  for r in self.store.files(batch_id=batch_id)):
             batch_id = None
         self.store.status(batch_id=batch_id, inventory={"scanned": True, "verified": False,
                           "batch_id": batch_id, "serial": self.config.source["serial"], "destination": self.destination_id,
                           "checked_at": now(), "source_files": len(assets), "new_files": len(additions),
-                          "media_scope": scope, "selected_files": len(selected), "excluded_files": len(assets) - len(selected)})
+                          "media_scope": scope, "archive_previews": archive_previews,
+                          "selected_files": sum(self.store.get(self.store.file_id(self.destination_id, a))['state'] != 'excluded' for a in selected),
+                          "excluded_files": len(assets) - len(selected)})
         self.store.save_groups(self.destination_id, groups)
         self.store.reporting_run(self.config)
         return {"assets": selected, "batch_id": batch_id}
@@ -717,6 +729,8 @@ class Service:
         rows = {r["asset_id"]: r for r in self.rows()}
         for asset in inventory["assets"]:
             row = rows.get(asset.identity)
+            if row and row['state'] == 'excluded':
+                continue
             if not row or row["state"] not in ("cached", "staged", "publishing", "uploaded"):
                 self.report("waiting_retry", "仍有素材未完整导入；其他完整缓存可继续上传", current_file=None,
                             current_file_id=None, current_bytes=0, current_total_bytes=0)
@@ -778,7 +792,7 @@ class Service:
         batch_rows = self.store.files(batch_id=batch_id) if batch_id else []
         rows = self.rows()
         eligible = selected_file_ids(rows, self.config.backup["media_scope"])
-        pending = [r for r in rows if r["state"] != "uploaded" and
+        pending = [r for r in rows if r["state"] not in ("uploaded", "excluded") and
                    (r["id"] in eligible or r["state"] in ("cached", "staged", "publishing"))]
         if pending:
             stages = state.get("stages", {})
@@ -790,12 +804,14 @@ class Service:
             self.report("idle" if scanned else "waiting_source", "没有待导入素材" if scanned else "等待相机，已有完整缓存可独立上传")
             return {"complete": scanned, "files": 0, "bytes": 0, "reason": None if scanned else "source_offline"}
         self.store.batch_state(batch_id, "uploaded")
-        result = {"complete": True, "batch_id": batch_id, "files": len(batch_rows),
-                  "bytes": sum(self.store.asset(r).size for r in batch_rows), "finished_at": now()}
+        transferred = [r for r in batch_rows if r['state'] != 'excluded']
+        result = {"complete": True, "batch_id": batch_id, "files": len(transferred),
+                  "excluded_preview_files": len(batch_rows) - len(transferred),
+                  "bytes": sum(self.store.asset(r).size for r in transferred), "finished_at": now()}
         result["cleanup"] = "归档完成；相机原片按导入清理设置处理"
         current = self.store.files(batch_id=batch_id)
         result["cleanup_pending"] = sum(r["cleanup"] not in ("deleted", "absent") for r in current)
-        result["complete"] = all(r["state"] == "uploaded" for r in current)
+        result["complete"] = all(r["state"] in ("uploaded", "excluded") for r in current)
         previous = self.store.get_meta("last_result", {})
         if previous.get("batch_id") == batch_id and previous.get("complete"):
             result["finished_at"] = previous["finished_at"]

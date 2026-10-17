@@ -67,7 +67,7 @@ class Settings:
         return self.update_preferences({"backup": {"enabled": enabled}})
 
     def update_preferences(self, changes, expected=None):
-        allowed = {"backup": {"enabled", "delete_source_after_import", "stop_after_current", "media_scope", "source_transport"},
+        allowed = {"backup": {"enabled", "delete_source_after_import", "stop_after_current", "media_scope", "source_transport", "archive_previews"},
                    "limits": {"upload_mib_per_second", "min_free_disk_gib", "max_cache_gib"},
                    "notifications": {"enabled", "connection_events", "progress_interval_seconds", "keyword"}}
         if not isinstance(changes, dict) or not changes:
