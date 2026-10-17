@@ -13,6 +13,7 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 from ..paths import safe_relative
 from ..model import Asset, SourceError, SourceConnectionError, SourceBlocked, Cancelled, now, device_directory
+from .gopro_models import compatibility, model_key
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -31,7 +32,7 @@ class _Links(HTMLParser):
 
 
 
-def make_asset(serial, path, size, created, modified, gumi, primary, parent_gumi="", device_name="HERO9"):
+def make_asset(serial, path, size, created, modified, gumi, primary, parent_gumi="", device_name="GoPro"):
     # GUMI and the camera timestamps define the source's stable material identity.
     payload = {"serial": serial, "path": path, "size": size, "created": created,
                "modified": modified, "gumi": gumi, "primary": primary, "parent_gumi": parent_gumi}
@@ -52,11 +53,13 @@ def validate(values):
     if values["transport"] != "usb":
         raise ConfigError("当前仅支持 USB；请将 SOURCE_TRANSPORT 设为 usb")
     for key in ("url",):
+        if not values[key]:
+            continue  # USB discovery supplies the address before confirmation.
         url = urlsplit(values[key])
         if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in ("", "/"):
             raise ConfigError(f"source.{key} 必须是包含协议和端口的相机地址，不含路径或凭据")
         values[key] = values[key].rstrip("/")
-    if not values["serial"].isalnum():
+    if values["serial"] and not values["serial"].isalnum():
         raise ConfigError("source.serial 必须填写相机序列号")
     if values["timeout_seconds"] < 1:
         raise ConfigError("source.timeout_seconds 必须至少为 1")
@@ -73,6 +76,7 @@ class GoProSource:
         self.timeout = config.source["timeout_seconds"]
         self.stop = stop
         self.device_name = "Camera"
+        self.compatibility = compatibility('')
         self.opener = build_opener(_NoRedirect())
         self.attempts = config.source.get("request_attempts", 3)
 
@@ -127,6 +131,7 @@ class GoProSource:
             parent = group["members"][0]
             match = re.fullmatch(r"(G[HX])(\d{2})(\d{4})\.MP4", PurePosixPath(parent.path).name, re.I)
             key = (parent.serial, str(PurePosixPath(parent.path).parent), match[1].upper(), match[3], parent.created) if (
+                model_key(parent.device_name) == 'HERO9' and
                 parent.metadata.get("primary") and match and int(match[2]) > 0 and parent.created) else (group["id"],)
             if key not in recordings:
                 recordings[key] = []
@@ -216,6 +221,8 @@ class GoProSource:
             raise SourceError(f"相机返回的数据无效: {exc}") from exc
 
     def identify(self):
+        if not self.base or not self.serial:
+            raise SourceError('等待发现并确认 USB 相机')
         info = self.info()
         if info.get("serial_number") != self.serial:
             raise SourceError("相机序列号与配置不符，不处理这台设备")
@@ -228,9 +235,10 @@ class GoProSource:
                 or not info["serial_number"].isalnum() or not isinstance(info.get("model_name"), str)):
             raise SourceError("相机身份响应无效")
         self.device_name = re.sub(r"\s+Black$", "", info["model_name"], flags=re.IGNORECASE).strip()
+        self.compatibility = compatibility(info['model_name'], info.get('firmware_version', ''))
         return {**{key: info.get(key) for key in ("model_name", "serial_number", "firmware_version")},
                 "archive_directory": device_directory(self.device_name, info["serial_number"]),
-                "transport": self.transport}
+                "transport": self.transport, "compatibility": self.compatibility}
 
     @classmethod
     def probe(cls, url):
@@ -395,7 +403,8 @@ class GoProSource:
         try:
             return self._json("/gopro/media/info?" + urlencode({"path": safe_relative(path)}, safe="/"))
         except SourceError as exc:
-            if not (isinstance(exc.__cause__, HTTPError) and exc.__cause__.code == 404
+            if not (self.compatibility['chapter_metadata_fallback'] and
+                    isinstance(exc.__cause__, HTTPError) and exc.__cause__.code == 404
                     and PurePosixPath(path).suffix.lower() == ".mp4"):
                 raise
             return self._mp4_media_info(path)
@@ -578,6 +587,8 @@ class GoProSource:
 
     def delete(self, asset):
         self.verify_primary(asset)
+        if not self.compatibility['delete_verified']:
+            raise SourceError('此型号或固件尚未验证原片删除，保留相机文件')
         try:
             with self._open("/gopro/media/delete/file?" + urlencode({"path": asset.path}, safe="/")) as response:
                 if response.status != 200:

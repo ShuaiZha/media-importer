@@ -35,8 +35,8 @@ def connections():
     return {
         "source": {
             "type": text(env, "SOURCE_TYPE", "gopro"),
-            "url": text(env, "SOURCE_URL", required=True),
-            "serial": text(env, "SOURCE_SERIAL", required=True),
+            "url": text(env, "SOURCE_URL"),
+            "serial": text(env, "SOURCE_SERIAL"),
             "timeout_seconds": number(env, "SOURCE_TIMEOUT_SECONDS", 20),
             "transport": text(env, "SOURCE_TRANSPORT", "usb"),
             "request_attempts": number(env, "SOURCE_REQUEST_ATTEMPTS", 3, integer=True),

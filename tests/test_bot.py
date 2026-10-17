@@ -128,9 +128,9 @@ class BotTests(unittest.TestCase):
             response = self.bot.panel(page)
             self.assertTrue(response['config']['update_multi'])
             buttons = [button for e in response['elements'] if e['tag'] == 'action' for button in e['actions']]
-            self.assertIn('刷新', [b['text']['content'] for b in buttons])
-            self.assertTrue(all(b['text']['content'] in ('刷新', '检查连接', '连接详情', '文件详情', '查看待处理') for b in buttons))
-            refresh = next(b for b in buttons if b['text']['content'] == '刷新')
+            self.assertIn('刷新状态', [b['text']['content'] for b in buttons])
+            self.assertTrue(all(b['text']['content'] in ('刷新状态',) for b in buttons))
+            refresh = next(b for b in buttons if b['text']['content'] == '刷新状态')
             with self.bot.db() as db:
                 payload = json.loads(db.execute('SELECT payload FROM bot_actions WHERE token=?',
                                                (refresh['value']['token'],)).fetchone()[0])
@@ -142,17 +142,17 @@ class BotTests(unittest.TestCase):
         for label in ('运行总览', '设备与存储', '当前任务'):
             self.bot.receive_message(self.message(label, event_id=label))
             self.assertTrue(self.bot.process_one())
-            self.assertIn('服务待检查', self.sender.call_args.args[1]['header']['title']['content'])
+            self.assertIn('服务未响应', self.sender.call_args.args[1]['header']['title']['content'])
         self.assertEqual(before, self.path.read_bytes())
         self.assertEqual([], self.store.files())
 
     def test_refresh_replaces_the_clicked_message_and_retry_does_not_send_a_new_one(self):
         before = self.path.read_bytes()
-        value = next(b['value'] for b in self.bot.panel('devices')['elements'][-1]['actions'] if b['text']['content'] == '刷新')
+        value = next(b['value'] for b in self.bot.panel('devices')['elements'][-1]['actions'] if b['text']['content'] == '刷新状态')
         event = self.callback(value)
         event['event']['context'] = {'open_message_id': 'om_status_test'}
         reply = self.bot.receive_card(event)
-        self.assertIn('刷新此卡片', reply['toast']['content'])
+        self.assertIn('正在更新状态', reply['toast']['content'])
         self.bot.receive_card(event)
         self.updater.side_effect = [OSError('offline'), None]
         self.assertFalse(self.bot.process_one())
@@ -164,11 +164,11 @@ class BotTests(unittest.TestCase):
         self.sender.assert_not_called()
         self.assertEqual(2, self.updater.call_count)
         self.assertEqual('om_status_test', self.updater.call_args.args[1])
-        self.assertIn('服务待检查', self.updater.call_args.args[2]['header']['title']['content'])
+        self.assertIn('服务未响应', self.updater.call_args.args[2]['header']['title']['content'])
         self.assertEqual(before, self.path.read_bytes())
 
     def test_refresh_requires_a_valid_original_message_and_owner(self):
-        value = next(b['value'] for b in self.bot.panel()['elements'][-1]['actions'] if b['text']['content'] == '刷新')
+        value = next(b['value'] for b in self.bot.panel()['elements'][-1]['actions'] if b['text']['content'] == '刷新状态')
         for message_id in (None, 'https://example.invalid', 'om_bad/other'):
             event = self.callback(value)
             event['event']['context'] = {'open_message_id': message_id}
@@ -211,7 +211,7 @@ class BotTests(unittest.TestCase):
             name: {'phase': 'paused', 'message': '同步关闭，任务与缓存保留'}
             for name in ('import', 'upload')})
         text = json.dumps(self.bot.panel(), ensure_ascii=False)
-        self.assertIn('等待新素材', text)
+        self.assertIn('设置等待生效', text)
         self.assertNotIn('同步关闭，任务与缓存保留', text)
 
     def test_settings_apply_acknowledges_and_updates_original_card_without_resave(self):

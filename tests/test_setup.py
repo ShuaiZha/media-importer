@@ -50,6 +50,16 @@ class SetupTests(unittest.TestCase):
             wizard.setup(self.root, read=lambda _: self.fail('must not ask credentials'))
         self.assertEqual('keep-this', (self.root / '.env').read_text())
 
+    def test_first_install_can_defer_camera_to_usb_discovery(self):
+        answers = iter(['', './cache', 'storage.example.com', '', 'media', '', 'backup', '',
+                        'cli_EXAMPLE00000000', 'ou_EXAMPLE00000000'])
+        with patch('builtins.print'):
+            wizard.setup(self.root, read=lambda _: next(answers), hidden=lambda _: 'example-secret',
+                         probe=lambda _: self.fail('empty hint must not make a request'), checks=None)
+        values = dotenv_values(self.root / '.env', interpolate=False)
+        self.assertEqual('', values['SOURCE_URL'])
+        self.assertEqual('', values['SOURCE_SERIAL'])
+
     def test_missing_external_disk_does_not_create_fallback(self):
         with patch.object(wizard.sys, 'platform', 'darwin'), patch.object(Path, 'is_mount', return_value=False):
             with self.assertRaises(ValueError):

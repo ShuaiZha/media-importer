@@ -29,8 +29,8 @@ DELIVERY_ERRORS = {
     "notification_card_unavailable": "原进度卡已撤回或超过可更新期限，下次进度通知将使用新卡片。",
 }
 PROBLEMS = {
-    'transfer_stalled': ('传输无进展，正在恢复', '本次尝试已取消，程序会重建连接；完整缓存和已归档文件保留。'),
-    "network": ("连接暂时不可用", "检查网络和目的地连接，恢复后自动重试；完整缓存保留。"),
+    'transfer_stalled': ('传输中断 · 自动重试', '传输长时间没有进展，程序正在重建连接。完整缓存和已归档文件保留。'),
+    "network": ("存储连接暂时不可用", "上传等待连接恢复，完整缓存保留。请检查存储网络，程序将自动重试。"),
     "source_network": ("相机连接暂时不可用", "检查相机是否开机、USB 线与 USB 网络是否可用。程序会自动重试，完整缓存继续上传。"),
     "authentication": ("目的地认证失败", "检查目的地账号和密码，修改后测试连接；完整缓存保留。"),
     "permission": ("目的地权限不足", "检查共享目录的访问、写入和改名权限；完整缓存保留。"),
@@ -39,11 +39,11 @@ PROBLEMS = {
     "destination_full": ("目的地空间不足", "释放目的地空间或调整配额；完整缓存会保留，程序会自动重试。"),
     "cache_capacity": ("缓存空间或额度不足", "等待上传释放空间，或调整缓存额度及磁盘预留；暂停新导入。"),
     "cache_unavailable": ("缓存盘不可用", "连接原缓存盘并检查挂载和读写权限；两路传输会等待恢复。"),
-    "source_state": ("源设备暂时无法读取", "等待录像结束、设备就绪或温度告警解除；完整缓存可继续上传。"),
+    "source_state": ("相机暂时无法读取", "等待录像结束、设备就绪或温度告警解除；完整缓存可继续上传。"),
     "source_file": ("源文件导入失败", "检查源设备和存储卡；失败文件会自动重试，其他可处理文件继续。"),
     "file": ("文件传输失败", "失败文件会自动重试，其他文件继续；具体原因见本机日志。"),
-    "source_cleanup": ("已导入，原片清理待处理", "完整缓存继续上传；检查相机连接，具体原因见本机日志。"),
-    "cache_cleanup": ("已归档，缓存清理待处理", "已归档素材不会重复上传；检查缓存盘连接和写入权限。"),
+    "source_cleanup": ("本地导入完成 · 原片清理待处理", "完整缓存可继续上传。请检查相机连接，具体原因见本机日志。"),
+    "cache_cleanup": ("归档完成 · 缓存清理待处理", "已归档素材不会重复上传。请检查缓存盘连接和写入权限。"),
     "cache_verification": ("完整缓存需要核验", "请检查原缓存盘；停止同步后按维护文档在本机核验。缺失文件需从原片或备份恢复。"),
 }
 
@@ -94,8 +94,10 @@ def freeze_completion(db, config, run, rows, *, create):
         return
     if not create and saved and saved['state'] == 'sent':
         return
-    view = {'policy': {'delete_source': config.backup['delete_source_after_import']},
+    from .source_connection import deletion_enabled
+    view = {'policy': {'delete_source': deletion_enabled(config, _meta(db, 'source_selection', {}))},
             'files': [{**r, 'cache_state': 'missing'} for r in rows]}
+    result = NotificationWorker._completion_result(rows, view)
     text = NotificationWorker._completion(rows, view)
     locations = sorted({archive_location(config.destination, str(PurePosixPath(r['remote_path']).parent))
                         for r in rows if r['remote_path']})
@@ -105,7 +107,7 @@ def freeze_completion(db, config, run, rows, *, create):
     if saved and saved['state'] == 'sent' and (not previous.get('id') or
             previous.get('signature') == _digest([text, locations]) and not any(not p.get('finished') for p in pending_progress)):
         return
-    payload = {'title': '素材导入助手 · 归档完成', 'text': text, 'locations': locations,
+    payload = {'title': '素材导入助手 · 归档完成', 'text': text, 'result': result, 'locations': locations,
                'progress_messages': [{'id': p['message_id'], 'recipient': p['recipient']} for p in pending_progress],
                'update_message_id': previous.get('id'), 'update_recipient': previous.get('recipient')}
     db.execute('''INSERT INTO notification_events (id,kind,scope,batch_id,payload,state,created_at,detached)
@@ -147,8 +149,8 @@ def send_test(settings, directory):
         adapter = notification_adapter("feishu")
         from .bot_cards import event_card
         adapter.send_card(settings.notification_credentials(), event_card(
-            'test', '素材导入助手 · 测试通知',
-            '开启通知和同步后，进度将定时更新到同一张卡片，归档完成和失败会单独提醒。', {},
+            'test', '素材导入助手 · 通知测试',
+            '通知通道已验证。同步开启后，进度按设置更新，完成与异常单独通知。', {},
             keyword=options.get('keyword', ''), updated_at=_stamp()))
     except Exception as exc:
         code, message = _safe_failure(exc)
@@ -186,6 +188,7 @@ def _digest(value):
 class NotificationWorker:
     def __init__(self, directory, settings, stop, *, sender=None, updater=None, snapshotter=None, clock=None):
         self.directory, self.settings, self.stop = Path(directory), settings, stop
+        self.settings.directory = self.directory
         self.sender, self.snapshotter, self.clock = sender, snapshotter, clock or time.time
         self.updater = updater
 
@@ -248,6 +251,10 @@ class NotificationWorker:
                               batch_id=batch_id, state="suppressed")
 
     def _observe_connection(self, db, scope, values, view, stamp):
+        if _meta(db, 'source_connection'):
+            # Discovery confirmations replace duplicate connection notices.
+            db.execute("UPDATE notification_events SET state='cancelled' WHERE kind IN ('connected','disconnected') AND state='pending'")
+            return
         """Track fresh, identity-checked observations, separately from sync.
 
         One successful identity check announces a connection. Disconnection
@@ -301,7 +308,7 @@ class NotificationWorker:
             db.execute("UPDATE notification_events SET state='cancelled' WHERE kind IN ('connected','disconnected') AND state='pending'")
             kind = 'connected' if online else 'disconnected'
             mode = 'USB 直连'
-            title = '素材导入助手 · 相机已连接' if online else '素材导入助手 · 相机连接已断开'
+            title = '素材导入助手 · 相机连接已建立' if online else '素材导入助手 · 相机连接不可用'
             text = mode + (' · 已核对相机身份' if online else ' · 暂时无法访问相机')
             key = 'connection:' + scope + ':' + state['episode'] + ':' + str(state['sequence'])
             self._enqueue(db, key, kind, scope, title, text, stamp)
@@ -327,17 +334,23 @@ class NotificationWorker:
         return _digest(signature), "\n".join(lines)
 
     @staticmethod
-    def _completion(rows, view):
+    def _completion_result(rows, view):
+        """Keep completion facts independent of a later round or retired tasks."""
         archived = [r for r in rows if r['state'] != 'excluded']
         total = sum(json.loads(row["asset"])["size"] for row in archived)
         from .status import cleanup_summary
-        from .bot_cards import cleanup_text
         live = {f['id']: f for f in view.get('files', [])}
         files = [{**live.get(r['id'], {}), **r, 'imported': r['state'] != 'excluded'} for r in rows]
         outcome = cleanup_summary(files, view.get('policy', {}).get('delete_source', False))
-        ignored = len(rows) - len(archived)
-        return f"{len(archived)} 个文件 · {_size(total)}\n" + cleanup_text(outcome) + (
-            f'\n按设置忽略 {ignored} 个预览文件' if ignored else '')
+        return {'file_count': len(archived), 'byte_count': total, 'cleanup': outcome,
+                'ignored_preview_files': len(rows) - len(archived)}
+
+    @staticmethod
+    def _completion(rows, view):
+        from .bot_cards import cleanup_text
+        result = NotificationWorker._completion_result(rows, view)
+        return f"{result['file_count']} 个文件 · {_size(result['byte_count'])}\n" + cleanup_text(
+            result['cleanup'], result['ignored_preview_files'])
 
     @staticmethod
     def _card_key(scope, view, credentials):
@@ -590,7 +603,7 @@ class NotificationWorker:
                             and view.get('unplug', {}).get('ready') and view.get('unplug', {}).get('can_disconnect', True)
                             and not self._cleaning(view, batch_id)):
                         self._enqueue(db, "imported:" + scope + ":" + batch_id, "imported", scope,
-                                      "素材导入助手 · 相机导入完成",
+                                      "素材导入助手 · 本地导入完成",
                                       "素材已完整导入。", stamp, batch_id=batch_id)
                 active = any(stage.get("phase") in ("downloading", "uploading") and
                              not view.get("controls", {}).get(name, {}).get("requested_stop", False)
@@ -676,7 +689,7 @@ class NotificationWorker:
             return
         try:
             content = event_card('completed', '归档完成', text, view, keyword=options.get('keyword', ''),
-                                 updated_at=_stamp(stamp), locations=locations)
+                                 updated_at=_stamp(stamp), locations=locations, result=self._completion_result(rows, view))
             content['config']['update_multi'] = True
             if self.settings.notification_credentials().get('receive_id_type') == 'open_id':
                 from .bot import Bot
@@ -759,7 +772,7 @@ class NotificationWorker:
         previous.update(peaks=peaks, archived=archived, round=view.get('batch', {}).get('id'))
         if stamp - previous['progress_at'] >= BACKLOG_DELAY and not previous.get('event_id'):
             event_id = 'backlog:' + scope + ':' + str(previous['progress_at'])
-            self._enqueue(db, event_id, 'backlog', scope, '素材导入助手 · 缓存长时间未归档',
+            self._enqueue(db, event_id, 'backlog', scope, '素材导入助手 · 归档进度长时间未更新',
                           '已连续 6 小时没有上传进展。请检查目的地和网络，并保持缓存盘连接；不会清理未归档的完整缓存。', stamp)
             previous['event_id'] = event_id
         state['backlog'] = previous
@@ -810,6 +823,7 @@ class NotificationWorker:
                         self._reconcile_delivery(db, options, stamp)
                     continue
                 payload["text"] = self._completion(current, view)
+                payload['result'] = self._completion_result(current, view)
             elif row['kind'] == 'imported':
                 if row['batch_id'] != view.get('batch', {}).get('id'):
                     with db:
@@ -843,12 +857,12 @@ class NotificationWorker:
                 locations = payload['locations'] if row['detached'] else sorted({archive_location(latest['destination'], str(PurePosixPath(r['remote_path']).parent))
                                     for r in current if r.get('remote_path')})
                 content = event_card(row['kind'], payload['title'], payload['text'], view,
-                                     keyword=options.get('keyword', ''), updated_at=_stamp(stamp), locations=locations)
+                                     keyword=options.get('keyword', ''), updated_at=_stamp(stamp), locations=locations,
+                                     result=payload.get('result'))
                 if row['kind'] in ('completed', 'imported') and self.settings.notification_credentials().get('receive_id_type') == 'open_id':
                     from .bot import Bot
                     bot = Bot(self.settings, self.directory)
-                    content['elements'].append(bot.buttons(bot.button('查看状态' if row['kind'] == 'completed' else '查看进度',
-                        {'panel': 'tasks' if row['kind'] == 'completed' else 'status'})))
+                    content['elements'].append(bot.buttons(bot.button('查看状态', {'panel': 'status'})))
                     content['config']['update_multi'] = True
                 if row['kind'] in ('failed', 'backlog') and self.settings.notification_credentials().get('receive_id_type') == 'open_id':
                     from .bot import Bot

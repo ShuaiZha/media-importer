@@ -10,6 +10,7 @@ from .liveness import Activity, CombinedStop
 from .runtime import Reconfigure, SyncDisabled
 from .storage import require_cache
 from .store import Store
+from .source_connection import ConfirmationRequired
 
 
 def transfer(service):
@@ -131,6 +132,11 @@ def transfer(service):
                                         current_file_id=None, current_bytes=0, current_total_bytes=0, issue=None)
                 except Cancelled:
                     raise
+                except ConfirmationRequired as exc:
+                    inventory, verified = None, False
+                    task.report('waiting_confirmation', str(exc), issue=None, current_file=None,
+                                current_file_id=None, current_bytes=0, current_total_bytes=0,
+                                speed_bytes_per_second=0, eta_seconds=None)
                 except CacheFull as exc:
                     task.report("waiting_cache", str(exc), issue={"code": "cache_capacity", "message": str(exc),
                                 "action": "等待上传释放缓存，或调整缓存额度和磁盘预留空间", "scope": "cache", "stage": stage})

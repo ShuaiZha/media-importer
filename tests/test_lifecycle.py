@@ -159,6 +159,9 @@ class LifecycleTests(unittest.TestCase):
         saved = self.store.db.execute("SELECT * FROM notification_events WHERE kind='completed'").fetchone()
         self.assertEqual(1, saved['detached'])
         self.assertNotIn('100GOPRO', saved['payload'])
+        frozen = json.loads(saved['payload'])['result']
+        self.assertEqual(2, frozen['file_count'])
+        self.assertEqual(2, frozen['cleanup']['cache_cleared'])
         scope = _digest([service.config.destination_id, self.config.source['type'], self.config.source['serial']])
         values['backup']['enabled'] = False
         with _database(self.store.directory) as db:
@@ -169,6 +172,7 @@ class LifecycleTests(unittest.TestCase):
             worker._send_pending(db, scope, values['notifications'], time.time() + 60, {})
             worker._send_pending(db, scope, values['notifications'], time.time() + 120, {})
         worker.sender.assert_called_once()
+        self.assertIn('**2 个文件**', json.dumps(worker.sender.call_args.args[1], ensure_ascii=False))
         self.assertEqual(0, self.store.db.execute('SELECT count(*) FROM notification_events').fetchone()[0])
 
     def test_old_completed_round_does_not_replay_completion_on_upgrade(self):

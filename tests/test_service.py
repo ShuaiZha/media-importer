@@ -37,7 +37,7 @@ def footage(index=1, primary=True, gumi=None):
     return Asset("C0000000000123", f"100GOPRO/{'GH' if primary else 'GL'}01{index:04d}.{'MP4' if primary else 'LRV'}",
                  32 if primary else 12, "1791919163", "Tue, 13 Oct 2026 19:19:28 GMT",
                  (gumi if gumi is not None else f"gumi-{index}") if primary else "", primary,
-                 "" if primary else f"gumi-{index}")
+                 "" if primary else f"gumi-{index}", device_name='HERO9')
 
 
 def replace(asset, **changes):

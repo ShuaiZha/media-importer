@@ -1,0 +1,157 @@
+"""One connected camera, one explicit approval; no permanent device allow-list."""
+import json
+import sqlite3
+import time
+import uuid
+from pathlib import Path
+
+from .model import ConfigError, SourceBlocked, now
+
+
+KEY = 'source_connection'
+
+
+class ConfirmationRequired(SourceBlocked):
+    pass
+
+
+def read(directory, key=KEY):
+    path = Path(directory) / 'state.sqlite3'
+    if not path.is_file():
+        return {}
+    db = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)
+    try:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone():
+            return {}
+        row = db.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
+        return json.loads(row[0]) if row else {}
+    finally:
+        db.close()
+
+
+def selected(directory, source):
+    binding = read(directory, 'source_selection')
+    if not binding or binding.get('type') != source['type']:
+        return source
+    return {**source, 'url': binding['url'], 'serial': binding['serial_number']}
+
+
+def fresh(state, stamp=None):
+    stamp = time.time() if stamp is None else stamp
+    return bool(state.get('online') and 0 <= stamp - state.get('last_seen', 0) <= 45)
+
+
+def deletion_enabled(config, selection):
+    """Keep the user's preference; unverified selected devices retain originals."""
+    same = (selection.get('serial_number') == config.source['serial'] and
+            selection.get('type') == config.source['type'])
+    return bool(config.backup['delete_source_after_import'] and
+                (not same or selection.get('compatibility', {}).get('delete_verified', False)))
+
+
+def reason(store, config, *, deleting=False):
+    state = store.get_meta(KEY, {})
+    if not state:  # Low-level library tests/maintenance have no discovery session.
+        return None
+    device = state.get('device', {})
+    if (state.get('state') != 'approved' or not fresh(state) or
+            device.get('serial_number') != config.source['serial'] or device.get('url') != config.source['url']):
+        return '等待飞书确认当前相机；已有完整缓存可继续上传'
+    if deleting and not device.get('compatibility', {}).get('delete_verified'):
+        return '此型号或固件尚未验证原片删除，当前保留原片'
+    return None
+
+
+def require(store, config):
+    waiting = reason(store, config)
+    if waiting:
+        raise ConfirmationRequired(waiting)
+
+
+def observe(store, device, stamp=None):
+    """Preserve decisions across successful probes; revoke after sustained loss."""
+    stamp = time.time() if stamp is None else stamp
+    with store.db:
+        store.db.execute('BEGIN IMMEDIATE')
+        state = store.get_meta(KEY, {})
+        old = state.get('device', {})
+        if device:
+            identity = lambda d: tuple(d.get(k) for k in ('type', 'serial_number', 'model_name', 'firmware_version', 'url'))
+            if state.get('state') in ('searching', 'offline', None) or identity(old) != identity(device):
+                state = {'id': uuid.uuid4().hex, 'state': 'pending', 'device': device, 'created_at': now()}
+                status = store.get_meta('status', {})
+                if status:
+                    status['inventory'] = {**status.get('inventory', {}), 'scanned': False, 'verified': False,
+                                           'invalidated_reason': '相机连接变化，确认后重新扫描'}
+                    store.db.execute("UPDATE meta SET value=? WHERE key='status'", (json.dumps(status),))
+            state.update(device=device, online=True, last_seen=stamp, failures=0, missing_since=None)
+        elif old:
+            state['failures'] = state.get('failures', 0) + 1
+            state['missing_since'] = state.get('missing_since') or stamp
+            if state['failures'] >= 3 and stamp - state['missing_since'] >= 20:
+                state.update(state='offline', online=False)
+        else:
+            state = {'state': 'searching', 'online': False}
+        store.db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', (KEY, json.dumps(state)))
+    return state
+
+
+def decide(store, settings, session_id, accept):
+    """Only called by authenticated, deduplicated bot jobs; stale cards do nothing."""
+    with store.db:
+        store.db.execute('BEGIN IMMEDIATE')
+        state = store.get_meta(KEY, {})
+        if state.get('id') != session_id or not fresh(state) or state.get('state') == 'offline':
+            raise ConfigError('相机连接已变化，请通过状态菜单重新确认')
+        if state.get('state') == 'approved':
+            if not accept:
+                raise ConfigError('本次连接已经确认；如需停止传输，请使用“停止同步”')
+            return False  # Replaying a confirmation must never re-enable stopped sync.
+        if not accept:
+            state['state'] = 'declined'
+        else:
+            device = state['device']
+            if not device['compatibility']['import_supported']:
+                raise ConfigError('此型号尚未适配，未开启备份')
+            # One active camera only. Do not strand another camera's unfinished work.
+            for row in store.files():
+                asset = store.asset(row)
+                if asset.serial != device['serial_number']:
+                    raise ConfigError('另一台相机仍有传输或清理事项，请先完成原任务后再切换设备')
+            # Save the switch first. A crash before committing approval remains gated.
+            settings.set_enabled(True)
+            state['state'] = 'approved'
+            state['approved_at'] = now()
+            store.db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)',
+                             ('source_selection', json.dumps(device)))
+        store.db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', (KEY, json.dumps(state)))
+    return True
+
+
+def run(directory, settings, stop):
+    from .store import Store
+    from .adapters.gopro_discovery import discover, usb_url
+    store = Store(directory)
+    scan_at = 0
+    try:
+        while not stop.is_set():
+            item = settings.read()
+            if item.get('error'):
+                stop.wait(5)
+                continue
+            source = item['config']['source']
+            hint = item.get('source_hint', source)
+            state = store.get_meta(KEY, {})
+            hints = [state.get('device', {}).get('url'), source['url'], hint['url'],
+                     usb_url(hint['serial']), usb_url(source['serial'])]
+            device = discover(hints, stop)
+            state = observe(store, device)
+            # Publish loss before slower discovery, so old approval expires promptly.
+            if not device and state.get('state') in ('searching', 'offline') and time.monotonic() >= scan_at:
+                found = discover([], stop, scan=True)
+                scan_at = time.monotonic() + 60
+                if found:
+                    observe(store, found)
+            stop.wait(min(10, item['config']['backup']['poll_seconds']))
+    finally:
+        store.close()

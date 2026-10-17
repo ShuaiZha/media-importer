@@ -54,6 +54,10 @@ def run(settings, store, stop=None):
         checks["cache"] = item("waiting", cache["reason"])
 
     def source_check():
+        from .source_connection import read, fresh
+        connection = read(store.directory)
+        if connection and (connection.get('state') != 'approved' or not fresh(connection)):
+            return item('waiting', '等待发现 USB 相机并在飞书确认；完整缓存可继续上传')
         source = create_source(config, stop)
         source.identify()  # The adapter verifies the bound serial number.
         if hasattr(source, "telemetry"):
@@ -97,7 +101,7 @@ def run(settings, store, stop=None):
                     checks[name] = item("waiting" if getattr(exc, "code", "") == "notification_network" else "error", _safe_failure(exc)[1])
                 elif name == "source":
                     connection = "USB 网络"
-                    checks[name] = item("waiting", f"相机不可访问或身份不符；检查开机、{connection}与绑定序列号，完整缓存可继续上传")
+                    checks[name] = item("waiting", f"等待相机连接与身份确认；检查开机和{connection}，完整缓存可继续上传")
                 else:
                     issue = describe(exc, "upload")
                     checks[name] = item("waiting" if issue["code"] == "network" else "error", issue["action"])

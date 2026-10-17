@@ -91,8 +91,11 @@ class Control:
 
 def daemon(config_path, directory, stop):
     from .service import Service
-    control = Control(Settings(config_path), stop)
+    control = Control(Settings(config_path, directory), stop)
     store = Store(directory)
+    # Approval belongs to this running connection session, never to an old card.
+    from .source_connection import KEY as connection_key, run as discover_sources
+    store.set_meta(connection_key, {'state': 'searching', 'online': False})
     from .storage import initialize_cache
     initialize_cache(store)
     store.invalidate_inventory("服务重启后需重新核对相机清单")
@@ -123,6 +126,7 @@ def daemon(config_path, directory, stop):
             control.changed.set()
             db.close()
     watcher = workers.start('settings-and-heartbeat', observe)
+    discoverer = workers.start('usb-discovery', lambda: discover_sources(directory, control.settings, stop))
     def notify():
         from .notifications import NotificationWorker
         NotificationWorker(directory, control.settings, stop).run()
@@ -188,6 +192,7 @@ def daemon(config_path, directory, stop):
         stop.set()
         control.changed.set()
         watcher.join(timeout=3)
+        discoverer.join(timeout=15)
         notifier.join(timeout=35)
         maintainer.join(timeout=35)
         store.set_meta("service", {"running": False, "stopped_at": now()})

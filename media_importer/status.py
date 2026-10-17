@@ -79,7 +79,7 @@ def attention(live, enabled, configuration, health, files, stages):
     if any(f['cache_state'] == 'unverified' and f['state'] == 'uploaded' for f in files):
         return {'required': True, 'message': '需要处理：已归档文件的残留缓存身份不符，已保留待核验；归档完成数量不受影响。'}
     if not health['cache']['available']:
-        return {'required': True, 'message': '需要处理：请接回原缓存盘并检查 Docker 挂载；不会改用内置磁盘。'}
+        return {'required': True, 'message': '需要处理：请连接原缓存盘并检查 Docker 挂载；两路传输等待缓存恢复。'}
     missing = [f for f in files if f['state'] in ('cached', 'staged', 'publishing') and f['cache_state'] == 'missing']
     if missing:
         return {'required': True, 'message': f'需要处理：{len(missing)} 个已记录的缓存文件缺失，请检查原缓存盘；尚未归档的原片请保留。'}
@@ -98,6 +98,7 @@ def attention(live, enabled, configuration, health, files, stages):
 
 
 def snapshot(directory, settings):
+    settings.directory = Path(directory)
     item = settings.read()
     config = Config.from_values(item['config']) if item['config'] else None
     path = Path(directory) / 'state.sqlite3'
@@ -250,6 +251,9 @@ def snapshot(directory, settings):
                         'ready_files': len(ready_files), 'ready_bytes': sum(f['size'] for f in ready_files),
                         'remaining_bytes': max(0, remaining), 'eta_seconds': max(0, remaining) / speed if speed else None,
                         'failed_files': sum(bool(f['error']) and f['error_stage'] == name for f in waiting)}
+    from .source_connection import fresh
+    connection = meta.get('source_connection', {})
+    approved = not connection or connection.get('state') == 'approved' and fresh(connection)
     health = {'cache': cache_health}
     for name, interval in (('source', max(30, values.get('backup', {}).get('poll_seconds', 10) * 3)),
                            ('destination', max(90, values.get('backup', {}).get('retry_seconds', 30) * 3))):
@@ -258,6 +262,10 @@ def snapshot(directory, settings):
         if observation['stale']:
             observation['online'] = None
         if name == 'source':
+            if connection and not approved:
+                device = connection.get('device', {})
+                observation = {**device, 'online': fresh(connection) if live else None, 'stale': not fresh(connection) or not live,
+                               'confirmation': connection.get('state'), 'telemetry': {}}
             transport = config.source.get('transport', 'usb') if config else 'unknown'
             if observation.get('transport', 'usb') != transport:
                 observation.update(online=None, stale=True)
@@ -272,7 +280,7 @@ def snapshot(directory, settings):
         state.update(speed_bytes_per_second=0, eta_seconds=None)
     if not live:
         state.update(phase='stopped' if not service.get('running') else 'unresponsive',
-                     message='导入服务已停止' if not service.get('running') else '导入服务暂未响应，下面显示最后记录')
+                     message='导入服务已停止' if not service.get('running') else '导入服务暂未响应，当前显示最近一次观测记录')
     configuration = dict(state.get('configuration', {}))
     configuration.update(saved_revision=item['revision'], error=item['error'], sync_enabled=enabled, stop_after_current=draining)
     configuration['pending'] = bool(configuration.get('pending') or item['revision'] != configuration.get('applied_revision'))
@@ -281,7 +289,7 @@ def snapshot(directory, settings):
     all_imported = all(f['imported'] for f in files if f['selected'])
     reading = (state.get('source_work') or state.get('maintenance_running') or state.get('phase') in ('scanning', 'checking_cleanup', 'cleaning_source')
                or stages['import'].get('phase') in ('downloading', 'scanning', 'verifying'))
-    ready = bool(live and state.get('source', {}).get('online')
+    ready = bool(live and approved and state.get('source', {}).get('online')
                  and inventory.get('verified') and inventory.get('scanned') and scope_current
                  and cache_health['available'] and all_imported and not reading
                  and inventory.get('batch_id') == batch_id and inventory.get('destination') == destination
@@ -289,9 +297,9 @@ def snapshot(directory, settings):
     can_disconnect = bool(live and not reading and (ready or not enabled))
     if ready:
         subject = '本轮素材' if media_scope == 'all' else '本轮所选类别素材'
-        unplug_message = subject + '已收齐，可以拔走相机；电脑与缓存盘请保持可用，剩余素材' + ('将继续上传' if enabled else '待开启同步后上传')
+        unplug_message = subject + '已完整导入，可断开相机连接；请保持电脑与缓存盘可用，剩余素材' + ('将继续归档。' if enabled else '待开启同步后归档。')
         if all(f['state'] == 'uploaded' for f in files if f['selected']):
-            unplug_message = subject + '已全部归档，可以拔走相机。' if batch_files else '当前没有待导入素材，可以拔走相机。'
+            unplug_message = subject + '已全部归档，可断开相机连接。' if batch_files else '当前无待导入素材，可断开相机连接。'
         if media_scope != 'all':
             unplug_message += ' 未选类别不在本轮备份范围，原片保留。'
         if ignored:
@@ -302,11 +310,13 @@ def snapshot(directory, settings):
         unplug_message = '正在访问相机，请保持连接。'
     elif not enabled:
         pending_import = sum(not f['imported'] for f in files if f['selected'])
-        unplug_message = '同步已关闭，程序未在读写相机，可以断开；' + (
-            f'记录中还有 {pending_import} 个文件未确认完整导入，下次需再连接相机。' if pending_import else
-            '当前相机清单尚未重新核对，不能据此认定所有素材已收齐。')
+        unplug_message = '相机读取已停止，可断开连接；' + (
+            f'仍有 {pending_import} 个文件待完成导入，下次同步需要重新连接相机。' if pending_import else
+            '相机清单尚未重新核对，当前不能确认导入是否完整。')
+    elif connection and not approved and fresh(connection):
+        unplug_message = '当前相机尚未确认，未开始读取素材；请在飞书确认后备份。'
     elif state.get('source', {}).get('stale'):
-        unplug_message = '相机状态尚未更新，暂不能确认是否可以拔线'
+        unplug_message = '相机状态尚未更新，连接释放条件待确认。'
     elif not state.get('source', {}).get('online'):
         unplug_message = '相机未连接；同步开启时，已有完整缓存可继续上传'
     else:
@@ -340,7 +350,9 @@ def snapshot(directory, settings):
                'unknown_age_files': sum(not f['imported_at'] for f in waiting)}
     active_files = [f for f in files if f['selected'] or f['imported'] or f['state'] in ('cached', 'staged', 'publishing')
                     or f['state'] == 'excluded' and f['cleanup_selected'] and f['source_cleanup_error']]
-    all_cleanup = cleanup_summary(files, bool(values.get('backup', {}).get('delete_source_after_import')))
+    from .source_connection import deletion_enabled
+    delete_source = deletion_enabled(config, meta.get('source_selection', {})) if config else False
+    all_cleanup = cleanup_summary(files, delete_source)
     return {'running': live, 'observed_at': now(), 'status': state, 'stages': stages, 'preflight': meta.get('preflight'), 'backlog': backlog,
             'metadata_backup': meta.get('metadata_backup'),
             'selection': {'scope': media_scope, 'label': MEDIA_SCOPES[media_scope],
@@ -352,16 +364,18 @@ def snapshot(directory, settings):
                           'excluded_source_files': inventory.get('excluded_files') if scope_current and inventory.get('scanned') else None,
                           'deferred_files': sum(not f['selected'] and not f['imported'] and f['state'] != 'excluded' for f in files)},
             'configuration': configuration, 'controls': controls, 'health': health, 'queues': queues, 'storage': storage,
+            'source_connection': connection,
             'unplug': {'ready': ready, 'can_disconnect': can_disconnect, 'message': unplug_message},
             'attention': attention(live, enabled, configuration, health, active_files, stages),
             'archive': {'locations': locations, 'planned_locations': planned or [archive_location(target)]},
-            'policy': {'delete_source': bool(values.get('backup', {}).get('delete_source_after_import', False)),
+            'policy': {'delete_source': delete_source,
+                       'delete_source_requested': bool(values.get('backup', {}).get('delete_source_after_import', False)),
                        'cleanup_cache': True},
-            'cleanup': cleanup_summary(round_files, bool(values.get('backup', {}).get('delete_source_after_import'))),
+            'cleanup': cleanup_summary(round_files, delete_source),
             'batch': {'id': reporting_id, 'scan_batch_id': batch_id, 'historical': bool(current_round and current_round['historical']),
                       'file_ids': [f['id'] for f in batch_files],
                       'excluded_preview_files': len(ignored), 'excluded_preview_bytes': sum(f['size'] for f in ignored),
-                      'scanned': bool(inventory.get('scanned') and scope_current), 'verified': bool(inventory.get('verified') and scope_current), 'total_files': len(batch_files),
+                      'scanned': bool(approved and inventory.get('scanned') and scope_current), 'verified': bool(approved and inventory.get('verified') and scope_current), 'total_files': len(batch_files),
                       'completed_files': sum(f['state'] == 'uploaded' for f in batch_files),
                       'total_bytes': total, 'confirmed_bytes': committed, 'in_flight_bytes': in_flight,
                       'percent': 100 * (committed + in_flight) / total if total else 0,

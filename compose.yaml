@@ -1,6 +1,6 @@
 name: media-importer
 x-common: &common
-  image: local/media-importer:0.10.13
+  image: local/media-importer:0.10.15
   build:
     context: .
   environment:

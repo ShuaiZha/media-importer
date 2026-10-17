@@ -36,8 +36,9 @@ def atomic_write(path, content, mode=0o600):
 
 
 class Settings:
-    def __init__(self, path):
+    def __init__(self, path, directory=None):
         self.path = Path(path)
+        self.directory = Path(directory or os.environ.get('MEDIA_IMPORTER_DATA_DIR', '/data'))
 
     @contextmanager
     def lock(self):
@@ -54,6 +55,9 @@ class Settings:
         result = {"document": text, "revision": revision(text), "config": None, "error": None}
         try:
             result["config"] = Config.from_dict(json.loads(text, object_pairs_hook=_unique_object)).values
+            result['source_hint'] = dict(result['config']['source'])
+            from .source_connection import selected
+            result['config']['source'] = selected(self.directory, result['config']['source'])
         except (ConfigError, ValueError) as exc:
             result["error"] = str(exc)
         return result

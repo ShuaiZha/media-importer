@@ -56,18 +56,18 @@ def main(argv=None):
             from .bot import serve, healthy, Bot
             from .settings import Settings
             if args.command == "bot":
-                serve(Settings(args.config), args.data)
+                serve(Settings(args.config, args.data), args.data)
             elif args.command == "bot-health":
                 return 0 if healthy(args.data) else 1
             else:
                 from .adapters.feishu import send_card
-                bot = Bot(Settings(args.config), args.data)
+                bot = Bot(Settings(args.config, args.data), args.data)
                 send_card(bot.credentials, bot.panel())
                 print("控制面板已发送到本人飞书单聊")
             return 0
         if args.command == "sync":
             from .settings import Settings
-            Settings(args.config).set_enabled(args.state == "on")
+            Settings(args.config, args.data).set_enabled(args.state == "on")
             print("已保存同步" + ("开启" if args.state == "on" else "关闭") + "设置；后台将在运行时应用")
             return 0
         if args.command == "daemon":
@@ -83,7 +83,7 @@ def main(argv=None):
         if args.command == "status":
             from .settings import Settings
             from .status import snapshot
-            result = snapshot(args.data, Settings(args.config))
+            result = snapshot(args.data, Settings(args.config, args.data))
             if args.json:
                 emit(result)
             else:
@@ -106,12 +106,16 @@ def main(argv=None):
             try:
                 from .storage import initialize_cache
                 initialize_cache(store)
-                result = run(Settings(args.config), store)
+                result = run(Settings(args.config, args.data), store)
                 emit(result)
                 return 0 if result["state"] == "ok" else 2
             finally:
                 store.close()
-        config = Config.load(args.config)
+        from .settings import Settings
+        item = Settings(args.config, args.data).read()
+        if item['error']:
+            raise ConfigError(item['error'])
+        config = Config.from_values(item['config'])
         if args.command == "validate":
             print("配置有效；未连接相机或 目的地。")
             return 0

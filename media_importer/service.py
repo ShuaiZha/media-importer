@@ -18,6 +18,7 @@ from .storage import (require_cache, file_identity, unlink_cache, cache_evidence
 from .issues import describe
 from .contracts import MediaSource, ArchiveDestination
 from .media import MEDIA_SCOPES, select_groups, selected_file_ids
+from .source_connection import ConfirmationRequired
 
 
 LOG = logging.getLogger("media_importer")
@@ -69,6 +70,10 @@ class Service:
             self.store.status(**updates)
 
     def allowed(self, policy=None):
+        if policy == 'delete_source_after_import':
+            from .source_connection import reason
+            if reason(self.store, self.config, deleting=True):
+                return False
         if self.control:
             return self.control.allowed(policy)
         return self.config.backup["enabled"] and (not policy or self.config.backup[policy])
@@ -133,6 +138,11 @@ class Service:
                     source.attempts = 1
             try:
                 while not finished.is_set() and not self.stop.is_set():
+                    from .source_connection import reason
+                    if reason(store, self.config):
+                        # Discovery owns identity-only observations until approved.
+                        finished.wait(min(5, self.config.backup['poll_seconds']))
+                        continue
                     keep_awake = self.allowed() and bool(store.get_meta("status", {}).get("source_work"))
                     try:
                         identity = source.identify()
@@ -271,6 +281,9 @@ class Service:
             raise Cancelled("正在停止，任务记录和缓存已保留")
         if self.control and not self.control.allowed():
             raise SyncDisabled("同步已关闭或配置无效，任务与缓存已保留")
+        if self.stage == 'import':
+            from .source_connection import require
+            require(self.store, self.config)
 
     @staticmethod
     def valid_remote(item, size):
@@ -572,6 +585,8 @@ class Service:
             raise
 
     def import_asset(self, row):
+        from .source_connection import require
+        require(self.store, self.config)
         self.check_stop()
         require_cache(self.store)
         if not self.allowed():
@@ -644,7 +659,10 @@ class Service:
                 self.clean_temporaries("local")
 
     def source_snapshot(self):
+        from .source_connection import require
+        require(self.store, self.config)
         fresh = self.source.snapshot()
+        require(self.store, self.config)
         if hasattr(self.source, "reconcile"):
             fresh = self.source.reconcile(fresh, self.rows())
         return fresh
@@ -749,7 +767,7 @@ class Service:
                         if asset.path in after:
                             self.store.update(row["id"], cleanup="pending", source_cleanup_error="相机文件仍存在，稍后重新核对")
             except (BackupError, OSError) as exc:
-                if isinstance(exc, (Cancelled, SyncDisabled, Reconfigure)):
+                if isinstance(exc, (Cancelled, SyncDisabled, Reconfigure, ConfirmationRequired)):
                     raise
                 for row in rows:
                     current = self.store.get(row["id"])
@@ -759,6 +777,8 @@ class Service:
                 self.store.status(source_work=False)
 
     def prepare_imports(self):
+        from .source_connection import require
+        require(self.store, self.config)
         self.boundary()
         scope = self.config.backup["media_scope"]
         previous_scope = self.store.get_meta("status", {}).get("inventory", {}).get("media_scope", "all")
@@ -906,6 +926,10 @@ class Service:
             self.report(waiting.get("phase", "waiting_retry"), waiting.get("message", "仍有素材待处理，任务与完整缓存已保留"))
             return {"complete": False, "reason": "pending_files"}
         if not batch_rows:
+            from .source_connection import reason
+            if reason(self.store, self.config):
+                self.report('waiting_confirmation', reason(self.store, self.config))
+                return {'complete': False, 'files': 0, 'bytes': 0, 'reason': 'source_confirmation'}
             scanned = state.get("inventory", {}).get("scanned", False)
             self.report("idle" if scanned else "waiting_source", "没有待导入素材" if scanned else "等待相机，已有完整缓存可独立上传")
             return {"complete": scanned, "files": 0, "bytes": 0, "reason": None if scanned else "source_offline"}

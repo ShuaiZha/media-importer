@@ -19,6 +19,8 @@ class Response(io.BytesIO):
 class GoProTests(unittest.TestCase):
     def setUp(self):
         self.source = GoProSource(configuration())
+        from media_importer.adapters.gopro_models import compatibility
+        self.source.compatibility = compatibility('HERO9 Black', 'HD9.01.01.72.00')
 
     def test_hero9_uses_busy_8_and_encoding_10(self):
         with patch.object(self.source, "_json", return_value={"status": {"8": 0, "10": 0}}):

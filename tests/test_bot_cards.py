@@ -63,7 +63,7 @@ class CommandCardTests(unittest.TestCase):
         title,color,elements=status_content(state)
         text=json.dumps(elements,ensure_ascii=False)
         self.assertEqual('grey',color)
-        self.assertIn('同步已关闭',title)
+        self.assertIn('同步已停止',title)
         self.assertIn('1 / 2',text)
         self.assertNotIn('old.mp4',text)
         self.assertNotIn('/s',text)
@@ -74,8 +74,8 @@ class CommandCardTests(unittest.TestCase):
         state['health']['destination'].update(online=None)
         state['disk']['free_bytes']=None
         text=json.dumps(status_content(state),ensure_ascii=False)
-        self.assertIn('相机 待更新',text)
-        self.assertIn('SMB 待更新',text)
+        self.assertIn('相机：待确认',text)
+        self.assertIn('SMB：待确认',text)
         self.assertNotIn('磁盘可用 0',text)
 
     def test_upload_bytes_are_not_mistaken_for_committed_archive(self):
@@ -90,7 +90,7 @@ class CommandCardTests(unittest.TestCase):
     def test_unscanned_card_does_not_show_zero_of_zero(self):
         state=view(); state['batch'].update(total_files=0,scanned=False)
         text=json.dumps(status_content(state),ensure_ascii=False)
-        self.assertIn('尚未扫描',text)
+        self.assertIn('尚未完成素材扫描',text)
         self.assertNotIn('0 / 0',text)
 
     def test_file_names_and_errors_never_become_markdown(self):
@@ -100,7 +100,7 @@ class CommandCardTests(unittest.TestCase):
         state['issues']=[{'path':'a.mp4','error':payload}]
         _,_,elements=status_content(state)
         text=json.dumps(elements,ensure_ascii=False)
-        self.assertIn('本文件剩余',text)
+        self.assertIn('本文件预计剩余',text)
         for element in elements:
             if payload in json.dumps(element,ensure_ascii=False):
                 self.assertEqual('plain_text',element['text']['tag'])
@@ -112,7 +112,7 @@ class CommandCardTests(unittest.TestCase):
         result=settings_result({'backup':{'enabled':False}},True,True)
         self.assertEqual('正在停止同步',result['title'])
         result=settings_result({'backup':{'enabled':False}},True,False)
-        self.assertEqual('同步已关闭',result['title'])
+        self.assertEqual('同步已停止',result['title'])
 
     def test_two_byte_bars_share_the_same_rendering_in_status_and_notifications(self):
         state = view()
@@ -120,8 +120,8 @@ class CommandCardTests(unittest.TestCase):
             text = json.dumps(content, ensure_ascii=False)
             self.assertIn('█████░░░░░', text)
             self.assertIn('██░░░░░░░░', text)
-            self.assertIn('**💾 导入 · 50.0%**', text)
-            self.assertIn('**📁 归档 · 25.0%**', text)
+            self.assertIn('**本地导入　50.0%**', text)
+            self.assertIn('**远端归档　25.0%**', text)
             self.assertIn('**0 / 2**', text)
         self.assertTrue(progress_card(state, 300)['config']['update_multi'])
 
@@ -146,18 +146,19 @@ class CommandCardTests(unittest.TestCase):
                         event_card('completed', '归档完成', '已正式归档 2 个文件', view(), locations=[payload])):
             for element in message['elements']:
                 if payload in json.dumps(element):
-                    self.assertEqual('plain_text', element['text']['tag'])
+                    values = [element['text']] if element['tag'] == 'div' else element['elements']
+                    self.assertTrue(all(value['tag'] == 'plain_text' for value in values))
 
 
     def test_import_complete_does_not_turn_pending_archive_green(self):
         state = view()
-        state['unplug'].update(ready=True, message='相机可以拔走；完整缓存继续上传')
+        state['unplug'].update(ready=True, message='本地导入已完成；完整缓存继续上传')
         state['batch'].update(imported_files=2, import_percent=100)
         state['stages']['upload']['phase'] = 'uploading'
         title, color, elements = status_content(state)
         self.assertEqual('blue', color)
-        self.assertIn('正在归档', title)
-        self.assertIn('相机可以拔走', json.dumps(elements, ensure_ascii=False))
+        self.assertIn('远端归档进行中', title)
+        self.assertIn('可断开相机连接', json.dumps(elements, ensure_ascii=False))
 
     def test_camera_values_expire_and_unknown_flags_are_not_presented_as_normal(self):
         state = view()
@@ -184,7 +185,7 @@ class CommandCardTests(unittest.TestCase):
         state['attention'] = {'required': True, 'message': '需要处理：请接回原缓存盘'}
         self.assertIn('请接回原缓存盘', json.dumps(status_content(state), ensure_ascii=False))
         details = json.dumps(status_content(state), ensure_ascii=False)
-        self.assertIn('缓存盘 不可用', details)
+        self.assertIn('本地缓存：不可用', details)
         self.assertNotIn('磁盘可用', details)
 
 

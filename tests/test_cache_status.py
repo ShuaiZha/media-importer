@@ -177,8 +177,8 @@ class CacheStatusTests(unittest.TestCase):
         state = self.view()
         self.assertTrue(state['unplug']['can_disconnect'])
         self.assertFalse(state['unplug']['ready'])
-        self.assertIn('还有 1 个', state['unplug']['message'])
-        self.assertIn('尚未重新扫描', json.dumps(status_content(state), ensure_ascii=False))
+        self.assertIn('仍有 1 个', state['unplug']['message'])
+        self.assertIn('相机清单尚未复核', json.dumps(status_content(state), ensure_ascii=False))
 
     def test_unplug_requires_all_known_files_and_current_inventory(self):
         self.cache()

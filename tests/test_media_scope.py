@@ -99,10 +99,10 @@ class MediaScopeTests(unittest.TestCase):
         self.assertEqual(3, view['selection']['excluded_source_files'])
         self.assertEqual(0, view['queues']['import']['pending_files'])
         text = json.dumps(status_content(view), ensure_ascii=False)
-        self.assertIn('相机可以拔走', text)
+        self.assertIn('可断开相机连接', text)
         self.assertIn('仅视频', text)
         self.assertIn('仅视频', text)
-        self.assertIn('所选类别之外', text)
+        self.assertIn('范围外', text)
 
     def test_switching_back_to_all_preserves_finished_files_and_imports_remainder(self):
         self.assertTrue(self.service('photo').cycle()['complete'])
@@ -173,7 +173,7 @@ class MediaScopeTests(unittest.TestCase):
         for card in (status_content(view), progress_card(view, 300)):
             text = json.dumps(card, ensure_ascii=False)
             self.assertIn('GH010001.MP4', text)
-            self.assertIn('其他类别的 1 个完整缓存，继续上传', text)
+            self.assertIn('其他类别的 1 个既有缓存', text)
             self.assertNotIn('0 / 0', text)
             self.assertNotIn('本轮更新结束', text)
 

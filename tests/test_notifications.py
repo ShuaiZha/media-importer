@@ -69,7 +69,7 @@ class WorkerTests(unittest.TestCase):
         self.tick()
         self.tick(6 * 3600)
         self.assertEqual(1, self.sender.call_count)
-        self.assertIn('缓存长时间未归档', str(self.sender.call_args))
+        self.assertIn('归档进度长时间未更新', str(self.sender.call_args))
         self.tick(3600)
         self.assertEqual(1, self.sender.call_count)
         self.worker = self.make_worker()
@@ -90,7 +90,7 @@ class WorkerTests(unittest.TestCase):
         self.view['stages']['upload']['current_bytes'] = 8
         self.tick(3 * 3600)
         self.tick(1)
-        self.assertTrue(any('缓存长时间未归档' in str(call) for call in self.sender.call_args_list))
+        self.assertTrue(any('归档进度长时间未更新' in str(call) for call in self.sender.call_args_list))
         self.values['backup']['enabled'] = False
         self.sender.reset_mock()
         self.tick(24 * 3600)
@@ -237,8 +237,8 @@ class WorkerTests(unittest.TestCase):
         self.tick(1)
         self.tick(1)
         self.assertIn("归档完成", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
-        self.assertIn("原片：清理待处理 2", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
-        self.assertIn("缓存：已清理 1 个 · 清理待处理 1", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn("原片：待清理 2", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn("缓存：已清理 1 个；待清理 1", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
 
     def test_progress_requires_interval_change_and_active_transfer(self):
         self.tick()
@@ -354,7 +354,7 @@ class WorkerTests(unittest.TestCase):
         self.view['stages'] = {'import': {'phase': 'waiting_source'}, 'upload': {'phase': 'idle'}}
         self.tick()
         self.assertEqual(1, self.sender.call_count)
-        self.assertIn('尚未扫描', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn('尚未完成素材扫描', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.tick(5)
         self.assertEqual(1, self.sender.call_count)
         self.view['batch'] = {'id': self.batch, 'scanned': True, 'total_files': 2, 'completed_files': 0, 'imported_files': 0}
@@ -439,7 +439,7 @@ class WorkerTests(unittest.TestCase):
         self.view["policy"]["delete_source"] = True
         self.sender.side_effect = RuntimeError("offline")
         self.tick(1)
-        self.assertIn("原片：清理待处理", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn("原片：待清理", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.store.update(self.rows[0]["id"], state="pending")
         self.sender.side_effect = None
         self.tick(31)
@@ -448,7 +448,7 @@ class WorkerTests(unittest.TestCase):
         self.tick(5)
         self.assertEqual(2, self.sender.call_count)
         self.assertIn("原片：已删除 2 个", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
-        self.assertNotIn("原片：清理待处理", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertNotIn("原片：待清理", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
 
     def test_completion_waiting_for_rearchive_does_not_block_progress_delivery(self):
         self.tick()
@@ -460,7 +460,7 @@ class WorkerTests(unittest.TestCase):
         self.sender.side_effect = None
         self.tick(301)
         self.assertEqual(2, self.sender.call_count)
-        self.assertIn("正在归档", self.sender.call_args.args[1]["header"]["title"]["content"])
+        self.assertIn("归档进行中", self.sender.call_args.args[1]["header"]["title"]["content"])
         self.archive()
         self.tick(5)
         self.assertEqual(3, self.sender.call_count)
@@ -494,7 +494,7 @@ class WorkerTests(unittest.TestCase):
         self.store.import_completed(self.batch)
         self.tick(5)
         self.assertEqual(1,self.sender.call_count)
-        self.assertIn('相机可以拔走',self.sender.call_args.args[1]["header"]["title"]["content"])
+        self.assertEqual('本地导入完成',self.sender.call_args.args[1]["header"]["title"]["content"])
         self.worker=self.make_worker();self.tick(5);self.assertEqual(1,self.sender.call_count)
         self.archive();self.tick(5);self.assertEqual(2,self.sender.call_count)
         self.assertIn('归档完成',self.sender.call_args.args[1]["header"]["title"]["content"])
@@ -537,7 +537,7 @@ class WorkerTests(unittest.TestCase):
         self.tick(1)
         self.assertEqual(1, self.sender.call_count)
         self.assertEqual(1, self.updater.call_count)
-        self.assertIn('同步已关闭', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
+        self.assertIn('同步已停止', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
         self.tick(5)
         self.assertEqual(1, self.updater.call_count)
 
@@ -551,7 +551,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(2, self.sender.call_count)
         self.assertIn('归档完成', self.sender.call_args.args[1]['header']['title']['content'])
         self.assertEqual(1, self.updater.call_count)
-        self.assertIn('本轮已归档', self.updater.call_args.args[2]['header']['title']['content'])
+        self.assertIn('归档完成', self.updater.call_args.args[2]['header']['title']['content'])
         self.tick(5)
         self.assertEqual(1, self.updater.call_count)
         self.assertEqual(2, self.sender.call_count)
@@ -581,7 +581,7 @@ class WorkerTests(unittest.TestCase):
         self.values['notifications']['enabled'] = False
         self.tick(1)
         self.assertEqual(1, self.sender.call_count)
-        self.assertIn('自动通知已关闭', self.updater.call_args.args[2]['header']['title']['content'])
+        self.assertIn('自动进度更新已关闭', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
         self.tick(5)
         self.assertEqual(1, self.updater.call_count)
 
@@ -603,6 +603,21 @@ class WorkerTests(unittest.TestCase):
         self.assertIn('归档位置', content)
         self.assertIn('Camera-serial', content)
 
+    def test_completion_button_opens_supported_read_only_status(self):
+        from media_importer.bot import Bot
+        self.settings.notification_credentials.return_value = {
+            **CREDENTIALS, 'receive_id_type': 'open_id', 'receive_id': 'ou_test_owner_12345'}
+        self.tick()
+        self.archive()
+        self.tick(1)
+        content = self.sender.call_args.args[1]
+        button = content['elements'][-1]['actions'][0]
+        self.assertEqual('查看状态', button['text']['content'])
+        payload = json.loads(self.store.db.execute('SELECT payload FROM bot_actions WHERE token=?',
+                                                  (button['value']['token'],)).fetchone()[0])
+        self.assertEqual({'panel': 'status'}, payload)
+        self.assertTrue(Bot.supported(payload))
+
     def test_finished_progress_card_does_not_follow_later_camera_changes(self):
         self.start_progress()
         self.archive()
@@ -621,7 +636,7 @@ class WorkerTests(unittest.TestCase):
         self.tick(1)
         self.assertEqual(1, self.sender.call_count)
         self.assertEqual(2, self.updater.call_count)
-        self.assertNotIn('同步已关闭', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
+        self.assertNotIn('同步已停止', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
 
     def test_completed_card_updates_cleanup_on_same_message_without_resending(self):
         self.tick()
@@ -630,7 +645,7 @@ class WorkerTests(unittest.TestCase):
         self.tick(1)
         self.assertEqual(1, self.sender.call_count)
         self.assertTrue(self.sender.call_args.args[1]['config']['update_multi'])
-        self.assertIn('清理待处理 1 个', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn('待清理 1 个', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.view['files'][0]['cache_state'] = 'missing'
         self.worker = self.make_worker()
         self.tick(5)
@@ -652,7 +667,7 @@ class WorkerTests(unittest.TestCase):
         self.view['status']['source_work'] = False
         self.view['unplug']['can_disconnect'] = True
         self.tick(1)
-        self.assertIn('相机可以拔走', self.sender.call_args.args[1]['header']['title']['content'])
+        self.assertEqual('本地导入完成', self.sender.call_args.args[1]['header']['title']['content'])
 
     def test_import_ready_retry_is_cancelled_when_a_new_round_supersedes_it(self):
         self.tick()

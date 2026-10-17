@@ -70,6 +70,8 @@ def settle(service):
         config = Config.from_values({**values, 'destination': {**values['destination'], 'archive_id': service.destination_id}})
     require_cache(store)
     destination = service.destination_id
+    from .source_connection import deletion_enabled
+    delete_source = deletion_enabled(config, store.get_meta('source_selection', {}))
     from .notifications import freeze_completion, initialize as notification_schema
     from .media import selected_file_ids
     with store.db:
@@ -91,7 +93,7 @@ def settle(service):
                 return False
             if row['cache_cleanup_error']:
                 return False
-            if config.backup['delete_source_after_import'] and row['id'] in cleanup_selected and (
+            if delete_source and row['id'] in cleanup_selected and (
                     row['cleanup'] not in ('deleted', 'absent') or row['source_cleanup_error']):
                 return False
             cache = store.cached_path(row)

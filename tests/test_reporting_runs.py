@@ -1,5 +1,6 @@
 """Small-file statistics, migration and cleanup truth; no network access."""
 import json
+import os
 import unittest
 from unittest.mock import patch
 
@@ -90,7 +91,11 @@ class ReportingRunTests(unittest.TestCase):
         self.assertEqual(1, view['batch']['imported_files'])
         self.assertIn('确认归档', json.dumps(progress_card(view, 300), ensure_ascii=False))
         self.assertNotIn('本轮已归档', progress_card(view, 300)['header']['title']['content'])
+        previous = self.path.stat().st_mtime_ns
         self.path.write_bytes(b'z' * 32)
+        # The display cache invalidates on metadata changes; make that change
+        # explicit rather than depending on the tmpfs clock resolution.
+        os.utime(self.path, ns=(previous + 1_000_000, previous + 1_000_000))
         view = self.view()
         self.assertEqual(0, view['batch']['imported_files'])
         self.assertTrue(view['attention']['required'])
@@ -105,7 +110,7 @@ class ReportingRunTests(unittest.TestCase):
         self.assertEqual(1, view['cleanup']['cache_pending'])
         text = cleanup_text(view['cleanup'])
         self.assertIn('原片：已删除 1 个', text)
-        self.assertIn('缓存：清理待处理 1 个', text)
+        self.assertIn('缓存：待清理 1 个', text)
         self.assertNotIn('原片保留', text)
         self.path.unlink()
         self.assertEqual(1, self.view()['cleanup']['cache_cleared'])
@@ -121,6 +126,6 @@ class ReportingRunTests(unittest.TestCase):
         view = self.view()
         self.assertEqual(1, view['batch']['imported_files'])
         self.assertFalse(view['unplug']['can_disconnect'])
-        self.assertIn('正在访问相机', json.dumps(status_content(view), ensure_ascii=False))
+        self.assertIn('相机正在执行读写操作', json.dumps(status_content(view), ensure_ascii=False))
         self.store.status(source_work=False, source={'online': True, 'checked_at': now()})
         self.assertTrue(self.view()['unplug']['ready'])

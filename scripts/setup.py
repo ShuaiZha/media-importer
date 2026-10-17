@@ -134,12 +134,12 @@ def setup(root, *, read=input, hidden=getpass.getpass, probe=camera_identity, ch
         raise ValueError('检测到已有安装，向导不会覆盖配置或记录；修改连接请编辑 .env')
     print('首次配置：连接相机、选择缓存盘、填写 SMB 和飞书应用。密码输入时不回显。')
     values = {'SOURCE_TYPE': 'gopro', 'DESTINATION_TYPE': 'smb', 'SOURCE_TIMEOUT_SECONDS': '20'}
-    values['SOURCE_URL'] = ask('相机 HTTP 地址', read=read)
-    serial = probe(values['SOURCE_URL'])
+    values['SOURCE_URL'] = ask('相机 HTTP 地址（可留空，启动后自动发现）', read=read, required=False)
+    serial = probe(values['SOURCE_URL']) if values['SOURCE_URL'] else None
     if serial:
         print('已读取相机序列号：' + serial)
-    values['SOURCE_SERIAL'] = serial or ask('相机序列号（当前无法读取，请手动填写）', read=read)
-    if not values['SOURCE_SERIAL'].isalnum():
+    values['SOURCE_SERIAL'] = serial or (ask('相机序列号（可留空）', read=read, required=False) if values['SOURCE_URL'] else '')
+    if values['SOURCE_SERIAL'] and not values['SOURCE_SERIAL'].isalnum():
         raise ValueError('序列号应为字母和数字，请重新运行向导')
     cache = cache_directory(ask('本机缓存目录', './cache', read=read), root)
     for key, label, default, required in (
@@ -161,7 +161,7 @@ def setup(root, *, read=input, hidden=getpass.getpass, probe=camera_identity, ch
     values['FEISHU_APP_SECRET'] = ask('飞书 App Secret', secret=True, hidden=hidden)
     values['FEISHU_OWNER_OPEN_ID'] = ask('本人在此应用中的 Open ID', read=read)
     save(root, cache, values)
-    print('已生成 .env 和 config/settings.json；同步、原片删除和传输通知默认关闭，连接提醒开启。连接后从飞书手动开启同步。', flush=True)
+    print('已生成 .env 和 config/settings.json；同步、原片删除和传输通知默认关闭。启动后识别 USB 相机，在飞书确认后备份。', flush=True)
     code = checks(root) if checks else 0
     print('检查结束。处理等待项后执行 docker compose up -d，再按 docs/feishu.md 完成事件、菜单和发布。' if checks else
           '尚未检查连接；请按 docs/deployment.md 构建镜像并运行 check --json。')

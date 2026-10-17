@@ -54,7 +54,7 @@ class SimpleControlsTests(unittest.TestCase):
             with self.bot.db() as db:
                 db.execute('UPDATE bot_jobs SET state=?,response=? WHERE id=?', (state, '{}', 'old-'+state))
             self.assertTrue(self.bot.process_one())
-            self.assertIn('旧操作已停用', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+            self.assertIn('此操作已停用', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.assertEqual(before, self.path.read_bytes())
 
     def test_file_settings_still_validate_and_survive_daily_controls(self):
@@ -94,8 +94,8 @@ class SimpleControlsTests(unittest.TestCase):
         self.bot.receive_message(self.message('private example value'))
         self.bot.process_one()
         response = json.dumps(self.sender.call_args.args[1],ensure_ascii=False)
-        self.assertIn('settings.json',response)
-        self.assertIn('.env',response)
+        self.assertIn('配置文件',response)
+        self.assertIn('原片处理',response)
         self.assertNotIn('private example value',response)
 
     def test_one_status_card_has_both_lanes_storage_path_and_cleanup_problem(self):
@@ -103,7 +103,7 @@ class SimpleControlsTests(unittest.TestCase):
         current['archive']={'locations':['smb://example.test/share/Camera']}
         current['issues']=[{'path':'clip.mp4','error':'稍后重试'}]
         text=json.dumps(status_content(current),ensure_ascii=False)
-        for value in ('USB 相机 在线','缓存盘 可用','SMB 在线','归档位置','smb://example.test/share/Camera','稍后重试','clip.mp4'):
+        for value in ('相机：在线','本地缓存：可用','SMB：在线','归档位置','smb://example.test/share/Camera','稍后重试','clip.mp4'):
             self.assertIn(value,text)
         self.assertNotIn('历史',text)
         self.assertNotIn('设备与存储',text)
@@ -114,6 +114,6 @@ class SimpleControlsTests(unittest.TestCase):
         current['work']['pending_files']=0
         current['unplug']={'ready':True,'can_disconnect':True}
         text=json.dumps(status_content(current),ensure_ascii=False)
-        self.assertIn('相机可以拔走',text)
-        self.assertIn('没有待导入素材',text)
+        self.assertIn('同步待机',text)
+        self.assertIn('当前无待处理任务',text)
         self.assertNotIn('需保持可用',text)

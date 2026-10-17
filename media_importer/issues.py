@@ -18,9 +18,9 @@ def describe(exc, stage=None):
         code, action, scope = "source_state", "等待相机结束录像、恢复就绪或解除温度告警，已有完整缓存继续上传。", "source"
     elif isinstance(exc, DestinationError):
         if any(word in lower for word in ("不存在", "not found", "bad_network_name")):
-            code, action, scope = "destination_path", "检查 目的地目录是否存在。", "destination"
+            code, action, scope = "destination_path", "检查目的地目录是否存在。", "destination"
         elif any(word in lower for word in ("logon_failure", "logon failure", "authentication", "password", "credential", "凭据", "认证")):
-            code, action, scope = "authentication", "检查 目的地账号和 .env 凭据；修改后重新测试连接。", "destination"
+            code, action, scope = "authentication", "检查目的地账号和 .env 凭据；修改后重新测试连接。", "destination"
         elif any(word in lower for word in ("access_denied", "access denied", "permission", "权限")):
             code, action, scope = "permission", "检查共享目录的访问、写入和改名权限。", "destination"
         elif any(word in lower for word in ("disk_full", "disk full", "quota", "no space", "空间不足")):
