@@ -36,9 +36,9 @@ SMB、飞书示例地址和凭据需要换成自己的值；相机地址和序�
 
 ## 首次部署
 
-推荐先准备飞书 App ID、App Secret 与本人 Open ID，克隆项目后运行 `python3 scripts/setup.py`（Python 3.9+；Windows 可用 `py -3 scripts/setup.py`）。向导可选填写相机地址提示、检查缓存目录写入，生成 `.env` 和 JSON，随后构建镜像并从容器检查相机、SMB 与飞书认证。密码不回显，已有配置或任务记录会拒绝覆盖。
+推荐先准备飞书 App ID、App Secret 与本人 Open ID，克隆项目后运行 `python3 scripts/setup.py`（Python 3.9+；Windows 可用 `py -3 scripts/setup.py`）。向导可选填写相机地址提示、检查缓存目录写入，生成 `.env` 和 JSON，随后下载稳定版镜像并从容器检查相机、SMB 与飞书认证。密码不回显，已有配置或任务记录会拒绝覆盖。
 
-向导不会启动后台服务、发送消息或开启同步。通过后执行 `docker compose up -d --no-build`，再完成飞书的事件订阅与发布。`--no-check` 只生成配置，之后仍需按第 3、4 步构建和验证。相机地址与序列号可以留空；外接磁盘未挂载时不会创建替代目录。
+向导不会启动后台服务、发送消息或开启同步。通过后执行 `docker compose up -d --no-build`，再完成飞书的事件订阅与发布。`--no-check` 只生成配置，之后仍需按第 3、4 步下载和验证。相机地址与序列号可以留空；外接磁盘未挂载时不会创建替代目录。
 
 以下为无需向导的手动配置方式。
 
@@ -105,20 +105,22 @@ MEDIA_IMPORTER_CACHE_HOST_DIR='/Volumes/MediaSSD/media-importer/cache'
 
 Compose 将以上三个目录分别挂载为 `/config`、`/data`、`/data/cache`，程序不会自动创建不存在的宿主机挂载目录。首次启动会登记缓存卷身份；之后卷标识不匹配时等待原盘，不切换到内置盘。
 
-### 3. 校验、构建并启动
+### 3. 下载、校验并启动
 
 示例 JSON 中 `backup.enabled`、`backup.delete_source_after_import` 和 `notifications.enabled` 默认为 `false`，连接提醒 `notifications.connection_events` 为 `true`。服务启动后检测连接，在飞书点击“确认并备份”才读取相机素材。已有完整缓存仍按同步开关上传。然后在仓库根目录执行：
 
 ```sh
 docker compose config --quiet
-python3 scripts/build.py
+docker compose pull
 docker compose run --rm --no-deps backup validate
 docker compose up -d --no-build
 docker compose ps
 docker compose logs --tail 100 backup bot
 ```
 
-`validate` 只检查 JSON 及相机、SMB 连接字段格式，不测试账号能否登录。镜像由源码在本机构建，`local/media-importer:0.10.15` 是本地标签；仓库没有可供 `docker pull` 的预构建镜像。首次构建需要访问 Docker Hub、Alpine 软件源和 Python 包源。`scripts/build.py` 只复制构建所需源码到临时目录，避免外接盘的 macOS 元数据导致构建失败，配置和素材不会进入构建目录。Windows 可用 `py -3` 替代 `python3`。
+`validate` 只检查 JSON 及连接字段格式，不测试账号能否登录。默认镜像为 `ghcr.io/shuaizha/media-importer:0.10.16`，提供 `linux/arm64` 与 `linux/amd64`；Docker 自动选择架构，Windows 使用 Linux 容器模式。镜像公开下载，不需要 Docker Hub 或 GitHub 登录；需能访问 `ghcr.io` 及其镜像层下载服务。架构支持不代表 Windows/Linux 相机链路已实测。
+
+镜像只包含程序和依赖，真实配置、任务和缓存通过原目录挂载。已有安装使用 `python3 scripts/manage.py update` 更新；命令核对 GitHub 正式发行版，并将镜像摘要固定在本机 `compose.override.yaml` 中。文件由工具维护且不提交 Git；不要用 `stable` 浮动标签替换摘要。源代码构建保留给开发与离线恢复，见[构建与测试](operations.md#构建与测试)。
 
 Compose 启动 `backup`（导入、上传和通知）与 `bot`（飞书长连接控制）两个服务，不映射端口，没有网页入口。同步按 JSON 中保存的开关运行。`bot` 建立连接后，继续 [配置事件、回调、菜单和发布](feishu.md#3-配置事件与卡片回调)。若提示“应用未建立长连接”，先检查 `bot` 凭据、容器状态与联网情况，再回后台保存。
 

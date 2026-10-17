@@ -43,7 +43,7 @@ FEISHU_OWNER_OPEN_ID='ou_EXAMPLE00000000'
 
 ```sh
 docker compose config --quiet
-python3 scripts/build.py
+docker compose pull
 docker compose run --rm --no-deps backup validate
 docker compose up -d --no-build
 docker compose ps

@@ -1,8 +1,6 @@
 name: media-importer
 x-common: &common
-  image: local/media-importer:0.10.15
-  build:
-    context: .
+  image: ghcr.io/shuaizha/media-importer:0.10.16
   environment:
     MEDIA_IMPORTER_ENV_FILE: /run/media-importer.env
     MEDIA_IMPORTER_REQUIRE_CACHE_MOUNT: "1"

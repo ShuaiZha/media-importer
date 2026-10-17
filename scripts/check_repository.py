@@ -9,7 +9,7 @@ def check(path, content):
     name = parts[-1]
     if (parts[0] in ('data', 'cache', 'backups', 'secrets', 'credentials', 'work', '.build') or
         parts[0] == 'config' and path != 'config/settings.example.json' or
-        name.startswith('.env') and name != '.env.example' or
+        name.startswith('.env') and name != '.env.example' or name in ('compose.override.yaml', '.update.lock') or
         name.startswith('._') or name == '.DS_Store' or
         re.search(r'\.(sqlite3?|db)(-wal|-shm)?$|\.(mp4|mov|lrv|thm|bin|download|key|pem|p12)$', name, re.I)):
         return '运行数据或敏感文件路径'

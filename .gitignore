@@ -6,6 +6,8 @@
 !/config/settings.example.json
 /secrets/
 /credentials/
+/compose.override.yaml
+/.update.lock
 *.pem
 *.key
 *.p12

@@ -93,7 +93,7 @@ SMB 离线只暂停上传；缓存额度或空间不足暂停新导入；缓存�
 | --- | --- |
 | `docker compose` 不存在 / 无法连接 Docker | 安装 Compose 插件或启动 Docker Desktop，确认 `docker compose version` 和 `docker info` 可用 |
 | `bind source path does not exist` / 挂载被拒绝 | 确认 `.env` 是文件、三个宿主机目录已存在、外接盘已挂载且 Docker 有目录访问权限 |
-| `pull access denied` / 找不到本地镜像 | 先运行 `python3 scripts/build.py`；`local/media-importer` 不是远程镜像仓库 |
+| 稳定版镜像下载失败 | 检查 Docker 到 `ghcr.io` 的网络；公共镜像无需登录。若选择源码部署，运行 `python3 scripts/build.py --activate` |
 | 外接盘构建报 `failed to xattr ._...` | 使用 `python3 scripts/build.py`，会在临时目录构建，不读取 AppleDouble 元数据 |
 | 构建卡在下载基础镜像或依赖 | 检查 Docker 自身的网络/代理、Docker Hub 和依赖源访问，替代构建方式见[构建与测试](#构建与测试) |
 | 宿主机可访问相机或 SMB，容器不通 | 检查 Docker 网络与宿主机 VPN 路由；用容器内 `check --json` 验证，不能仅凭 Finder/资源管理器访问成功判断 |
@@ -138,18 +138,21 @@ docker compose run --rm --no-deps backup export-cache --output /data/exported-YY
 
 ## 日常升级
 
-同一 v0.10 配置/数据库版本内更新代码，不重新复制示例文件，不运行旧版本迁移脚本：
+在 Git 克隆的项目目录执行以下命令（需要 Python 3.9+、Git、Docker Compose；Windows 将 `python3` 换成 `py -3`）：
 
 ```sh
-docker compose exec backup python3 -m media_importer sync off
-docker compose stop
-git pull --ff-only
-python3 scripts/build.py
-docker compose up -d --no-build
-docker compose ps
+python3 scripts/manage.py update
+# 可指定已发布的稳定版本；不允许倒退或覆盖本地源码改动：
+python3 scripts/manage.py update --version 0.10.16
 ```
 
-升级前建议完成[完整备份](#备份与迁移)。构建失败时保留现有目录与缓存，排除故障后再启动；不要清空数据库或覆盖本机配置。若发行说明要求迁移，则按对应版本步骤执行。飞书菜单存于应用后台，代码更新不会自动修改菜单；旧应用需要按新版菜单表调整并发布。
+命令只读取 GitHub 正式发行版，核对发布清单、Git 标签和镜像版本，按摘要下载 ARM64/AMD64 镜像，再停止两个服务、保存一致性快照、快进源码、恢复原来运行的服务并等待健康检查。原来停止的服务保持停止；`.env`、JSON 开关、未完成任务和完整缓存保留，SMB 归档不改动。未完成的单文件传输遵循现有规则，下次从头传输；完整文件不重传。相机连接在重启后重新确认。
+
+下载失败不停止服务。停止后若检查或启动失败，命令退出并尽量保持两个服务停止，打印恢复资料路径；不会自动覆盖可能已更新的数据库。快照位于 `backups/update-*/`，包含数据库、连接凭据、JSON、旧源码和镜像身份，**不复制视频，也不代替完整迁移备份**。排除网络或凭据问题后可以重试；若涉及数据版本回滚，应先停止服务并按快照记录检查当前任务，不能直接用旧数据库覆盖新记录。
+
+更新工具拒绝本地源码改动、分叉提交、自定义 Compose 覆盖文件或不支持的数据版本。连接与缓存挂载缺失时不会创建替代目录。`compose.override.yaml` 用于本机镜像固定，保留但不提交；删除它会回到 `compose.yaml` 指定版本。
+
+v0.10.15 及更早版本尚无此命令，首次先执行 `git pull --ff-only` 获取管理脚本，再执行上述更新命令，不运行配置向导、不覆盖配置。备份恢复目录未携带 `.git`，继续使用离线恢复方式；统一更新暂限 Git 克隆安装。飞书菜单与权限仍由应用后台维护，本次无需重新发布。
 
 ## 备份与迁移
 
@@ -182,7 +185,7 @@ python3 "/path/to/backup/project/scripts/manage.py" restore \
 
 ```sh
 docker compose stop
-python3 scripts/build.py
+python3 scripts/build.py --activate
 docker compose run --rm -T --entrypoint python3 backup /app/migrate_v010.py
 docker compose up -d --no-build
 ```
@@ -195,7 +198,7 @@ docker compose up -d --no-build
 
 ## 构建与测试
 
-传输使用 Python SMB 客户端，不依赖 rclone。`python3 scripts/build.py` 构建当前 Docker 平台的镜像。需要 ARM64、AMD64 两种镜像时执行 `python3 scripts/build_images.py --arch all`，跨架构构建需 Docker 提供相应模拟能力；`--cached-downloads` 只适用于已有校验和与依赖下载缓存的环境。该脚本从 Alpine 官方站点下载并校验基础系统，可在 Docker Hub 无法访问时使用，仍需访问 Alpine 与 Python 包源。
+普通部署直接下载稳定版镜像。开发时运行 `python3 scripts/build.py --activate` 构建本机镜像并写入本机 Compose 覆盖文件，然后使用 `docker compose up -d --no-build --pull never`；该步骤不发布镜像。需要 ARM64、AMD64 两种本机镜像时可执行 `python3 scripts/build_images.py --arch all`，跨架构构建需 Docker 提供相应模拟能力。源码构建需要访问 Alpine、Python 包源及基础镜像仓库；构建上下文只包含程序和依赖。
 
 ```sh
 python3 -m venv .venv
@@ -205,6 +208,8 @@ python -m unittest discover -s tests
 ```
 
 GitHub Actions 在推送和 PR 时运行 Python 3.11/3.14 回归测试、源码文件检查和 Docker 构建；不连接相机、SMB 或飞书。`python3 scripts/check_repository.py` 检查受跟踪文件中的运行数据和明显凭据特征，但不能替代人工复核。
+
+维护者发布匹配程序版本的 `vX.Y.Z` 标签后，`Stable release` 工作流先运行测试，再构建并验证两种架构，发布版本镜像、`stable` 别名和包含镜像摘要的 `release.json`。镜像使用 Actions 的内置 `GITHUB_TOKEN`，无需在仓库保存镜像仓库密码。首次创建 GHCR 包后需在包设置中确认公开可见，并验证匿名拉取；正式发布不使用个人 `.env`、数据或缓存。
 
 单元测试使用临时目录、小文件和模拟设备，不需要真实凭据。实机验收请使用独立的 SMB 测试目录和可删除的小文件。
 

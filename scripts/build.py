@@ -32,14 +32,21 @@ def main(argv=None):
     parser.add_argument('--tag', default='local/media-importer:' + version)
     parser.add_argument('--platform', choices=('linux/arm64', 'linux/amd64'))
     parser.add_argument('--base-image')
+    parser.add_argument('--activate', action='store_true', help='构建成功后让本项目 Compose 使用本机镜像，不启动服务')
     args = parser.parse_args(argv)
     command = ['docker', 'build', '-t', args.tag]
     if args.platform:
         command += ['--platform', args.platform]
     if args.base_image:
         command += ['--build-arg', 'BASE_IMAGE=' + args.base_image]
+    if args.activate:
+        from update import managed_override, atomic_json, SERVICES
+        override = managed_override(ROOT)
     with build_context(ROOT) as folder:
-        return subprocess.run([*command, str(folder)], cwd=ROOT).returncode
+        code = subprocess.run([*command, str(folder)], cwd=ROOT).returncode
+    if not code and args.activate:
+        atomic_json(override, {'x-media-importer-managed': 1, 'services': {name: {'image': args.tag} for name in SERVICES}})
+    return code
 
 
 if __name__ == '__main__':

@@ -107,15 +107,14 @@ def docker(args, root):
 
 
 def check(root):
-    print('正在检查 Compose 并构建镜像，首次构建可能需要几分钟…', flush=True)
+    print('正在检查 Compose 并下载稳定版镜像…', flush=True)
     if docker(['compose', 'config', '--quiet'], root).returncode:
         raise RuntimeError('Compose 配置未通过，请检查 .env')
-    built = subprocess.run([sys.executable, str(root / 'scripts/build.py')], cwd=root, capture_output=True, text=True)
-    if built.returncode:
-        raise RuntimeError('镜像构建失败，请运行 python3 scripts/build.py 查看构建日志；配置已保留')
+    if docker(['compose', 'pull'], root).returncode:
+        raise RuntimeError('镜像下载失败，请检查 ghcr.io 连通性；配置已保留')
     for args in (['compose', 'run', '--rm', '--no-deps', '-T', 'backup', 'validate'],):
         if docker(args, root).returncode:
-            raise RuntimeError('配置或构建检查未通过，请检查 .env 和部署说明；未启动同步')
+            raise RuntimeError('配置检查未通过，请检查 .env 和部署说明；未启动同步')
     result = docker(['compose', 'run', '--rm', '--no-deps', '-T', 'backup', 'check', '--json'], root)
     try:
         checks = json.loads(result.stdout)['checks']
@@ -164,7 +163,7 @@ def setup(root, *, read=input, hidden=getpass.getpass, probe=camera_identity, ch
     print('已生成 .env 和 config/settings.json；同步、原片删除和传输通知默认关闭。启动后识别 USB 相机，在飞书确认后备份。', flush=True)
     code = checks(root) if checks else 0
     print('检查结束。处理等待项后执行 docker compose up -d，再按 docs/feishu.md 完成事件、菜单和发布。' if checks else
-          '尚未检查连接；请按 docs/deployment.md 构建镜像并运行 check --json。')
+          '尚未检查连接；请按 docs/deployment.md 下载镜像并运行 check --json。')
     return code
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-command offline backup/restore using Python stdlib and Docker Compose."""
+"""Deployment maintenance using Python stdlib, Git and Docker Compose."""
 import argparse
 import json
 import os
@@ -46,6 +46,9 @@ def project_files(root, target):
                 copy_media(source, destination)
     for name in ('Dockerfile', '.dockerignore', 'compose.yaml', 'requirements.txt', 'README.md', '.env.example'):
         copy_media(root / name, target / name)
+    for name in ('.gitignore', 'compose.override.yaml'):
+        if (root / name).is_file():
+            copy_media(root / name, target / name)
     (target / 'config').mkdir()
     copy_media(root / 'config/settings.example.json', target / 'config/settings.example.json')
 
@@ -145,6 +148,10 @@ def restore(bundle, project, cache):
     env = set_mounts((bundle / 'connection.env').read_text(encoding='utf-8'), project, cache)
     (project / '.env').write_text(env, encoding='utf-8')
     os.chmod(project / '.env', 0o600)
+    # Offline restores use the image verified/built from the bundle, regardless
+    # of the registry tag in the bundled Compose file.
+    (project / 'compose.override.yaml').write_text(json.dumps({'x-media-importer-managed': 1,
+        'services': {name: {'image': image} for name in ('backup', 'bot')}}, indent=2) + '\n', encoding='utf-8')
     # The restored DB is only opened by Linux SQLite, never the host's SQLite.
     command([*base, '-e', 'MEDIA_IMPORTER_ENV_FILE=/run/media-importer.env',
              '-e', 'MEDIA_IMPORTER_REQUIRE_CACHE_MOUNT=1',
@@ -156,8 +163,10 @@ def restore(bundle, project, cache):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='素材导入助手：完整备份与迁移')
+    parser = argparse.ArgumentParser(description='素材导入助手：稳定版更新、完整备份与迁移')
     commands = parser.add_subparsers(dest='action', required=True)
+    upgrade = commands.add_parser('update', help='更新到 GitHub 最新稳定版；保留配置、任务和完整缓存')
+    upgrade.add_argument('--version', help='指定稳定版本，例如 0.10.16；默认最新正式发行版')
     save = commands.add_parser('backup', help='暂停服务，备份配置、任务、完整缓存，然后恢复原服务运行状态')
     save.add_argument('--output', type=Path, required=True, help='新备份目录，建议放在外接盘或另一块磁盘')
     load = commands.add_parser('restore', help='恢复到新的项目与缓存目录，保持两个开关关闭')
@@ -166,7 +175,10 @@ def main(argv=None):
     load.add_argument('--cache', type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        if args.action == 'backup':
+        if args.action == 'update':
+            from update import update
+            update(ROOT, args.version)
+        elif args.action == 'backup':
             backup(ROOT, args.output)
         else:
             restore(args.bundle, args.project, args.cache)

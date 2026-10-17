@@ -1,0 +1,76 @@
+name: Stable release
+on:
+  push:
+    tags: ['v*.*.*']
+permissions:
+  contents: read
+concurrency:
+  group: stable-release
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -r requirements.txt
+      - run: python scripts/check_repository.py
+      - run: python -m unittest discover -s tests -v
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate release version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python scripts/release_manifest.py --tag "$TAG" --digest "sha256:$(printf '%064d' 0)" --output /tmp/version-check.json
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Version without prefix
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: echo "number=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        id: image
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/shuaizha/media-importer:${{ steps.version.outputs.number }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.version.outputs.number }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - name: Smoke-test both image architectures
+        env:
+          IMAGE: ghcr.io/shuaizha/media-importer@${{ steps.image.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.number }}
+        run: |
+          for arch in amd64 arm64; do
+            actual=$(docker run --rm --network none --platform "linux/$arch" "$IMAGE" --version)
+            test "$actual" = "$VERSION"
+          done
+      - name: Publish stable manifest and release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          python scripts/release_manifest.py --tag "$TAG" --digest "$DIGEST" --output /tmp/release.json
+          docker buildx imagetools create --tag ghcr.io/shuaizha/media-importer:stable "ghcr.io/shuaizha/media-importer@$DIGEST"
+          gh release create "$TAG" /tmp/release.json --verify-tag --title "$TAG" --generate-notes
