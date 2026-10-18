@@ -173,8 +173,14 @@ def launcher(home, record):
         raise ValueError('命令路径已存在其他程序，未覆盖：' + str(target))
     executable = str(releases.executable(Path(record['bundle'])))
     if sys.platform == 'win32':
-        # cmd.exe must parse its exit before uninstall removes this script.
-        content = '@echo off\r\nrem ' + signature + '\r\n(\r\n"' + executable.replace('%', '%%') + '" --home "' + str(home).replace('%', '%%') + '" %*\r\nexit /b\r\n)\r\n'
+        # Keep this batch file until cmd.exe exits its batch context. Removing
+        # it in the child process makes a successful uninstall return an error.
+        content = ('@echo off\nsetlocal\nrem ' + signature + '\n'
+                   'set "MEDIA_IMPORTER_COMMAND_WRAPPER=%~f0"\n"' + executable.replace('%', '%%') +
+                   '" --home "' + str(home).replace('%', '%%') + '" %*\n'
+                   'if errorlevel 1 exit /b %errorlevel%\nif exist "' +
+                   str(home / 'installation.json').replace('%', '%%') + '" exit /b 0\n'
+                   '(goto) 2>nul & del "%~f0" & exit /b 0\n')
     else:
         content = '#!/bin/sh\n# ' + signature + '\nexec ' + shlex.quote(executable) + ' --home ' + shlex.quote(str(home)) + ' "$@"\n'
     atomic_write(target, content, 0o755)
@@ -293,7 +299,9 @@ def uninstall(home):
     if marker.exists() and json.loads(marker.read_text()) == {'mode': 'native', 'home': str(home)}:
         marker.unlink()
     command = Path(record['command'])
-    if command.is_file() and ('media-importer managed launcher ' + platforms.label(home)) in command.read_text(errors='replace'):
+    wrapper_will_remove = (sys.platform == 'win32' and
+        os.path.normcase(os.environ.get('MEDIA_IMPORTER_COMMAND_WRAPPER', '')) == os.path.normcase(str(command)))
+    if not wrapper_will_remove and command.is_file() and ('media-importer managed launcher ' + platforms.label(home)) in command.read_text(errors='replace'):
         command.unlink()
     # Keep the running Windows executable until the OS releases it. Never use
     # recursive deletion on project, data, cache, or user-selected paths.
