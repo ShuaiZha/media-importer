@@ -28,12 +28,15 @@ def smoke(bundle):
             if result.returncode:
                 raise RuntimeError(result.stdout + '\n' + result.stderr)
         run('install', '--project', str(project), '--bin-dir', str(root / 'commands'), '--no-start')
+        launcher = root / 'commands' / ('media-importer.cmd' if os.name == 'nt' else 'media-importer')
+        base = [str(launcher)]
         run('status', '--json')
         run('update', '--bundle', str(bundle))
         run('uninstall')
         for path, content in protected.items():
             assert path.read_bytes() == content, path
         assert not (root / 'native/installation.json').exists()
+        assert not launcher.exists()
         assert (root / 'native/uninstalled.json').exists()
     print('native install / same-version update / uninstall smoke passed; user data retained')
 
