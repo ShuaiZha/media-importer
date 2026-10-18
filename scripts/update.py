@@ -122,6 +122,9 @@ def deployment(root):
             if source.is_symlink() or target in paths and paths[target] != source:
                 raise ValueError('两个服务必须使用同一组真实挂载路径')
             paths[target] = source
+    owner = paths['/data'] / 'deployment.json'
+    if owner.is_file() and json.loads(owner.read_text()).get('mode') == 'native':
+        raise ValueError('此任务目录已切换到原生部署，请使用 media-importer update；未启动 Docker')
     return paths
 
 

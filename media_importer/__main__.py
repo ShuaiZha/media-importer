@@ -41,12 +41,16 @@ def main(argv=None):
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
     try:
+        if args.command in ('daemon', 'bot'):
+            from .deployment import assert_runtime
+            assert_runtime(args.data)
         if args.command in ('recover-cache', 'export-cache'):
             from .recovery import recover
             with worker_lock(args.data) as acquired:
                 if not acquired:
                     raise BackupError('请先停止传输和机器人服务，再恢复或导出缓存')
-                emit(recover(Path(args.data) / 'cache', args.output, args.config,
+                from .deployment import cache_path
+                emit(recover(cache_path(args.data), args.output, args.config,
                              export=args.command == 'export-cache'))
             return 0
         if args.command == 'health':
@@ -56,7 +60,14 @@ def main(argv=None):
             from .bot import serve, healthy, Bot
             from .settings import Settings
             if args.command == "bot":
-                serve(Settings(args.config, args.data), args.data)
+                from .locking import file_lock
+                directory = Path(args.data)
+                if os.environ.get('MEDIA_IMPORTER_RUNTIME') != 'native':
+                    directory.mkdir(parents=True, exist_ok=True)
+                with file_lock(directory / 'bot.lock', False) as acquired:
+                    if not acquired:
+                        raise BackupError('已有飞书进程使用此数据目录')
+                    serve(Settings(args.config, args.data), args.data)
             elif args.command == "bot-health":
                 return 0 if healthy(args.data) else 1
             else:
@@ -75,6 +86,13 @@ def main(argv=None):
             stop = threading.Event()
             for signum in (signal.SIGINT, signal.SIGTERM):
                 signal.signal(signum, lambda *_: stop.set())
+            stop_file = os.environ.get('MEDIA_IMPORTER_STOP_FILE')
+            if stop_file:
+                def watch_stop():
+                    while not stop.wait(.25):
+                        if Path(stop_file).exists():
+                            stop.set()
+                threading.Thread(target=watch_stop, daemon=True).start()
             with worker_lock(args.data) as acquired:
                 if not acquired:
                     raise BackupError("已有工作进程使用此数据目录")
@@ -97,7 +115,7 @@ def main(argv=None):
                     if progress.get("current_file"):
                         print(f"{label}: {progress['current_file']} ({progress.get('current_bytes', 0)} / {progress.get('current_total_bytes', 0)} bytes)")
                 print(result["unplug"]["message"])
-                print("飞书发送：状态 / 开启同步 / 停止同步 / 原片处理；或使用 docker compose exec backup python3 -m media_importer sync off")
+                print("飞书发送：状态 / 开启同步 / 停止同步 / 原片处理")
             return 0
         if args.command == "check":
             from .preflight import run

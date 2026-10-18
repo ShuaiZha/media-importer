@@ -11,10 +11,15 @@ from .model import Asset, BackupError, now
 class Store:
     def __init__(self, directory):
         self.directory = Path(directory)
+        from .deployment import assert_runtime
+        assert_runtime(self.directory)
+        if os.environ.get('MEDIA_IMPORTER_RUNTIME') == 'native' and not self.directory.is_dir():
+            raise BackupError('原生数据目录不可访问；等待原磁盘，不创建替代目录')
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.cache = self.directory / "cache"
+        from .deployment import cache_path
+        self.cache = cache_path(self.directory)
         from .storage import requires_mount
-        if not requires_mount():
+        if not requires_mount() and os.environ.get('MEDIA_IMPORTER_RUNTIME') != 'native':
             self.cache.mkdir(exist_ok=True)
         self.db = sqlite3.connect(str(self.directory / "state.sqlite3"), timeout=15)
         self.db.row_factory = sqlite3.Row
@@ -287,23 +292,18 @@ def cache_bytes(directory):
 
 @contextmanager
 def worker_lock(directory, blocking=False):
-    # Both supported Docker platforms run Linux; flock also supports native macOS checks.
-    import fcntl
+    from .locking import file_lock
     path = Path(directory)
+    if os.environ.get('MEDIA_IMPORTER_RUNTIME') == 'native' and not path.is_dir():
+        raise BackupError('原生数据目录不可访问；未创建替代目录')
     path.mkdir(parents=True, exist_ok=True)
-    with open(path / "worker.lock", "a+") as handle:
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
-        except BlockingIOError:
-            yield False
-            return
-        try:
-            yield True
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    with file_lock(path / 'worker.lock', blocking) as acquired:
+        yield acquired
 
 
 def fsync_directory(directory):
+    if os.name == 'nt':
+        return  # Windows does not support opening directories through os.open.
     fd = os.open(str(directory), os.O_RDONLY)
     try:
         os.fsync(fd)

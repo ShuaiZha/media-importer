@@ -85,7 +85,12 @@ def save(root, cache, values):
               'MEDIA_IMPORTER_DATA_HOST_DIR': (root / 'data').as_posix(),
               'MEDIA_IMPORTER_CACHE_HOST_DIR': cache.as_posix()}
     document = '# 本机连接与凭据；不要提交到 Git。\n' + ''.join(key + '=' + literal(value) + '\n' for key, value in {**mounts, **values}.items())
-    runtime = json.loads((root / 'config/settings.example.json').read_text(encoding='utf-8'))
+    example = root / 'config/settings.example.json'
+    if example.is_file():
+        runtime = json.loads(example.read_text(encoding='utf-8'))
+    else:
+        from media_importer.config import DEFAULTS
+        runtime = json.loads(json.dumps(DEFAULTS))
     runtime['backup'].update(delete_source_after_import=False, stop_after_current=False)
     runtime['notifications']['enabled'] = False
     write_new(env, document)
@@ -127,7 +132,7 @@ def check(root):
     return result.returncode
 
 
-def setup(root, *, read=input, hidden=getpass.getpass, probe=camera_identity, checks=check):
+def setup(root, *, read=input, hidden=getpass.getpass, probe=camera_identity, checks=check, native=False):
     root = root.resolve()
     if (root / '.env').exists() or (root / '.env').is_symlink() or (root / 'config/settings.json').exists() or (root / 'data/state.sqlite3').exists():
         raise ValueError('检测到已有安装，向导不会覆盖配置或记录；修改连接请编辑 .env')
@@ -162,8 +167,11 @@ def setup(root, *, read=input, hidden=getpass.getpass, probe=camera_identity, ch
     save(root, cache, values)
     print('已生成 .env 和 config/settings.json；同步、原片删除和传输通知默认关闭。启动后识别 USB 相机，在飞书确认后备份。', flush=True)
     code = checks(root) if checks else 0
-    print('检查结束。处理等待项后执行 docker compose up -d，再按 docs/feishu.md 完成事件、菜单和发布。' if checks else
-          '尚未检查连接；请按 docs/deployment.md 下载镜像并运行 check --json。')
+    if native:
+        print('配置已保存；原生服务启动后可运行 media-importer check 检查各端连接。')
+    else:
+        print('检查结束。处理等待项后执行 docker compose up -d，再按 docs/feishu.md 完成事件、菜单和发布。' if checks else
+              '尚未检查连接；请按 docs/deployment.md 下载镜像并运行 check --json。')
     return code
 
 

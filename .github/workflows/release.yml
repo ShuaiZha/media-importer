@@ -8,6 +8,8 @@ concurrency:
   group: stable-release
   cancel-in-progress: false
 jobs:
+  native:
+    uses: ./.github/workflows/native.yml
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -22,13 +24,22 @@ jobs:
       - run: python scripts/check_repository.py
       - run: python -m unittest discover -s tests -v
   publish:
-    needs: test
+    needs: [test, native]
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: native-assets
+          merge-multiple: true
+      - run: python scripts/native_manifest.py native-assets
       - name: Validate release version
         env:
           TAG: ${{ github.ref_name }}
@@ -77,4 +88,4 @@ jobs:
         run: |
           python scripts/release_manifest.py --tag "$TAG" --digest "$DIGEST" --output /tmp/release.json
           docker buildx imagetools create --tag ghcr.io/shuaizha/media-importer:stable "ghcr.io/shuaizha/media-importer@$DIGEST"
-          gh release create "$TAG" /tmp/release.json --verify-tag --title "$TAG" --generate-notes
+          gh release create "$TAG" /tmp/release.json native-assets/*.tar.gz native-assets/*.json scripts/install-native.sh scripts/install-native.ps1 --verify-tag --title "$TAG" --notes-file "docs/releases/$TAG.md" --latest

@@ -32,20 +32,27 @@ def mounted(path):
     return False
 
 
+def native_volume_available():
+    volume = os.environ.get('MEDIA_IMPORTER_CACHE_VOLUME')
+    return not volume or Path(volume).is_mount()
+
+
 def inspect_cache(path, identity=None):
     path = Path(path)
     result = {"available": False, "path": str(path), "checked_at": now(), "free_bytes": None,
-              "reason": None, "action": "重新连接缓存盘，并检查 Docker 的目录挂载；不会改用其他磁盘。"}
+              "reason": None, "action": "重新连接缓存盘并检查配置路径；Docker 部署还需检查目录挂载。"}
     try:
         if not path.is_dir():
             raise CacheUnavailable("缓存目录不可访问")
+        if not native_volume_available():
+            raise CacheUnavailable('原生缓存盘未挂载，等待原磁盘')
         if requires_mount() and not mounted(path):
             raise CacheUnavailable("缓存磁盘未挂载，已阻止使用容器内的替代目录")
         if identity:
             marker = path / MARKER
             if marker.is_symlink() or marker.read_text().strip() != identity:
                 raise CacheUnavailable("缓存盘身份不符，等待原缓存盘")
-        elif requires_mount():
+        elif requires_mount() or os.environ.get('MEDIA_IMPORTER_RUNTIME') == 'native':
             raise CacheUnavailable("缓存盘尚未完成身份登记，等待后台检查")
         # A read-only probe; transfer writes still handle permission/IO failures.
         with os.scandir(path) as entries:
@@ -60,9 +67,10 @@ def inspect_cache(path, identity=None):
 
 def initialize_cache(store):
     """Register only the first, mounted volume; an existing binding is never replaced."""
-    if requires_mount() and not store.get_meta("cache_identity"):
+    native = os.environ.get('MEDIA_IMPORTER_RUNTIME') == 'native'
+    if (requires_mount() or native) and not store.get_meta("cache_identity"):
         try:
-            if not mounted(store.cache) or not store.cache.is_dir():
+            if (requires_mount() and not mounted(store.cache)) or not store.cache.is_dir() or not native_volume_available():
                 raise CacheUnavailable("缓存磁盘未挂载")
             marker = store.cache / MARKER
             if marker.is_symlink():

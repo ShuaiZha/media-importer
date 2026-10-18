@@ -23,7 +23,8 @@ def atomic_write(path, content, mode=0o600):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".media-import-", dir=str(path.parent))
     try:
-        os.fchmod(fd, mode)
+        if hasattr(os, 'fchmod'):
+            os.fchmod(fd, mode)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)
             handle.flush()
@@ -42,13 +43,9 @@ class Settings:
 
     @contextmanager
     def lock(self):
-        import fcntl
-        with self.path.with_suffix(".lock").open("a+") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        from .locking import file_lock
+        with file_lock(self.path.with_suffix('.lock')):
+            yield
 
     def read(self):
         text = self.path.read_text(encoding="utf-8")

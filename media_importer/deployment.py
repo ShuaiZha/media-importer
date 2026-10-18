@@ -5,6 +5,20 @@ from pathlib import Path
 from .model import ConfigError
 
 
+def cache_path(directory):
+    return Path(os.environ.get('MEDIA_IMPORTER_CACHE_DIR') or Path(directory) / 'cache')
+
+
+def assert_runtime(directory):
+    """A persistent choice survives stopped services and host restarts."""
+    import json
+    marker = Path(directory) / 'deployment.json'
+    if marker.exists():
+        mode = os.environ.get('MEDIA_IMPORTER_RUNTIME', 'docker')
+        if json.loads(marker.read_text())['mode'] != mode:
+            raise ConfigError('此数据目录已由另一种部署接管；先停止并卸载该部署，再切换运行方式')
+
+
 def environment():
     path = os.environ.get("MEDIA_IMPORTER_ENV_FILE")
     if path:

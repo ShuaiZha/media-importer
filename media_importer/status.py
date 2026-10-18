@@ -159,7 +159,8 @@ def snapshot(directory, settings):
         elif age(progress.get('progress_updated_at')) > 10 or progress['phase'] not in ('downloading', 'uploading'):
             progress.update(speed_bytes_per_second=0, eta_seconds=None)
         progress['control_state'] = actual
-    cache = Path(directory) / 'cache'
+    from .deployment import cache_path
+    cache = cache_path(directory)
     cache_health = inspect_cache(cache, meta.get('cache_identity'))
     selected = selected_file_ids(rows, media_scope)
     cleanup_selected = selected_file_ids(rows, media_scope, include_excluded=True)

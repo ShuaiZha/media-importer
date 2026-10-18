@@ -24,7 +24,22 @@ GoPro → A 完整缓存 ─┬─→ 继续导入 B、C… → 本地
 
 ## 快速开始
 
-准备好 **Docker Compose、可访问的 SMB 共享、飞书自建应用**，并用数据线连接已开机的相机。当前已实测 **GoPro HERO9 + macOS Docker Desktop**；其他型号的开放范围与待验证项见[兼容性说明](docs/deployment.md#相机兼容性)。
+准备好 **可访问的 SMB 共享、飞书自建应用**，并用数据线连接已开机的相机。两种部署共用传输和飞书代码，选择一种运行：
+
+| 部署 | 安装与维护 |
+| --- | --- |
+| **Mac 原生 CLI** | 包含 Python 与依赖，无需 Docker；[安装、更新、卸载](docs/native.md) |
+| **Docker Compose** | ARM64 / AMD64 镜像；按下面步骤部署 |
+
+Mac / Linux 原生命令安装：
+
+```sh
+curl -fsSL https://github.com/ShuaiZha/media-importer/releases/latest/download/install-native.sh | sh
+```
+
+安装后使用 `media-importer update` 更新、`media-importer uninstall` 卸载；卸载保留配置、任务和缓存。Windows 命令、PATH 设置及 Docker 切换步骤见[原生部署说明](docs/native.md)。也可从 [Releases](https://github.com/ShuaiZha/media-importer/releases) 下载对应安装包。
+
+Linux / Windows 已纳入原生构建和服务适配，设备链路仍待实机验收；目前可继续使用 Docker。GoPro 型号的验证范围见[兼容性说明](docs/deployment.md#相机兼容性)。以下为 Docker 部署。
 
 ### 1. 获取项目
 
