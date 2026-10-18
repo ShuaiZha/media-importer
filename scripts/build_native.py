@@ -25,6 +25,7 @@ def build(output):
     work = Path(tempfile.mkdtemp(prefix='media-importer-native-build-'))
     env = {**os.environ, 'PYINSTALLER_CONFIG_DIR': str(work / 'pyinstaller-cache')}
     subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir',
+        '--python-option', 'X utf8',  # Frozen Python ignores PYTHONUTF8; Chinese output/paths must work on Windows.
         '--name', 'media-importer', '--distpath', str(work / 'dist'), '--workpath', str(work / 'work'),
         '--specpath', str(work), '--paths', str(ROOT), '--collect-submodules', 'media_importer',
         '--hidden-import', 'scripts.setup', '--collect-data', 'certifi',

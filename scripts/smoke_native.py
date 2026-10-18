@@ -15,12 +15,12 @@ from media_importer.native.releases import executable
 
 def smoke(bundle):
     with tempfile.TemporaryDirectory(prefix='media-importer-smoke-') as temporary:
-        root = Path(temporary).resolve(); project = root / 'project with spaces'; project.mkdir()
+        root = Path(temporary).resolve(); project = root / 'project with spaces 素材'; project.mkdir()
         for name in ('config', 'data', 'cache'):
             (project / name).mkdir()
-        (project / '.env').write_text("DESTINATION_HOST='storage.example.com'\nDESTINATION_SHARE='media'\nDESTINATION_USERNAME='example'\nDESTINATION_PASSWORD='example-only'\nMEDIA_IMPORTER_CACHE_HOST_DIR='./cache'\n")
-        (project / 'config/settings.json').write_text(json.dumps(DEFAULTS))
-        (project / 'cache/keep.txt').write_text('complete user data')
+        (project / '.env').write_text("DESTINATION_HOST='storage.example.com'\nDESTINATION_NAME='测试存储'\nDESTINATION_SHARE='media'\nDESTINATION_USERNAME='example'\nDESTINATION_PASSWORD='example-only'\nMEDIA_IMPORTER_CACHE_HOST_DIR='./cache'\n", encoding='utf-8')
+        (project / 'config/settings.json').write_text(json.dumps(DEFAULTS, ensure_ascii=False), encoding='utf-8')
+        (project / 'cache/完整素材.txt').write_text('complete user data', encoding='utf-8')
         protected = {p: p.read_bytes() for p in project.rglob('*') if p.is_file()}
         base = [str(executable(bundle)), '--home', str(root / 'native')]
         def run(*args):
