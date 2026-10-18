@@ -33,5 +33,6 @@ Media Importer 是轻量的素材导入与归档工具：从来源设备导入�
 
 所有发行版与安装附件见 [Releases](https://github.com/ShuaiZha/media-importer/releases)。仓库中保留的版本说明：
 
+- [v0.10.22：设备适配边界与 Windows 卸载恢复](releases/v0.10.22.md)
 - [v0.10.21：原生 CLI 彻底卸载](releases/v0.10.21.md)
 - [v0.10.20：原生 CLI 部署](releases/v0.10.20.md)

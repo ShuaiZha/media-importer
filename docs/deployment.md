@@ -97,7 +97,7 @@ docker compose logs --tail 100 bot
 python3 scripts/manage.py update
 ```
 
-Windows 使用 `py -3 scripts/manage.py update`。指定版本示例：`python3 scripts/manage.py update --version 0.10.21`。
+Windows 使用 `py -3 scripts/manage.py update`。指定版本示例：`python3 scripts/manage.py update --version 0.10.22`。
 
 更新以已发布的镜像为准；拉取 `main` 源码不会替换运行中的容器。验证未发布改动时，在独立目录按[源码构建说明](../CONTRIBUTING.md#docker)操作。
 

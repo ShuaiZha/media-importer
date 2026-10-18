@@ -71,7 +71,7 @@ macOS 首次运行或升级后可能要求允许 `media-importer` 访问可移�
 media-importer update
 ```
 
-也可指定正式版本，例如 `media-importer update --version 0.10.21`。离线更新使用已解压的对应平台安装包：
+也可指定正式版本，例如 `media-importer update --version 0.10.22`。离线更新使用已解压的对应平台安装包：
 
 ```sh
 media-importer update --bundle /path/to/package/media-importer
@@ -119,7 +119,7 @@ Windows 在原项目停止 Docker 后执行：
 
 Windows 彻底卸载在程序退出后等待文件占用释放，最多重试 30 秒。若仍无法删除，会返回失败并保留命令入口及旁边的 `.purge.json` 恢复记录。关闭占用安装目录的程序后，再执行 `media-importer uninstall --purge --yes` 完成剩余清理；即使部分程序文件已经删除，也无需重新安装。不要手动删除恢复记录。
 
-此恢复机制已加入当前源码；已发布的 v0.10.21 安装包尚不包含修复，仍可能出现 `WinError 5` 或目录占用失败。Windows 后台服务和相机链路仍待实机验收。
+此恢复机制从 v0.10.22 起提供；旧版 v0.10.21 仍可能出现 `WinError 5` 或目录占用失败。Windows 后台服务和相机链路仍待实机验收。
 
 独立源码仓库、另存的手工备份和安装包下载文件不属于安装管理范围，需自行处理。两个卸载命令均不删除相机素材、SMB 归档或 Docker 软件。
 
