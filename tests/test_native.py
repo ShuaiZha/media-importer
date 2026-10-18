@@ -251,6 +251,8 @@ class NativeTests(unittest.TestCase):
                 self.assertEqual(2, main(['--home', str(self.home), 'uninstall', '--purge']))
             with patch('sys.stdin.isatty', return_value=True), patch('builtins.input', return_value='cancel'), patch('sys.stdout', io.StringIO()):
                 self.assertEqual(0, main(['--home', str(self.home), 'uninstall', '--purge']))
+            with patch('sys.stdin.isatty', return_value=True), patch('builtins.input', side_effect=EOFError), patch('sys.stdout', io.StringIO()), patch('sys.stderr', io.StringIO()):
+                self.assertEqual(2, main(['--home', str(self.home), 'uninstall', '--purge']))
             remove.assert_not_called()
         self.assert_preserved()
 

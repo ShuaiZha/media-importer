@@ -46,7 +46,7 @@ def smoke(bundle):
         base = [str(launcher)]
         refused = subprocess.run([*base, 'uninstall', '--purge'], stdin=subprocess.DEVNULL,
                                  capture_output=True, text=True, encoding='utf-8', timeout=60)
-        assert refused.returncode == 2
+        assert refused.returncode == 2, (refused.returncode, refused.stdout, refused.stderr)
         for path, content in protected.items():
             assert path.read_bytes() == content, path
         run('uninstall', '--purge', '--yes')

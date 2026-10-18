@@ -178,7 +178,11 @@ def main(argv=None):
                 if not args.yes:
                     if not sys.stdin.isatty():
                         raise ValueError('非交互执行须明确指定 --purge --yes；尚未卸载或删除')
-                    if input('输入 DELETE 确认彻底卸载，其他输入取消：').strip() != 'DELETE':
+                    try:
+                        confirmation = input('输入 DELETE 确认彻底卸载，其他输入取消：').strip()
+                    except EOFError:
+                        raise ValueError('未收到删除确认；尚未卸载或删除，非交互执行须明确指定 --purge --yes') from None
+                    if confirmation != 'DELETE':
                         print('已取消，程序和数据未变。')
                         return 0
         with file_lock(home / 'install.lock', False) as free:
