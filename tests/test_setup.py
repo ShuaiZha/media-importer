@@ -50,6 +50,18 @@ class SetupTests(unittest.TestCase):
             wizard.setup(self.root, read=lambda _: self.fail('must not ask credentials'))
         self.assertEqual('keep-this', (self.root / '.env').read_text())
 
+    def test_identity_probe_uses_selected_adapter_without_vendor_http_in_wizard(self):
+        from media_importer.model import ConfigError, SourceConnectionError
+        with patch('media_importer.adapters.source_defaults', return_value={'type': 'fixture'}), \
+                patch('media_importer.adapters.probe_source', return_value={'serial_number': 'fixture-1'}) as probe:
+            self.assertEqual('fixture-1', wizard.camera_identity('fixture://device'))
+            probe.assert_called_once_with('fixture', 'fixture://device')
+            probe.side_effect = SourceConnectionError('offline')
+            self.assertIsNone(wizard.camera_identity('fixture://device'))
+            probe.side_effect = ConfigError('invalid address')
+            with self.assertRaises(ConfigError):
+                wizard.camera_identity('invalid')
+
     def test_first_install_can_defer_camera_to_usb_discovery(self):
         answers = iter(['', './cache', 'storage.example.com', '', 'media', '', 'backup', '',
                         'cli_EXAMPLE00000000', 'ou_EXAMPLE00000000'])

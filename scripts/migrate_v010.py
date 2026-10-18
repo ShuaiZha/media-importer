@@ -101,7 +101,8 @@ def migrate(config_path, directory, backup=None):
             db.close()
         store=Store(directory)
         try:
-            # Preserve adapter identities and assigned paths. Group membership is metadata only.
+            # This one-time migration targets the GoPro-only pre-v0.10 format;
+            # it is not a runtime source selector. Preserve identities and paths.
             from media_importer.adapters.gopro import GoProSource
             destinations={r['destination'] for r in store.files()}
             for destination in destinations:

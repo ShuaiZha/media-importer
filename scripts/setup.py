@@ -8,12 +8,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import urllib.error
-import urllib.request
 from pathlib import Path
-from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def literal(value):
@@ -33,15 +32,11 @@ def ask(label, default='', secret=False, read=input, hidden=getpass.getpass, req
 
 
 def camera_identity(url):
-    parsed = urlsplit(url)
-    if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password or parsed.path not in ('', '/') or parsed.query or parsed.fragment:
-        raise ValueError('相机地址须为 http(s)://地址:端口，不含路径、账号或密码')
+    from media_importer.adapters import source_defaults, probe_source
+    from media_importer.model import SourceError
     try:
-        request = urllib.request.Request(url.rstrip('/') + '/gp/gpControl/info')
-        with urllib.request.urlopen(request, timeout=5) as response:
-            value = json.loads(response.read(65536))['info']['serial_number']
-            return value if isinstance(value, str) and value.isalnum() else None
-    except (OSError, ValueError, KeyError, TypeError):
+        return probe_source(source_defaults()['type'], url)['serial_number']
+    except (SourceError, OSError, KeyError, TypeError):
         return None
 
 
@@ -137,14 +132,18 @@ def setup(root, *, read=input, hidden=getpass.getpass, probe=camera_identity, ch
     if (root / '.env').exists() or (root / '.env').is_symlink() or (root / 'config/settings.json').exists() or (root / 'data/state.sqlite3').exists():
         raise ValueError('检测到已有安装，向导不会覆盖配置或记录；修改连接请编辑 .env')
     print('首次配置：连接相机、选择缓存盘、填写 SMB 和飞书应用。密码输入时不回显。')
-    values = {'SOURCE_TYPE': 'gopro', 'DESTINATION_TYPE': 'smb', 'SOURCE_TIMEOUT_SECONDS': '20'}
+    from media_importer.adapters import source_defaults, validate_source
+    source = source_defaults()
+    values = {'SOURCE_TYPE': source['type'], 'DESTINATION_TYPE': 'smb',
+              'SOURCE_TIMEOUT_SECONDS': str(source['timeout_seconds'])}
     values['SOURCE_URL'] = ask('相机 HTTP 地址（可留空，启动后自动发现）', read=read, required=False)
     serial = probe(values['SOURCE_URL']) if values['SOURCE_URL'] else None
     if serial:
         print('已读取相机序列号：' + serial)
     values['SOURCE_SERIAL'] = serial or (ask('相机序列号（可留空）', read=read, required=False) if values['SOURCE_URL'] else '')
-    if values['SOURCE_SERIAL'] and not values['SOURCE_SERIAL'].isalnum():
-        raise ValueError('序列号应为字母和数字，请重新运行向导')
+    selected = {**source, 'url': values['SOURCE_URL'], 'serial': values['SOURCE_SERIAL']}
+    validate_source(selected)
+    values.update(SOURCE_URL=selected['url'], SOURCE_SERIAL=selected['serial'])
     cache = cache_directory(ask('本机缓存目录', './cache', read=read), root)
     for key, label, default, required in (
         ('DESTINATION_HOST', 'SMB 地址或域名（不含 smb://）', '', True),

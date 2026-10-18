@@ -36,6 +36,8 @@ Windows PowerShell 可用 `py -3 -m venv .venv`，然后直接使用 `.venv/Scri
 
 新增设备或协议时，复用现有队列、缓存与任务记录，将差异限制在对应适配中。提交时同步更新[兼容性说明](docs/compatibility.md)，区分已实现、模拟验证和实机验证；尚未验证原片删除的设备默认保留原片。项目介绍使用通用定位，品牌名用于具体适配、配置示例和验证结论，不提前宣称尚未实现的支持。
 
+设备适配的最小接口见 [`media_importer/contracts.py`](media_importer/contracts.py)，在 [`adapters/__init__.py`](media_importer/adapters/__init__.py) 注册。发现地址、专用格式、素材关联、保活参数和删除联动范围由适配器解释；确认流程、两路队列、缓存核验与归档记录共用。新增适配先用独立小文件验证，不能通过复用 GoPro 的素材身份或删除规则来宣称支持。
+
 ## 构建
 
 ### Docker

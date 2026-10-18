@@ -22,6 +22,25 @@ class GoProTests(unittest.TestCase):
         from media_importer.adapters.gopro_models import compatibility
         self.source.compatibility = compatibility('HERO9 Black', 'HD9.01.01.72.00')
 
+    def test_fork_keeps_transport_policy_inside_adapter(self):
+        transfer = self.source.fork()
+        monitor = self.source.fork(purpose='monitor')
+        heartbeat = self.source.fork(purpose='keep_alive')
+        self.assertEqual((20, 3), (transfer.timeout, transfer.attempts))
+        self.assertEqual((3, 1), (monitor.timeout, monitor.attempts))
+        self.assertEqual((2, 1), (heartbeat.timeout, heartbeat.attempts))
+        self.assertEqual((20, 3), (self.source.timeout, self.source.attempts))
+        self.assertEqual(3, heartbeat.keep_alive_interval_seconds)
+
+    def test_single_delete_effects_exclude_other_chapters_and_unknown_sidecars(self):
+        from test_service import replace
+        main, preview = footage(), footage(primary=False)
+        other = footage(2)
+        unrelated = replace(preview, path='101GOPRO/GL010001.LRV')
+        orphan = replace(preview, parent_gumi='')
+        members = [main, preview, other, footage(2, primary=False), unrelated, orphan]
+        self.assertEqual({main.identity, preview.identity}, self.source.deletion_effects(main, members))
+
     def test_hero9_uses_busy_8_and_encoding_10(self):
         with patch.object(self.source, "_json", return_value={"status": {"8": 0, "10": 0}}):
             self.source.ensure_idle()

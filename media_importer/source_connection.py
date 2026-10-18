@@ -1,4 +1,4 @@
-"""One connected camera, one explicit approval; no permanent device allow-list."""
+"""One connected source, one explicit approval; discovery belongs to its adapter."""
 import json
 import sqlite3
 import time
@@ -55,6 +55,7 @@ def reason(store, config, *, deleting=False):
         return None
     device = state.get('device', {})
     if (state.get('state') != 'approved' or not fresh(state) or
+            device.get('type') != config.source['type'] or
             device.get('serial_number') != config.source['serial'] or device.get('url') != config.source['url']):
         return '等待飞书确认当前相机；已有完整缓存可继续上传'
     if deleting and not device.get('compatibility', {}).get('delete_verified'):
@@ -103,6 +104,12 @@ def decide(store, settings, session_id, accept):
         state = store.get_meta(KEY, {})
         if state.get('id') != session_id or not fresh(state) or state.get('state') == 'offline':
             raise ConfigError('相机连接已变化，请通过状态菜单重新确认')
+        if accept:
+            configured = settings.read()
+            if configured.get('error'):
+                raise ConfigError(configured['error'])
+            if state['device'].get('type') != configured['config']['source']['type']:
+                raise ConfigError('来源类型已变化，请等待重新识别并确认设备')
         if state.get('state') == 'approved':
             if not accept:
                 raise ConfigError('本次连接已经确认；如需停止传输，请使用“停止同步”')
@@ -116,7 +123,7 @@ def decide(store, settings, session_id, accept):
             # One active camera only. Do not strand another camera's unfinished work.
             for row in store.files():
                 asset = store.asset(row)
-                if asset.serial != device['serial_number']:
+                if (asset.source_type, asset.serial) != (device['type'], device['serial_number']):
                     raise ConfigError('另一台相机仍有传输或清理事项，请先完成原任务后再切换设备')
             # Save the switch first. A crash before committing approval remains gated.
             settings.set_enabled(True)
@@ -130,7 +137,7 @@ def decide(store, settings, session_id, accept):
 
 def run(directory, settings, stop):
     from .store import Store
-    from .adapters.gopro_discovery import discover, usb_url
+    from .adapters import discover_source
     store = Store(directory)
     scan_at = 0
     try:
@@ -142,13 +149,12 @@ def run(directory, settings, stop):
             source = item['config']['source']
             hint = item.get('source_hint', source)
             state = store.get_meta(KEY, {})
-            hints = [state.get('device', {}).get('url'), source['url'], hint['url'],
-                     usb_url(hint['serial']), usb_url(source['serial'])]
-            device = discover(hints, stop)
+            hints = [state.get('device', {}), source, hint]
+            device = discover_source(source['type'], hints, stop)
             state = observe(store, device)
             # Publish loss before slower discovery, so old approval expires promptly.
             if not device and state.get('state') in ('searching', 'offline') and time.monotonic() >= scan_at:
-                found = discover([], stop, scan=True)
+                found = discover_source(source['type'], [], stop, scan=True)
                 scan_at = time.monotonic() + 60
                 if found:
                     observe(store, found)

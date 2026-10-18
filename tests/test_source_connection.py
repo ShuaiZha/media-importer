@@ -66,6 +66,15 @@ class DiscoveryTests(unittest.TestCase):
             self.assertIsNone(discover([usb_url('123')], stop, scan=True))
             probe.assert_not_called()
 
+    def test_adapter_derives_usb_hints_and_ignores_other_source_types(self):
+        from media_importer.adapters import discover_source
+        hints = [{'type': 'other', 'url': 'other://device', 'serial': '999'},
+                 {'type': 'gopro', 'url': 'http://camera.test', 'serial': '123'}]
+        stop = threading.Event()
+        with patch('media_importer.adapters.gopro_discovery.discover', return_value=device()) as search:
+            self.assertEqual(device(), discover_source('gopro', hints, stop))
+        search.assert_called_once_with(['http://camera.test', usb_url('123')], stop, scan=False)
+
     def test_model_profile_does_not_claim_all_cameras_validated(self):
         self.assertTrue(compatibility('HERO9 Black', 'HD9.01.01.72.00')['delete_verified'])
         for name, firmware in [('HERO9 Black', 'unknown'), ('HERO10 Black', '1'),

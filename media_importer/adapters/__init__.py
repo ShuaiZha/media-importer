@@ -45,5 +45,16 @@ def probe_source(kind, url):
     return _module(SOURCES, kind, "来源").probe(url)
 
 
+def discover_source(kind, hints, stop, *, scan=False):
+    return _module(SOURCES, kind, "来源").discover(hints, stop, scan=scan)
+
+
+def source_media_category(asset):
+    if asset.source_type not in SOURCES:
+        return None
+    classify = getattr(_module(SOURCES, asset.source_type, "来源"), "media_category", None)
+    return classify(asset) if classify else None
+
+
 def notification_adapter(kind):
     return _module(NOTIFICATIONS, kind, "通知")

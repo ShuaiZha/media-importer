@@ -1,7 +1,22 @@
 """The small structural contracts consumed by the transfer engine.
 
 Adapters translate their native identity, telemetry, errors and file metadata here.
-Optional fork/keep_alive/telemetry capabilities are detected by presence; an adapter must not claim support for operations it cannot perform safely.
+Discovery observations use type, serial_number, model_name, firmware_version,
+url and compatibility (import_supported/delete_verified/validation/reason).
+identify() verifies the configured source and returns its normalized identity;
+the serial_number/model_name fields do not require a vendor's HTTP response.
+
+Source modules provide defaults/validate/create/probe/discover. Discovery receives
+identity/address hints and a cancellation event; address derivation and scanning
+stay inside the adapter. Optional media_category(asset) overrides standard file
+extensions with video/photo/other, or returns None to use the common fallback.
+
+Optional fork(stop=None, *, purpose='transfer') creates an independent client.
+The monitor and keep_alive purposes let the adapter bound its own timeout/retries.
+Optional keep_alive requires a positive keep_alive_interval_seconds; telemetry
+requires idle_reason(state). Optional deletion_effects(asset, members) returns
+the verified member identities that a delete may affect; omission means only the
+requested file. An adapter must not claim unsafe or unverified capabilities.
 """
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Protocol, Set

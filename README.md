@@ -26,7 +26,7 @@
 
 准备[已适配的来源设备](docs/compatibility.md)、USB 数据线、可读写的 SMB 共享，以及[飞书自建应用](docs/feishu.md)。设备需开机，电脑需保持唤醒并能访问设备、SMB 和飞书。
 
-选择一种部署方式，两者共用传输核心、配置和数据格式：
+选择一种部署方式，两者共用传输核心、设备适配、配置和数据格式：
 
 | 方式 | 适合的环境 | 入口 |
 | --- | --- | --- |
@@ -76,6 +76,6 @@ docker compose up -d --no-build
 - [配置参考](docs/configuration.md)：连接、凭据、缓存目录与 JSON 设置。
 - [日常使用与排障](docs/operations.md)：飞书操作、进度含义、更新与故障处理。
 - [备份、迁移与恢复](docs/recovery.md)：哪些数据需要保留，如何恢复完整缓存。
-- [贡献指南](CONTRIBUTING.md)：开发、测试和发布流程。
+- [贡献指南](CONTRIBUTING.md)：设备适配、开发测试和发布流程。
 
 欢迎通过 [Issues](https://github.com/ShuaiZha/media-importer/issues) 反馈问题。请提供版本、系统和脱敏日志，勿附带凭据、数据库或私人素材。

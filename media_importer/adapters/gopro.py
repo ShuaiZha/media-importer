@@ -46,6 +46,23 @@ def defaults():
             "transport": "usb", "request_attempts": 3}
 
 
+def discover(hints, stop, *, scan=False):
+    from .gopro_discovery import discover as discover_usb, usb_url
+    matching = [hint for hint in hints if hint.get('type') == 'gopro']
+    addresses = [hint.get('url') for hint in matching]
+    addresses += [usb_url(hint.get('serial') or hint.get('serial_number', '')) for hint in reversed(matching)]
+    return discover_usb(addresses, stop, scan=scan)
+
+
+def media_category(asset):
+    extension = PurePosixPath(asset.path).suffix.lower()
+    if extension in ('.lrv', '.360'):
+        return 'video'
+    if extension == '.gpr':
+        return 'photo'
+    return None  # Standard formats use the common classification.
+
+
 def validate(values):
     from ..config import ConfigError
     for key, value in defaults().items():
@@ -68,6 +85,8 @@ def validate(values):
 
 
 class GoProSource:
+    keep_alive_interval_seconds = 3
+
     def __init__(self, config, stop=None):
         self.config = config
         self.transport = config.source.get("transport", "usb")
@@ -80,8 +99,23 @@ class GoProSource:
         self.opener = build_opener(_NoRedirect())
         self.attempts = config.source.get("request_attempts", 3)
 
-    def fork(self, stop=None):
-        return type(self)(self.config, self.stop if stop is None else stop)
+    def fork(self, stop=None, *, purpose='transfer'):
+        client = type(self)(self.config, self.stop if stop is None else stop)
+        if purpose in ('monitor', 'keep_alive'):
+            client.timeout = min(client.timeout, 3 if purpose == 'monitor' else 2)
+            client.attempts = 1
+        return client
+
+    @staticmethod
+    def deletion_effects(asset, members):
+        """A single-file delete may also remove this primary's associated sidecars."""
+        folder = PurePosixPath(asset.path).parent
+        gumi = asset.metadata.get('gumi') if asset.metadata.get('primary') else None
+        return {asset.identity} | {member.identity for member in members
+                                   if gumi and not member.metadata.get('primary')
+                                   and member.metadata.get('parent_gumi') == gumi
+                                   and member.serial == asset.serial and member.source_type == asset.source_type
+                                   and PurePosixPath(member.path).parent == folder}
 
     @staticmethod
     def deletion_candidates(assets):

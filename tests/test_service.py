@@ -53,6 +53,8 @@ def replace(asset, **changes):
 
 class FakeSource:
     deletion_candidates = staticmethod(GoProSource.deletion_candidates)
+    deletion_effects = staticmethod(GoProSource.deletion_effects)
+    keep_alive_interval_seconds = GoProSource.keep_alive_interval_seconds
     groups = staticmethod(GoProSource.groups)
     reconcile = staticmethod(GoProSource.reconcile)
     idle_reason = staticmethod(GoProSource.idle_reason)

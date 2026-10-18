@@ -3,14 +3,18 @@ import json
 from pathlib import PurePosixPath
 
 from .model import Asset
+from .adapters import source_media_category
 
 
 MEDIA_SCOPES = {"all": "全部素材", "video": "仅视频", "photo": "仅照片"}
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".360", ".lrv"}
-PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".gpr", ".dng", ".raw", ".png", ".heic", ".heif"}
+VIDEO_EXTENSIONS = {".mp4", ".mov"}
+PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".dng", ".raw", ".png", ".heic", ".heif"}
 
 
 def category(asset):
+    specific = source_media_category(asset)
+    if specific is not None:
+        return specific
     extension = PurePosixPath(asset.path).suffix.lower()
     return "video" if extension in VIDEO_EXTENSIONS else "photo" if extension in PHOTO_EXTENSIONS else "other"
 

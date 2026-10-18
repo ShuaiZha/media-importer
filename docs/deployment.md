@@ -4,6 +4,8 @@
 
 Compose 运行两个服务：`backup` 负责导入与上传，`bot` 负责飞书交互。它们共享配置、任务与缓存，无需网页服务或对外开放端口。镜像通过 GHCR 公开分发，提供 Linux ARM64 / AMD64。
 
+与原生版共用设备适配；当前来源类型为 `gopro`，经 USB 连接。设备发现、型号与固件能力由适配器判断，不需要新增机型配置项；实际支持范围见[兼容性说明](compatibility.md)。
+
 ## 准备条件
 
 - Git、运行中的 Docker，以及 `docker compose`。macOS / Windows 可用 Docker Desktop，Linux 使用 Docker Engine 和 Compose 插件，见[官方安装指南](https://docs.docker.com/compose/install/)。
@@ -96,6 +98,8 @@ python3 scripts/manage.py update
 ```
 
 Windows 使用 `py -3 scripts/manage.py update`。指定版本示例：`python3 scripts/manage.py update --version 0.10.21`。
+
+更新以已发布的镜像为准；拉取 `main` 源码不会替换运行中的容器。验证未发布改动时，在独立目录按[源码构建说明](../CONTRIBUTING.md#docker)操作。
 
 更新器核对正式发行版、Git 标签与镜像摘要，先下载镜像，再停止服务、保存配置与 SQLite 一致快照、快进源码，恢复原来运行的服务并等待健康。凭据、开关、未完成任务和完整缓存保留；相机在服务重启后需要重新确认。
 

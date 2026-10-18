@@ -45,15 +45,17 @@ def number(values, key, default, integer=False):
 
 
 def connections():
+    from .adapters import source_defaults
     env = environment()
+    source = source_defaults(text(env, "SOURCE_TYPE", source_defaults()['type']))
     return {
         "source": {
-            "type": text(env, "SOURCE_TYPE", "gopro"),
-            "url": text(env, "SOURCE_URL"),
-            "serial": text(env, "SOURCE_SERIAL"),
-            "timeout_seconds": number(env, "SOURCE_TIMEOUT_SECONDS", 20),
-            "transport": text(env, "SOURCE_TRANSPORT", "usb"),
-            "request_attempts": number(env, "SOURCE_REQUEST_ATTEMPTS", 3, integer=True),
+            "type": source["type"],
+            "url": text(env, "SOURCE_URL", source["url"]),
+            "serial": text(env, "SOURCE_SERIAL", source["serial"]),
+            "timeout_seconds": number(env, "SOURCE_TIMEOUT_SECONDS", source["timeout_seconds"]),
+            "transport": text(env, "SOURCE_TRANSPORT", source["transport"]),
+            "request_attempts": number(env, "SOURCE_REQUEST_ATTEMPTS", source["request_attempts"], integer=True),
         },
         "destination": {
             "type": text(env, "DESTINATION_TYPE", "smb"),

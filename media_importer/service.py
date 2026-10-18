@@ -128,14 +128,7 @@ class Service:
         finished = threading.Event()
         def monitor():
             store = Store(self.store.directory)
-            source = self.source.fork(self.stop) if hasattr(self.source, "fork") else self.source
-            # Connection monitoring must remain responsive even when the normal
-            # download client has long timeouts and retries.
-            if source is not self.source:
-                if hasattr(source, "timeout"):
-                    source.timeout = min(source.timeout, 3)
-                if hasattr(source, "attempts"):
-                    source.attempts = 1
+            source = self.source.fork(self.stop, purpose='monitor') if hasattr(self.source, "fork") else self.source
             try:
                 while not finished.is_set() and not self.stop.is_set():
                     from .source_connection import reason
@@ -168,13 +161,8 @@ class Service:
             finally:
                 store.close()
         def keep_alive():
-            if not hasattr(self.source, "keep_alive"):
-                return
             db = Store(self.store.directory)
-            source = self.source.fork(self.stop) if hasattr(self.source, "fork") else self.source
-            # A stuck status read must not delay the recommended three-second keepalive.
-            if hasattr(source, "timeout"):
-                source.timeout = min(source.timeout, 2)
+            source = self.source.fork(self.stop, purpose='keep_alive') if hasattr(self.source, "fork") else self.source
             try:
                 while not finished.is_set() and not self.stop.is_set():
                     started = time.monotonic()
@@ -184,7 +172,7 @@ class Service:
                             db.status(source_keep_alive={"ok": True})
                         except (SourceError, Cancelled) as exc:
                             db.status(source_keep_alive={"ok": False, "reason": str(exc)})
-                    finished.wait(max(.1, 3 - (time.monotonic() - started)))
+                    finished.wait(max(.1, keep_alive_interval - (time.monotonic() - started)))
             finally:
                 db.close()
         def monitor_destination():
@@ -219,7 +207,8 @@ class Service:
         targets = [(monitor, 'source-monitor')]
         if hasattr(self.destination, 'fork'):
             targets.append((monitor_destination, 'destination-monitor'))
-        if hasattr(self.source, 'keep_alive'):
+        keep_alive_interval = getattr(self.source, 'keep_alive_interval_seconds', 0)
+        if keep_alive_interval > 0 and hasattr(self.source, 'keep_alive'):
             targets.append((keep_alive, 'source-keepalive'))
         threads = [workers.start(name, lambda target=target: observed(target)) for target, name in targets]
         try:
@@ -744,11 +733,16 @@ class Service:
                         if candidates.get(asset.identity, "不支持安全删除"):
                             self.store.update(row["id"], cleanup="blocked", source_cleanup_error=candidates.get(asset.identity))
                             continue
-                        # Some devices remove associated previews with the main
-                        # file. Persist all currently present, verified members
-                        # before the request, so a crash/lost rescan preserves
-                        # evidence for those side effects as well.
-                        present_ids = [r['id'] for r, member in zip(rows, members) if member.path in current]
+                        # Only the adapter knows the side effects of its delete
+                        # endpoint. Without an explicit declaration, a single-file
+                        # delete is evidence for that file alone.
+                        effects = {asset.identity}
+                        if hasattr(self.source, 'deletion_effects'):
+                            effects = set(self.source.deletion_effects(asset, members))
+                        if asset.identity not in effects or effects - group_ids:
+                            raise SourceError('设备声明的删除范围超出已核验素材组，未执行删除')
+                        present_ids = [r['id'] for r, member in zip(rows, members)
+                                       if member.path in current and member.identity in effects]
                         with self.store.db:
                             self.store.db.executemany("""UPDATE files SET cleanup='deleting',source_cleanup_error=NULL,
                                 updated_at=? WHERE id=? AND cleanup NOT IN ('deleted','absent')""",
@@ -761,7 +755,9 @@ class Service:
                         after = {a.path: a for a in self.source_snapshot()}
                         for member_row, member in zip(rows, members):
                             if member.path in current and member.path not in after:
-                                self.store.update(member_row["id"], cleanup="deleted", source_cleanup_error=None)
+                                self.store.update(member_row["id"],
+                                                  cleanup="deleted" if member.identity in effects else "absent",
+                                                  source_cleanup_error=None)
                                 if self.store.cached_path(member_row).is_file():
                                     self.checkpoint(member_row)
                         if asset.path in after:
