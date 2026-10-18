@@ -1,4 +1,5 @@
 import io
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -118,7 +119,7 @@ class NativeTests(unittest.TestCase):
             connection.execute('PRAGMA wal_autocheckpoint=0')
             connection.execute("INSERT INTO meta VALUES ('wal-only','true')"); connection.commit()
             folder = lifecycle.snapshot(self.home, record)
-            with sqlite3.connect(folder / 'state.sqlite3') as db:
+            with closing(sqlite3.connect(folder / 'state.sqlite3')) as db:
                 self.assertEqual('true', db.execute("SELECT value FROM meta WHERE key='wal-only'").fetchone()[0])
             self.assertFalse((folder / 'cache').exists())
         finally: connection.close()
