@@ -173,7 +173,8 @@ def launcher(home, record):
         raise ValueError('命令路径已存在其他程序，未覆盖：' + str(target))
     executable = str(releases.executable(Path(record['bundle'])))
     if sys.platform == 'win32':
-        content = '@echo off\r\nrem ' + signature + '\r\n"' + executable.replace('%', '%%') + '" --home "' + str(home).replace('%', '%%') + '" %*\r\n'
+        # cmd.exe must parse its exit before uninstall removes this script.
+        content = '@echo off\r\nrem ' + signature + '\r\n(\r\n"' + executable.replace('%', '%%') + '" --home "' + str(home).replace('%', '%%') + '" %*\r\nexit /b\r\n)\r\n'
     else:
         content = '#!/bin/sh\n# ' + signature + '\nexec ' + shlex.quote(executable) + ' --home ' + shlex.quote(str(home)) + ' "$@"\n'
     atomic_write(target, content, 0o755)
