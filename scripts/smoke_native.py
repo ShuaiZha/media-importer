@@ -13,6 +13,20 @@ from media_importer.config import DEFAULTS
 from media_importer.native.releases import executable
 
 
+def purge_with_windows_lock(root, launcher):
+    # Exercise the packaged executable, not just generated script text. Keep
+    # its handle open until the child has handed cleanup back to its wrapper.
+    sys.path.insert(0, str(ROOT / 'tests'))
+    from test_native_windows import purge_after_locked_attempt
+    from media_importer.native.windows import purge_receipt
+    record = json.loads((root / 'native/installation.json').read_text(encoding='utf-8'))
+    result = purge_after_locked_attempt(launcher, executable(Path(record['bundle'])))
+    if result.returncode:
+        raise RuntimeError(result.stdout + result.stderr)
+    assert not purge_receipt(launcher).exists()
+    print('Windows packaged purge passed with an explicitly held executable handle')
+
+
 def smoke(bundle):
     with tempfile.TemporaryDirectory(prefix='media-importer-smoke-') as temporary:
         root = Path(temporary).resolve(); project = root / 'project with spaces 素材'; project.mkdir()
@@ -49,7 +63,10 @@ def smoke(bundle):
         assert refused.returncode == 2, (refused.returncode, refused.stdout, refused.stderr)
         for path, content in protected.items():
             assert path.read_bytes() == content, path
-        run('uninstall', '--purge', '--yes')
+        if os.name == 'nt':
+            purge_with_windows_lock(root, launcher)
+        else:
+            run('uninstall', '--purge', '--yes')
         assert not (root / 'native').exists()
         assert not launcher.exists()
         for name in ('.env', 'config', 'data', 'cache'):

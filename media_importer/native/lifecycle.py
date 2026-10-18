@@ -174,20 +174,8 @@ def launcher(home, record):
         raise ValueError('命令路径已存在其他程序，未覆盖：' + str(target))
     executable = str(releases.executable(Path(record['bundle'])))
     if sys.platform == 'win32':
-        # Keep this batch file until cmd.exe exits its batch context. Removing
-        # it in the child process makes a successful uninstall return an error.
-        content = ('@echo off\nsetlocal DisableDelayedExpansion\nrem ' + signature + '\n'
-                   'set "MEDIA_IMPORTER_PURGE_WRAPPER=' + platforms.label(home) + '"\n'
-                   'set "MEDIA_IMPORTER_COMMAND_WRAPPER=%~f0"\n"' + executable.replace('%', '%%') +
-                   '" --home "' + str(home).replace('%', '%%') + '" %*\n'
-                   'if errorlevel 1 exit /b %errorlevel%\n'
-                   'if not exist "' + str(home / 'purge-ready').replace('%', '%%') + '" goto retain_data\n'
-                   'cd /d "%TEMP%"\nrmdir /s /q "' + str(home).replace('%', '%%') + '"\n'
-                   'if exist "' + str(home).replace('%', '%%') + '" (\n'
-                   '  echo Native uninstall incomplete: installation directory is still in use. 1>&2\n'
-                   '  exit /b 1\n)\n:retain_data\nif exist "' +
-                   str(home / 'installation.json').replace('%', '%%') + '" exit /b 0\n'
-                   '(goto) 2>nul & del "%~f0" & exit /b 0\n')
+        from .windows import launcher as windows_launcher
+        content = windows_launcher(home, executable)
     else:
         content = '#!/bin/sh\n# ' + signature + '\nexec ' + shlex.quote(executable) + ' --home ' + shlex.quote(str(home)) + ' "$@"\n'
     atomic_write(target, content, 0o755)

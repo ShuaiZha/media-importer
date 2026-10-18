@@ -37,11 +37,11 @@
 | macOS Apple Silicon | ARM64 / LaunchAgent | 安装、更新、卸载、飞书及 HERO9 → 本地缓存 → SMB；原生与 Docker 均已验证 |
 | macOS Intel | AMD64 / LaunchAgent | 打包与隔离安装测试通过；实际设备链路待验证 |
 | Linux | AMD64、ARM64 / `systemd --user` | 打包与隔离安装测试通过；实际后台与 USB 链路待验证 |
-| Windows x64 | AMD64 / 用户登录计划任务 | 打包、安装与更新已通过 CI；彻底卸载仍有文件占用失败记录；实际后台与 USB 链路待验证 |
+| Windows x64 | AMD64 / 用户登录计划任务 | 打包与隔离安装、更新、卸载测试；覆盖文件占用恢复；实际后台与 USB 链路待验证 |
 
 Docker 镜像提供 Linux ARM64 / AMD64。架构可构建、安装测试通过，不代表对应系统的 USB 驱动、相机或 SMB 链路已通过实机验收。Windows ARM 原生包暂不提供。
 
-Windows 彻底卸载的已知限制及处理方式见[卸载说明](native.md#卸载)。
+Windows 卸载的重试机制及 v0.10.21 安装包限制见[卸载说明](native.md#卸载)。隔离测试主动制造文件占用，检查延迟释放、超时报错及再次清理，不涉及相机或真实素材。
 
 原生服务在**用户登录后**启动，不是登录前的系统服务，也不会唤醒休眠电脑。Linux 无 systemd 用户会话时可前台运行 `media-importer run`，或使用 Docker。macOS 原生包尚未进行 Developer ID 公证；开发构建方式见[贡献指南](../CONTRIBUTING.md)。
 

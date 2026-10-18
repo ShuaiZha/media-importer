@@ -61,6 +61,12 @@ def plan(home, record):
         raise ValueError('Windows 命令入口位于安装目录内；请先将命令安装到独立的 --bin-dir')
     result = {'home': str(home), 'directories': list(dict.fromkeys(map(str, targets))),
               'env': str(env), 'command': str(command), 'project': str(project)}
+    if sys.platform == 'win32':
+        from .windows import purge_receipt
+        receipt = purge_receipt(command)
+        if receipt.is_symlink() or (receipt.exists() and (
+                not receipt.is_file() or json.loads(receipt.read_text(encoding='utf-8')) != result)):
+            raise ValueError('命令旁的卸载恢复记录已存在或不匹配，未继续清理')
     pending = home / 'purge.json'
     if pending.exists():
         if pending.is_symlink() or json.loads(pending.read_text(encoding='utf-8')) != result:
@@ -98,7 +104,8 @@ def finish(home, record):
     if any(Path(p).exists() for p in [*approved['directories'], approved['env']]):
         raise RuntimeError('本机数据尚未清理完成，未移除安装记录')
     if sys.platform == 'win32':
-        atomic_write(home / 'purge-ready', 'local data removed; wrapper may remove installation\n')
+        from .windows import purge_receipt
+        atomic_write(purge_receipt(record['command']), json.dumps(approved, ensure_ascii=False) + '\n')
         return
     command = Path(record['command'])
     if command.exists():

@@ -223,7 +223,7 @@ def main(argv=None):
         if args.command == 'uninstall' and args.purge:
             from .purge import finish
             finish(home, record)
-            print('本机数据已清理，命令退出时完成程序目录清理。' if sys.platform == 'win32' else
+            print('本机数据已清理；程序退出后将等待占用释放并完成安装目录清理。' if sys.platform == 'win32' else
                   '已彻底卸载：程序、启动项、凭据、配置、任务、缓存、日志及程序维护备份已删除。')
         return 0
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:

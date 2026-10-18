@@ -156,7 +156,10 @@ class NativeTests(unittest.TestCase):
         self.assertEqual('source checkout', (self.project / 'README.md').read_text())
         self.assertEqual('user backup', (self.project / 'manual-backup/keep.txt').read_text())
         if sys.platform == 'win32':
-            self.assertTrue((self.home / 'purge-ready').is_file())
+            from media_importer.native.windows import purge_receipt
+            receipt = purge_receipt(result['command'])
+            self.assertEqual(str(self.home), json.loads(receipt.read_text())['home'])
+            self.assertNotIn(self.home, receipt.parents)
         else:
             self.assertFalse(self.home.exists())
             self.assertFalse(Path(record['command']).exists())
@@ -282,20 +285,34 @@ class NativeTests(unittest.TestCase):
                 stop.assert_not_called()
             self.assertTrue((self.project / 'cache/unfinished.bin').exists())
 
+    def test_windows_purge_rejects_foreign_recovery_receipt_before_deleting_data(self):
+        from media_importer.native.windows import purge_receipt
+        record = self.install()
+        receipt = purge_receipt(record['command'])
+        receipt.write_text('{"home":"another-installation"}')
+        with patch.object(sys, 'platform', 'win32'), self.purge_context(record), patch.object(lifecycle, 'stop') as stop:
+            with self.assertRaisesRegex(ValueError, '恢复记录'):
+                lifecycle.uninstall(self.home, purge_data=True)
+            stop.assert_not_called()
+        self.assert_preserved()
+
+    def test_windows_cleanup_handoff_is_only_created_after_data_removal(self):
+        from media_importer.native.windows import purge_receipt
+        record = self.install()
+        receipt = purge_receipt(record['command'])
+        with patch.object(sys, 'platform', 'win32'), self.purge_context(record):
+            with patch.object(purge, 'remove_tree', side_effect=PermissionError('locked data')):
+                with self.assertRaises(PermissionError):
+                    lifecycle.uninstall(self.home, purge_data=True)
+            self.assertFalse(receipt.exists())
+            self.assertTrue((self.project / 'cache/unfinished.bin').exists())
+            result, _ = lifecycle.uninstall(self.home, purge_data=True)
+            purge.finish(self.home, result)
+        self.assertEqual(str(self.home), json.loads(receipt.read_text())['home'])
+        self.assertFalse((self.project / 'cache').exists())
+
 
 class PlatformContractTests(unittest.TestCase):
-    def test_windows_launcher_defers_program_purge_until_child_and_lock_exit(self):
-        with tempfile.TemporaryDirectory() as folder, patch.object(sys, 'platform', 'win32'):
-            home = Path(folder) / 'native'; home.mkdir()
-            command = Path(folder) / 'bin/media-importer.cmd'
-            lifecycle.launcher(home, {'command': str(command), 'bundle': str(home / 'releases/1')})
-            text = command.read_text()
-            self.assertIn('DisableDelayedExpansion', text)
-            self.assertIn('MEDIA_IMPORTER_PURGE_WRAPPER=' + platforms.label(home), text)
-            self.assertIn('purge-ready', text)
-            self.assertLess(text.index('if errorlevel 1'), text.index('rmdir /s /q'))
-            self.assertLess(text.index('rmdir /s /q'), text.index('del "%~f0"'))
-
     def test_macos_launch_agent_uses_argv_and_no_credentials(self):
         home = Path('/Users/example/Library/Application Support/MediaImporter')
         executable = home / 'releases/1.0.0/media-importer'
