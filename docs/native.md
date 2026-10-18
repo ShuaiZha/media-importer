@@ -1,121 +1,118 @@
 # 原生 CLI 部署
 
-[首页](../README.md) · [Docker 部署与配置](deployment.md) · [飞书配置](feishu.md)
+[文档目录](README.md) · [Docker Compose](deployment.md) · [配置参考](configuration.md)
 
-原生版在电脑直接运行，与 Docker 使用同一套导入、上传、飞书代码及数据格式。安装包包含 Python 和依赖，不安装 GUI App，不需要 Docker、系统 Python 或 Node.js。
-
-## 系统范围
-
-| 系统 | 后台启动 | 验证范围 |
-| --- | --- | --- |
-| macOS Apple Silicon | 当前用户 LaunchAgent，登录后启动 | 本机安装、启停、升级、卸载及 T7 / SMB 小文件验收 |
-| macOS Intel | 同上；单独构建 amd64 包 | CI 验证安装、更新和两种卸载；设备链路待真机验证 |
-| Linux amd64 / arm64 | `systemd --user` | CI 验证安装、更新和两种卸载；后台服务与 USB 链路待实机验收 |
-| Windows x64 | 当前用户登录任务，最低权限 | CI 验证安装、更新和两种卸载；后台服务与 USB 链路待实机验收 |
-
-后台服务依赖用户登录会话，电脑仍需保持唤醒。Linux 无 systemd 用户会话时可在终端运行 `media-importer run`，或继续使用 Docker。Windows ARM 原生包暂不提供。发行附件是否可下载，以 Releases 中实际通过构建的附件为准。
+原生版直接运行后台程序，包含 Python 与依赖，无需 Docker、系统 Python、Node.js 或额外 GUI App。它与 Docker 共用传输核心和数据格式。支持的平台及实机验证范围见[兼容性说明](compatibility.md)。
 
 ## 安装
 
-Mac / Linux，在终端执行：
+先准备好 SMB 连接信息与[飞书应用凭据](feishu.md#1-创建应用与获取凭据)。安装向导会询问目录、连接和凭据，创建本机配置并注册后台服务。
+
+macOS / Linux：
 
 ```sh
 curl -fsSL https://github.com/ShuaiZha/media-importer/releases/latest/download/install-native.sh | sh
 ```
 
-Windows x64，在 PowerShell 执行：
+Windows x64，在 PowerShell 中执行：
 
 ```powershell
 & ([scriptblock]::Create((Invoke-RestMethod 'https://github.com/ShuaiZha/media-importer/releases/latest/download/install-native.ps1')))
 ```
 
-安装脚本按系统与架构选择正式发行包，核对程序包 SHA-256 后安装，不读取视频。若希望先查看脚本，可以从 [Releases](https://github.com/ShuaiZha/media-importer/releases) 下载 `install-native.sh` / `install-native.ps1`，查看后执行。也可下载对应系统的 `media-importer-版本-平台.tar.gz`，解压后进入内层 `media-importer` 目录：
+脚本下载对应平台的最新正式版，核对安装包 SHA-256 后安装；该校验与视频传输无关。希望先检查脚本或离线安装时，从 [Releases](https://github.com/ShuaiZha/media-importer/releases/latest) 下载脚本或对应的 `media-importer-版本-平台.tar.gz`。安装包解压后，在内层 `media-importer` 目录执行 `./media-importer install`；Windows 使用 `./media-importer.exe install`。
 
-```sh
-./media-importer install
-```
+新安装默认关闭同步、删除原片和自动传输通知。安装后继续完成[飞书订阅、菜单与发布](feishu.md#3-配置事件与卡片回调)，在机器人中确认设备并开启备份。重复执行安装不会覆盖已有配置，已有实例使用 `update`。
 
-Windows PowerShell 使用 `./media-importer.exe install`。发行包自 v0.10.20 起提供；GitHub 下载不可用时，可以下载后离线安装或按下方说明从源码构建。
+### 命令路径与数据位置
 
-首次向导询问缓存目录、SMB 和飞书凭据，创建 `.env`、`config/settings.json` 与数据目录，再注册后台服务。相机地址可留空自动发现。同步、删除原片、传输通知默认关闭；识别相机后通过飞书确认备份。安装命令重复执行会提示更新，不覆盖已有配置。
-
-命令默认安装到 `~/.local/bin/media-importer`（Windows 为用户目录下的 `.local/bin/media-importer.cmd`）。若终端找不到命令，使用安装结果显示的完整路径，或将该目录加入用户 PATH；不自动改写 Shell 配置。Mac/Linux 示例：
+命令默认安装到 `~/.local/bin/media-importer`，Windows 为用户目录下的 `.local/bin/media-importer.cmd`。安装器不改写 Shell 配置；若终端找不到命令，使用安装结果给出的完整路径，或将该目录加入用户 PATH。macOS / Linux 可在当前终端执行：
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
 media-importer status
 ```
 
-安装器默认目录：Mac `~/Library/Application Support/MediaImporter`，Linux `$XDG_DATA_HOME/media-importer`（默认 `~/.local/share/media-importer`），Windows `%LOCALAPPDATA%/MediaImporter`。全新安装的数据位于该目录的 `instance/`。程序版本位于 `releases/`，维护快照在 `backups/`，轮转日志在 `logs/`。可用全局参数 `--home /自定义安装目录` 和安装参数 `--bin-dir /命令目录` 指定位置。
+| 平台 | 默认安装目录 |
+| --- | --- |
+| macOS | `~/Library/Application Support/MediaImporter` |
+| Linux | `$XDG_DATA_HOME/media-importer`，默认 `~/.local/share/media-importer` |
+| Windows | `%LOCALAPPDATA%/MediaImporter` |
 
-**Mac 外接磁盘授权：** 原生后台首次启动或升级后，macOS 可能提示 `media-importer` 访问可移动卷。允许访问素材所在磁盘后再查看 `status`。安装器等待超时不代表文件丢失；服务可能仍在等待系统授权。这里只需要相关磁盘访问，不需要定位权限。授权被拒绝时检查系统设置中的「隐私与安全性 → 文件与文件夹」。缓存盘缺失或标识不符时等待原盘，不创建内置盘替代目录。
+全新安装的项目配置位于安装目录的 `instance/`；程序、日志、维护快照分别在 `releases/`、`logs/`、`backups/`。缓存可由向导指定到其他磁盘。`media-importer status` 显示实际配置、任务和缓存路径。
 
-## 使用已有 Docker 配置和数据
+需要自定义时，安装包命令支持全局 `--home /path/to/install` 和 `install --bin-dir /path/to/bin`。运行目录与数据目录应专用于本项目，完整说明见[配置参考](configuration.md#文件与目录)。
 
-先在原项目目录停止两个服务，再使用安装脚本接管该目录：
+### 后台与外接盘权限
+
+后台服务随当前用户登录启动：macOS 使用 LaunchAgent，Linux 使用用户级 systemd，Windows 使用登录计划任务。电脑需保持唤醒；不支持登录前启动或自动唤醒。
+
+macOS 首次运行或升级后可能要求允许 `media-importer` 访问可移动卷。允许访问实际缓存盘后再检查状态；服务可能在等待授权，启动检查超时不代表数据丢失。权限可在「系统设置 → 隐私与安全性 → 文件与文件夹」检查。缓存盘未挂载时等待原盘，不创建内置盘替代目录。
+
+## 常用命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `media-importer status` | 安装版本、后台健康状态和数据路径 |
+| `media-importer status --json` | 上述信息的 JSON 输出 |
+| `media-importer check` | 检查配置、数据库、缓存与外部连接 |
+| `media-importer logs` | 查看近期本机诊断日志 |
+| `media-importer stop` | 停止整个后台；保留同步偏好和任务 |
+| `media-importer start` | 按保存的设置启动后台 |
+| `media-importer run` | 前台运行，供不使用系统服务的环境使用 |
+
+飞书中的「停止同步」只停止传输和原片删除，机器人继续工作；CLI 的 `stop` 会同时停止机器人。两者的区别及排障见[日常使用](operations.md)。
+
+## 更新
+
+```sh
+media-importer update
+```
+
+也可指定正式版本，例如 `media-importer update --version 0.10.21`。离线更新使用已解压的对应平台安装包：
+
+```sh
+media-importer update --bundle /path/to/package/media-importer
+```
+
+更新先下载并核验安装包、检查配置，再停止后台、保存配置与 SQLite 一致快照、切换程序，恢复原运行状态。配置、开关、任务和完整缓存保留；原来停止的服务保持停止，已是目标版本时不重启。服务重新启动后，相机需要再次确认。
+
+快照不包含完整视频，不能替代[迁移备份](recovery.md)。更新失败时保留提示中的诊断与快照，排除原因后重试；不要将旧数据库直接覆盖到已经产生新任务的实例上。
+
+## 与 Docker 切换
+
+### 从 Docker 切到原生
+
+在原项目目录停止两个 Compose 服务，再让原生安装器接管已有项目：
 
 ```sh
 docker compose stop
 curl -fsSL https://github.com/ShuaiZha/media-importer/releases/latest/download/install-native.sh | sh -s -- --project "$PWD"
 ```
 
-已下载的安装包也可执行 `/安装包目录/media-importer install --project /原项目目录`。Windows 在原项目停止 Docker 后，在上述 PowerShell 安装命令末尾加 `-Project "$PWD"`。此过程不重新询问或覆盖已有凭据。
+Windows 在原项目停止 Docker 后执行：
 
-安装器读取原项目 `.env` 中的 `MEDIA_IMPORTER_CONFIG_HOST_DIR`、`MEDIA_IMPORTER_DATA_HOST_DIR` 和 `MEDIA_IMPORTER_CACHE_HOST_DIR`，相对路径以原项目为基准。保留原配置、开关、任务 ID、目的地身份、归档路径和完整缓存，启动前保存配置与 SQLite 一致快照。缓存原地使用，快照不复制整盘素材，也不处理已有 SMB 归档。
-
-同一任务或缓存目录仍被 Docker 挂载时拒绝安装。原生安装在数据目录登记 `deployment.json`，本版及以后的 Docker 程序和更新器会识别此标记；旧版 Docker 不具备这个保护，务必保持旧容器停止。不要同时运行两种部署，也不要分别启动使用同一个飞书应用的两套机器人。
-
-相机连接确认属于本次服务会话，切换后需要在飞书重新确认。已有完整缓存是否继续上传，仍由原来的同步开关决定。
-
-## 常用命令
-
-```sh
-media-importer status          # 版本、服务、缓存位置
-media-importer status --json
-media-importer check           # 配置、数据库、缓存、相机、SMB、飞书认证
-media-importer logs            # 最近的本机诊断日志
-media-importer stop            # 停止后台，保留同步偏好和任务
-media-importer start           # 按原设置恢复后台
-media-importer update          # 最新正式版
-media-importer uninstall       # 卸载程序，保留数据
-media-importer uninstall --purge # 彻底卸载并删除本机数据，先显示范围再确认
+```powershell
+& ([scriptblock]::Create((Invoke-RestMethod 'https://github.com/ShuaiZha/media-importer/releases/latest/download/install-native.ps1'))) -Project "$PWD"
 ```
 
-日常设置仍在飞书操作，低频设置仍在 JSON；凭据仍在 `.env`。修改连接值后 `stop`、`start`；修改目录属于迁移，应先停止并卸载原生服务，将数据完整迁移、更新 `.env`，再以 `install --project` 登记，避免静默使用新空目录。
+安装器读取原 `.env` 中的三个目录，先保存配置和数据库快照，原地使用完整缓存；不覆盖凭据或开关。原生部署会登记数据归属，同一份任务和缓存不能由两个实例同时使用。旧版本 Docker 不一定识别该登记，必须保持旧容器停止。
 
-更新先下载并校验候选包、检查配置兼容性，再停止后台、保存 SQLite 与配置快照、切换程序并恢复原运行状态。原来停止的服务不会被更新擅自启动；已是目标版本时不重启。旧程序保留在 `releases/`，更新失败不自动倒退数据库。遇到问题先保持服务停止并保留快照，核对后恢复，不能直接把旧数据库覆盖到已有新任务上。
+### 从原生切回 Docker
 
-可指定正式版本：`media-importer update --version 0.10.21`。离线更新使用已解压的对应平台安装包：
+执行普通卸载 `media-importer uninstall` 释放原生服务及数据归属，再在原项目运行 `docker compose up -d --no-build`。使用与当前配置、数据库格式兼容的镜像；不要使用 `--purge`。
 
-```sh
-media-importer update --bundle /安装包目录/media-importer
-```
+## 卸载
 
-**普通卸载** `media-importer uninstall` 停止并移除本实例的后台服务、命令入口和程序目录，保留 `.env`、JSON、SQLite、完整缓存、日志及维护快照，便于重新安装或切回 Docker。Windows 普通卸载若仍有程序文件被占用，会列出残留路径。
+| 命令 | 删除范围 | 保留内容 |
+| --- | --- | --- |
+| `media-importer uninstall` | 本实例的后台服务、命令入口、程序 | 配置、凭据、任务、缓存、日志和维护快照 |
+| `media-importer uninstall --purge` | 上述程序以及登记的配置、凭据、任务、缓存、日志和程序维护快照 | 相机原片、SMB 归档及安装管理范围之外的文件 |
 
-**彻底卸载** `media-importer uninstall --purge` 自 v0.10.21 起支持。它同时清理此安装登记的 `.env`、配置目录、任务目录、缓存目录，以及安装目录内的日志、程序维护快照和旧版本。**尚未上传的完整缓存也会删除，不能恢复。** 命令先列出实际路径，输入 `DELETE` 后执行；脚本调用需明确使用 `media-importer uninstall --purge --yes`。
+**彻底卸载会删除尚未上传的完整缓存。** 命令先列出实际路径，输入 `DELETE` 后执行；自动化调用需明确加上 `--yes`。普通卸载适合重新安装或切换部署，彻底卸载适合不再使用本地实例。
 
-清理前会检查目录、原缓存盘和服务占用；路径变化、符号链接、磁盘根目录、用户目录或项目根目录会被拒绝。中途失败不会显示卸载完成，连接原盘或解决权限问题后可用相同命令重试。Windows 使用安装生成的 `media-importer.cmd` 执行，当前进程退出后由命令入口完成程序目录的删除。
+清理前核对原磁盘、目录归属及服务占用；失败时会报告残留，解决权限或磁盘问题后可重试。Windows 使用安装生成的 `media-importer.cmd`，退出当前进程后清理程序目录；普通卸载遇到占用也会列出残留路径。
 
-两种卸载均不删除 Docker、相机原片或 SMB 中的归档。安装目录之外的独立源码仓库、另存的手工备份、安装包下载文件及其他未登记文件不属于安装管理范围，仍需自行处理。若要切回 Docker，使用普通卸载，不要加 `--purge`。
+独立源码仓库、另存的手工备份和安装包下载文件不属于安装管理范围，需自行处理。两个卸载命令均不删除相机素材、SMB 归档或 Docker 软件。
 
-切回 Docker：先 `media-importer uninstall` 释放数据目录，确认原生服务已停止，然后在原项目执行 `docker compose up -d --no-build`。仅限配置和数据库格式兼容的镜像版本；本次格式仍为 JSON 4 / SQLite 5。不要同时启动。
-
-## 从源码构建
-
-开发构建需要 Python 3.12。每个安装包必须在目标系统和架构上构建；Mac 构建不能冒充 Windows/Linux 包。普通用户不需要以下依赖：
-
-```sh
-python3 -m venv .build/native-venv
-.build/native-venv/bin/python -m pip install -r requirements-native-build.txt
-.build/native-venv/bin/python scripts/build_native.py
-```
-
-Windows 使用 `py -3.12 -m venv .build/native-venv` 和 `.build/native-venv/Scripts/python.exe`。结果为 `dist/native/<平台>/media-importer/` 及同目录下的发行压缩包、校验清单。Mac 为控制台程序，没有额外 `.app`；当前没有 Developer ID 公证。不要关闭系统安全策略来运行来源不明的包，本机源码构建可用于开发验收。
-
-```sh
-.build/native-venv/bin/python scripts/smoke_native.py dist/native/macos-arm64/media-importer
-dist/native/macos-arm64/media-importer/media-importer install --project "$PWD"
-```
-
-发布工作流分别构建 Mac ARM64/AMD64、Linux ARM64/AMD64、Windows AMD64，并对实际打包程序执行安装、同版本更新、保留数据卸载和彻底卸载冒烟测试。所有平台测试通过后才将原生附件与 Docker 镜像一起发布；CI 不连接真实相机、SMB 或飞书。
+修改连接信息只需停止再启动后台；**移动配置、任务或缓存目录属于迁移**，需重新登记路径，步骤见[备份与迁移](recovery.md#原生实例备份与迁移)。
