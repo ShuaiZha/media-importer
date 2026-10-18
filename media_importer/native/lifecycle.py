@@ -1,4 +1,4 @@
-"""Install/update/uninstall only program files; persistent media is never removed."""
+"""Native lifecycle; data removal requires the explicit local purge operation."""
 from contextlib import contextmanager, closing
 from datetime import datetime, timezone
 import json
@@ -77,14 +77,15 @@ def environment(record):
         os.environ.clear(); os.environ.update(before)
 
 
-def assert_no_docker(record):
+def assert_no_docker(record, *, native_owned=False):
     if not shutil.which('docker'):
         return
     try:
         result = subprocess.run(['docker', 'ps', '-q'], capture_output=True, text=True, timeout=10)
         if result.returncode:
             # An existing Docker database cannot be adopted if Docker is uninspectable.
-            if Path(record['paths']['data'], 'state.sqlite3').exists() and not Path(record['paths']['data'], 'deployment.json').exists():
+            if (Path(record['paths']['data'], 'state.sqlite3').exists()
+                    and not Path(record['paths']['data'], 'deployment.json').exists() and not native_owned):
                 raise RuntimeError('无法确认旧 Docker 已停止；请先启动 Docker、停止本项目服务，再安装原生版')
             return
         ids = result.stdout.split()
@@ -175,10 +176,16 @@ def launcher(home, record):
     if sys.platform == 'win32':
         # Keep this batch file until cmd.exe exits its batch context. Removing
         # it in the child process makes a successful uninstall return an error.
-        content = ('@echo off\nsetlocal\nrem ' + signature + '\n'
+        content = ('@echo off\nsetlocal DisableDelayedExpansion\nrem ' + signature + '\n'
+                   'set "MEDIA_IMPORTER_PURGE_WRAPPER=' + platforms.label(home) + '"\n'
                    'set "MEDIA_IMPORTER_COMMAND_WRAPPER=%~f0"\n"' + executable.replace('%', '%%') +
                    '" --home "' + str(home).replace('%', '%%') + '" %*\n'
-                   'if errorlevel 1 exit /b %errorlevel%\nif exist "' +
+                   'if errorlevel 1 exit /b %errorlevel%\n'
+                   'if not exist "' + str(home / 'purge-ready').replace('%', '%%') + '" goto retain_data\n'
+                   'cd /d "%TEMP%"\nrmdir /s /q "' + str(home).replace('%', '%%') + '"\n'
+                   'if exist "' + str(home).replace('%', '%%') + '" (\n'
+                   '  echo Native uninstall incomplete: installation directory is still in use. 1>&2\n'
+                   '  exit /b 1\n)\n:retain_data\nif exist "' +
                    str(home / 'installation.json').replace('%', '%%') + '" exit /b 0\n'
                    '(goto) 2>nul & del "%~f0" & exit /b 0\n')
     else:
@@ -291,10 +298,30 @@ def update(home, source, *, no_start=False):
     return record, True
 
 
-def uninstall(home):
+def uninstall(home, *, purge_data=False, purge_plan=None):
     record = load(home)
+    approved = None
+    if purge_data:
+        from .purge import plan
+        approved = plan(home, record)
+        if purge_plan is not None and approved != purge_plan:
+            raise ValueError('清理范围在确认后发生变化，请重新运行命令核对；未卸载或删除')
     stop(home, unregister=True)
-    assert_no_docker(record)
+    # A partially completed purge may have removed deployment.json already.
+    # The validated purge journal still proves this installation owns the paths.
+    assert_no_docker(record, native_owned=approved is not None)
+    if approved:
+        from ..store import worker_lock
+        from .purge import remove_data
+        data = Path(record['paths']['data'])
+        if data.is_dir():
+            with worker_lock(data) as free:
+                if not free:
+                    raise RuntimeError('仍有传输进程使用任务目录，未清理数据')
+        # Preserve installation.json until all registered data paths are gone,
+        # allowing a failed, explicitly approved purge to be retried.
+        remove_data(home, approved)
+        return record, []
     marker = Path(record['paths']['data']) / 'deployment.json'
     if marker.exists() and json.loads(marker.read_text()) == {'mode': 'native', 'home': str(home)}:
         marker.unlink()

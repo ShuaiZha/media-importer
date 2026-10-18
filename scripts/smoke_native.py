@@ -21,6 +21,7 @@ def smoke(bundle):
         (project / '.env').write_text("DESTINATION_HOST='storage.example.com'\nDESTINATION_NAME='测试存储'\nDESTINATION_SHARE='media'\nDESTINATION_USERNAME='example'\nDESTINATION_PASSWORD='example-only'\nMEDIA_IMPORTER_CACHE_HOST_DIR='./cache'\n", encoding='utf-8')
         (project / 'config/settings.json').write_text(json.dumps(DEFAULTS, ensure_ascii=False), encoding='utf-8')
         (project / 'cache/完整素材.txt').write_text('complete user data', encoding='utf-8')
+        (project / 'README.md').write_text('unrelated source checkout', encoding='utf-8')
         protected = {p: p.read_bytes() for p in project.rglob('*') if p.is_file()}
         base = [str(executable(bundle)), '--home', str(root / 'native')]
         def run(*args):
@@ -38,7 +39,23 @@ def smoke(bundle):
         assert not (root / 'native/installation.json').exists()
         assert not launcher.exists()
         assert (root / 'native/uninstalled.json').exists()
-    print('native install / same-version update / uninstall smoke passed; user data retained')
+        # Reinstall the disposable instance, then exercise the actual launcher
+        # for full removal, including Windows' deferred command/program cleanup.
+        base = [str(executable(bundle)), '--home', str(root / 'native')]
+        run('install', '--project', str(project), '--bin-dir', str(root / 'commands'), '--no-start')
+        base = [str(launcher)]
+        refused = subprocess.run([*base, 'uninstall', '--purge'], stdin=subprocess.DEVNULL,
+                                 capture_output=True, text=True, encoding='utf-8', timeout=60)
+        assert refused.returncode == 2
+        for path, content in protected.items():
+            assert path.read_bytes() == content, path
+        run('uninstall', '--purge', '--yes')
+        assert not (root / 'native').exists()
+        assert not launcher.exists()
+        for name in ('.env', 'config', 'data', 'cache'):
+            assert not (project / name).exists(), name
+        assert (project / 'README.md').read_text(encoding='utf-8') == 'unrelated source checkout'
+    print('native install / update / retained-data uninstall / full local purge smoke passed')
 
 
 if __name__ == '__main__':

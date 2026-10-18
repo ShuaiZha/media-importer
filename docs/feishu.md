@@ -2,7 +2,7 @@
 
 [返回首页](../README.md) · [部署与配置](deployment.md) · [使用与维护](operations.md)
 
-本项目通过**企业自建应用机器人 + 长连接 + 本人单聊**提供控制和通知。无需群机器人 Webhook、签名密钥、公网回调地址或端口映射。容器主动连接飞书，电脑必须保持联网与唤醒。同一应用只运行一个 `bot` 服务。
+本项目通过**企业自建应用机器人 + 长连接 + 本人单聊**提供控制和通知。无需群机器人 Webhook、签名密钥、公网回调地址或端口映射。程序主动连接飞书，电脑必须保持联网与唤醒。原生 CLI 和 Docker 使用同一套机器人；同一应用只运行一个 `bot` 服务。
 
 ## 1. 创建应用并获取凭据
 
@@ -39,7 +39,15 @@ FEISHU_OWNER_OPEN_ID='ou_EXAMPLE00000000'
 
 ## 2. 先启动本地长连接
 
-回到 [首次部署指南](deployment.md#首次部署)，填好相机、SMB、挂载路径，创建配置文件及目录，保持同步、删除原片和自动通知均关闭。然后运行：
+完成 [原生安装](native.md) 后，使用以下命令检查后台与飞书连接；首次配置时保持同步、删除原片和自动通知关闭：
+
+```sh
+media-importer start
+media-importer status
+media-importer logs
+```
+
+Docker 部署则按 [首次部署指南](deployment.md#首次部署) 填好连接与挂载路径、创建配置文件及目录，再运行下面这些命令。两种部署任选其一：
 
 ```sh
 docker compose config --quiet
@@ -52,7 +60,7 @@ docker compose logs --tail 100 bot
 
 `bot` 使用已集成的飞书官方 SDK 建立长连接，不需要再运行官方示例程序。连接成功后才回后台保存下一步配置。日志会隐藏签名连接地址和凭据；以 `bot` 的健康状态及后台能否保存长连接为准。参见 [官方长连接配置顺序](https://open.feishu.cn/document/server-docs/event-subscription-guide/event-subscription-configure-/request-url-configuration-case)。
 
-若后台说“应用未建立长连接”，先检查 Docker 是否运行、`bot` 是否重启/不健康、`.env` 中 App ID/Secret 是否正确，以及容器能否访问飞书。修改 `.env` 后执行 `docker compose up -d --force-recreate`，再保存订阅。
+若后台说“应用未建立长连接”，先检查 `bot` 是否健康、`.env` 中 App ID/Secret 是否正确，以及程序能否访问飞书。修改 `.env` 后，原生版执行 `media-importer stop` 再 `media-importer start`；Docker 版执行 `docker compose up -d --force-recreate`，再保存订阅。
 
 ## 3. 配置事件与卡片回调
 
@@ -103,7 +111,7 @@ docker compose logs --tail 100 bot
 
 需要自动进度和结果提醒时，在 JSON 设置 `notifications.enabled: true`。进度默认每 5 分钟更新同一张卡；本地导入完成、正式归档完成及需要处理的失败另发提醒。逐文件日志留在本机，同一持续故障不会反复刷屏。`notifications.connection_events` 控制断开提醒。相机确认卡属于备份前的必要操作，不受自动通知开关影响；不会因关闭进度通知而无法确认设备。
 
-仅测试发送状态卡可运行：
+原生版直接点击「查看状态」验证。Docker 版也可用命令仅测试发送状态卡：
 
 ```sh
 docker compose exec bot python3 -m media_importer bot-panel

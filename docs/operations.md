@@ -1,6 +1,6 @@
 # 使用与维护
 
-下文的容器命令用于 Docker 部署。原生 CLI 使用 `media-importer status`、`start`、`stop`、`check`、`logs`、`update` 和 `uninstall`，具体见[原生部署说明](native.md)。日常同步和原片处理继续通过飞书操作；停止后台服务与关闭同步是不同操作。
+下文的容器命令用于 Docker 部署。原生 CLI 使用 `media-importer status`、`start`、`stop`、`check`、`logs`、`update` 和 `uninstall`；普通卸载保留数据，`uninstall --purge` 删除本机登记的数据，具体见[原生部署说明](native.md)。日常同步和原片处理继续通过飞书操作；停止后台服务与关闭同步是不同操作。
 
 [返回首页](../README.md) · [部署与配置](deployment.md) · [飞书配置](feishu.md)
 

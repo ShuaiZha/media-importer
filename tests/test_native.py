@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import plistlib
 import sqlite3
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -12,7 +13,7 @@ from unittest.mock import patch
 
 from media_importer.config import DEFAULTS
 from media_importer.deployment import assert_runtime
-from media_importer.native import lifecycle, platforms, releases
+from media_importer.native import lifecycle, platforms, releases, purge
 from media_importer.store import Store, worker_lock
 from media_importer.storage import initialize_cache, inspect_cache, MARKER
 
@@ -135,8 +136,164 @@ class NativeTests(unittest.TestCase):
         with patch.dict(os.environ, {'MEDIA_IMPORTER_CACHE_VOLUME': str(self.root / 'no-volume')}):
             self.assertFalse(inspect_cache(self.project / 'cache', 'original-volume')['available'])
 
+    def purge_context(self, record):
+        return patch.dict(os.environ, {'MEDIA_IMPORTER_COMMAND_WRAPPER': record['command'],
+                                      'MEDIA_IMPORTER_PURGE_WRAPPER': platforms.label(self.home)})
+
+    def test_purge_removes_registered_local_data_but_not_checkout_or_unrelated_files(self):
+        record = self.install()
+        unrelated = self.root / 'personal-file.txt'; unrelated.write_text('keep')
+        (self.project / 'README.md').write_text('source checkout')
+        (self.project / 'manual-backup').mkdir()
+        (self.project / 'manual-backup/keep.txt').write_text('user backup')
+        (self.home / 'logs').mkdir(); (self.home / 'logs/service.log').write_text('private log')
+        with self.purge_context(record):
+            result, retained = lifecycle.uninstall(self.home, purge_data=True)
+            purge.finish(self.home, result)
+        for name in ('.env', 'config', 'data', 'cache'):
+            self.assertFalse((self.project / name).exists(), name)
+        self.assertEqual('keep', unrelated.read_text())
+        self.assertEqual('source checkout', (self.project / 'README.md').read_text())
+        self.assertEqual('user backup', (self.project / 'manual-backup/keep.txt').read_text())
+        if sys.platform == 'win32':
+            self.assertTrue((self.home / 'purge-ready').is_file())
+        else:
+            self.assertFalse(self.home.exists())
+            self.assertFalse(Path(record['command']).exists())
+
+    def test_purge_rejects_broad_paths_before_stopping_any_service(self):
+        record = self.install()
+        for path in (self.project, self.home, Path.home().resolve(), Path(tempfile.gettempdir()).resolve(), Path(self.root.anchor)):
+            with self.subTest(path=path), self.purge_context(record), patch.object(lifecycle, 'stop') as stop:
+                changed = json.loads(json.dumps(record)); changed['paths']['cache'] = str(path)
+                lifecycle.save(self.home / 'installation.json', changed)
+                with self.assertRaises(ValueError): lifecycle.uninstall(self.home, purge_data=True)
+                stop.assert_not_called(); self.assert_preserved()
+        lifecycle.save(self.home / 'installation.json', record)
+
+    def test_purge_refuses_changed_configuration_and_foreign_data_owner(self):
+        record = self.install()
+        with self.purge_context(record), patch.object(lifecycle, 'stop') as stop:
+            (self.project / '.env').write_text(self.env_text.replace('./cache', './data'))
+            with self.assertRaises(ValueError): lifecycle.uninstall(self.home, purge_data=True)
+            (self.project / '.env').write_text(self.env_text)
+            (self.project / 'data/deployment.json').write_text(json.dumps({'mode': 'native', 'home': 'other'}))
+            with self.assertRaises(ValueError): lifecycle.uninstall(self.home, purge_data=True)
+            stop.assert_not_called(); self.assert_preserved()
+
+    def test_purge_checks_worker_lock_before_removing_data(self):
+        record = self.install()
+        with self.purge_context(record), worker_lock(self.project / 'data'):
+            with self.assertRaisesRegex(RuntimeError, '传输进程'):
+                lifecycle.uninstall(self.home, purge_data=True)
+        self.assert_preserved()
+        self.assertFalse((self.home / 'purge.json').exists())
+
+    def test_interrupted_purge_can_retry_without_recreating_deleted_directories(self):
+        record = self.install()
+        original_remove = purge.remove_tree
+        def fail_data(path):
+            if path == self.project / 'data': raise PermissionError('test-only interruption')
+            original_remove(path)
+        with self.purge_context(record):
+            with patch.object(purge, 'remove_tree', side_effect=fail_data):
+                with self.assertRaises(PermissionError): lifecycle.uninstall(self.home, purge_data=True)
+            self.assertFalse((self.project / 'config').exists())
+            self.assertTrue((self.project / 'cache/unfinished.bin').exists())
+            self.assertTrue((self.home / 'installation.json').exists())
+            result, _ = lifecycle.uninstall(self.home, purge_data=True)
+            purge.finish(self.home, result)
+        self.assertFalse((self.project / '.env').exists())
+        self.assertFalse((self.project / 'cache').exists())
+
+    def test_interrupted_purge_can_retry_with_docker_off_after_owner_marker_was_removed(self):
+        record = self.install()
+        with self.purge_context(record):
+            lifecycle.save(self.home / 'purge.json', purge.plan(self.home, record))
+            (self.project / 'data/deployment.json').unlink()
+            self.no_docker.stop()
+            try:
+                result = lifecycle.subprocess.CompletedProcess(['docker', 'ps'], 1, '', 'daemon unavailable')
+                with patch.object(lifecycle.shutil, 'which', return_value='docker'), patch.object(lifecycle.subprocess, 'run', return_value=result):
+                    with self.assertRaises(RuntimeError): lifecycle.assert_no_docker(record)
+                    removed, _ = lifecycle.uninstall(self.home, purge_data=True)
+                    purge.finish(self.home, removed)
+            finally:
+                self.no_docker.start()
+        self.assertFalse((self.project / 'cache').exists())
+
+    @unittest.skipIf(sys.platform == 'win32', 'symlink creation requires a Windows privilege')
+    def test_purge_unlinks_nested_symlinks_without_touching_their_targets(self):
+        record = self.install()
+        unrelated = self.root / 'unrelated'; unrelated.mkdir()
+        (unrelated / 'keep').write_text('keep')
+        (self.project / 'cache/link').symlink_to(unrelated, target_is_directory=True)
+        with self.purge_context(record):
+            result, _ = lifecycle.uninstall(self.home, purge_data=True)
+            purge.finish(self.home, result)
+        self.assertEqual('keep', (unrelated / 'keep').read_text())
+
+    @unittest.skipIf(sys.platform == 'win32', 'symlink creation requires a Windows privilege')
+    def test_purge_refuses_replaced_directory_symlinks(self):
+        record = self.install()
+        original = self.project / 'cache'; moved = self.project / 'saved-cache'
+        original.rename(moved); original.symlink_to(moved, target_is_directory=True)
+        with self.purge_context(record), patch.object(lifecycle, 'stop') as stop:
+            with self.assertRaises(ValueError): lifecycle.uninstall(self.home, purge_data=True)
+            stop.assert_not_called()
+        self.assertEqual(b'complete-small-cache', (moved / 'unfinished.bin').read_bytes())
+
+    def test_purge_cli_requires_confirmation_and_cancellation_is_read_only(self):
+        from media_importer.native.cli import main
+        record = self.install()
+        with self.purge_context(record), patch.object(lifecycle, 'uninstall') as remove:
+            with patch('sys.stdin', io.StringIO()), patch('sys.stdout', io.StringIO()), patch('sys.stderr', io.StringIO()):
+                self.assertEqual(2, main(['--home', str(self.home), 'uninstall', '--purge']))
+            with patch('sys.stdin.isatty', return_value=True), patch('builtins.input', return_value='cancel'), patch('sys.stdout', io.StringIO()):
+                self.assertEqual(0, main(['--home', str(self.home), 'uninstall', '--purge']))
+            remove.assert_not_called()
+        self.assert_preserved()
+
+    def test_purge_cli_releases_install_lock_before_final_removal(self):
+        from media_importer.native.cli import main
+        from media_importer.locking import file_lock
+        record = self.install()
+        original_finish = purge.finish
+        def finish(home, result):
+            with file_lock(home / 'install.lock', False) as free: self.assertTrue(free)
+            original_finish(home, result)
+        with self.purge_context(record), patch.object(purge, 'finish', side_effect=finish), patch('sys.stdout', io.StringIO()):
+            self.assertEqual(0, main(['--home', str(self.home), 'uninstall', '--purge', '--yes']))
+        self.assertFalse((self.project / 'cache').exists())
+
+    def test_purge_does_not_use_paths_changed_after_user_confirmation(self):
+        record = self.install()
+        with self.purge_context(record):
+            approved = purge.plan(self.home, record)
+            moved = self.project / 'new-cache'; moved.mkdir()
+            (self.project / '.env').write_text(self.env_text.replace('./cache', './new-cache'))
+            record['paths']['cache'] = str(moved)
+            lifecycle.save(self.home / 'installation.json', record)
+            with patch.object(lifecycle, 'stop') as stop:
+                with self.assertRaisesRegex(ValueError, '确认后发生变化'):
+                    lifecycle.uninstall(self.home, purge_data=True, purge_plan=approved)
+                stop.assert_not_called()
+            self.assertTrue((self.project / 'cache/unfinished.bin').exists())
+
 
 class PlatformContractTests(unittest.TestCase):
+    def test_windows_launcher_defers_program_purge_until_child_and_lock_exit(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(sys, 'platform', 'win32'):
+            home = Path(folder) / 'native'; home.mkdir()
+            command = Path(folder) / 'bin/media-importer.cmd'
+            lifecycle.launcher(home, {'command': str(command), 'bundle': str(home / 'releases/1')})
+            text = command.read_text()
+            self.assertIn('DisableDelayedExpansion', text)
+            self.assertIn('MEDIA_IMPORTER_PURGE_WRAPPER=' + platforms.label(home), text)
+            self.assertIn('purge-ready', text)
+            self.assertLess(text.index('if errorlevel 1'), text.index('rmdir /s /q'))
+            self.assertLess(text.index('rmdir /s /q'), text.index('del "%~f0"'))
+
     def test_macos_launch_agent_uses_argv_and_no_credentials(self):
         home = Path('/Users/example/Library/Application Support/MediaImporter')
         executable = home / 'releases/1.0.0/media-importer'

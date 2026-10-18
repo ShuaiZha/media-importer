@@ -9,9 +9,9 @@
 | 系统 | 后台启动 | 验证范围 |
 | --- | --- | --- |
 | macOS Apple Silicon | 当前用户 LaunchAgent，登录后启动 | 本机安装、启停、升级、卸载及 T7 / SMB 小文件验收 |
-| macOS Intel | 同上；单独构建 amd64 包 | 构建与冒烟测试纳入 CI，待真机验证 |
-| Linux amd64 / arm64 | `systemd --user` | 文件锁、服务定义、安装流程测试；待实际用户会话与 USB 验收 |
-| Windows x64 | 当前用户登录任务，最低权限 | 原生打包、文件锁和任务定义已实现；待实机验收 |
+| macOS Intel | 同上；单独构建 amd64 包 | CI 验证安装、更新和两种卸载；设备链路待真机验证 |
+| Linux amd64 / arm64 | `systemd --user` | CI 验证安装、更新和两种卸载；后台服务与 USB 链路待实机验收 |
+| Windows x64 | 当前用户登录任务，最低权限 | CI 验证安装、更新和两种卸载；后台服务与 USB 链路待实机验收 |
 
 后台服务依赖用户登录会话，电脑仍需保持唤醒。Linux 无 systemd 用户会话时可在终端运行 `media-importer run`，或继续使用 Docker。Windows ARM 原生包暂不提供。发行附件是否可下载，以 Releases 中实际通过构建的附件为准。
 
@@ -78,19 +78,26 @@ media-importer stop            # 停止后台，保留同步偏好和任务
 media-importer start           # 按原设置恢复后台
 media-importer update          # 最新正式版
 media-importer uninstall       # 卸载程序，保留数据
+media-importer uninstall --purge # 彻底卸载并删除本机数据，先显示范围再确认
 ```
 
 日常设置仍在飞书操作，低频设置仍在 JSON；凭据仍在 `.env`。修改连接值后 `stop`、`start`；修改目录属于迁移，应先停止并卸载原生服务，将数据完整迁移、更新 `.env`，再以 `install --project` 登记，避免静默使用新空目录。
 
 更新先下载并校验候选包、检查配置兼容性，再停止后台、保存 SQLite 与配置快照、切换程序并恢复原运行状态。原来停止的服务不会被更新擅自启动；已是目标版本时不重启。旧程序保留在 `releases/`，更新失败不自动倒退数据库。遇到问题先保持服务停止并保留快照，核对后恢复，不能直接把旧数据库覆盖到已有新任务上。
 
-可指定正式版本：`media-importer update --version 0.10.20`。离线更新使用已解压的对应平台安装包：
+可指定正式版本：`media-importer update --version 0.10.21`。离线更新使用已解压的对应平台安装包：
 
 ```sh
 media-importer update --bundle /安装包目录/media-importer
 ```
 
-卸载仅停止并移除本实例的后台服务、命令入口和程序目录，保留 `.env`、JSON、SQLite、完整缓存、日志及维护快照；不提供自动清空素材的选项。Windows 若当前可执行文件被系统占用，会显示残留程序目录，命令退出后可手动移除该程序目录。卸载不删除 Docker，也不删除相机或 SMB 文件。
+**普通卸载** `media-importer uninstall` 停止并移除本实例的后台服务、命令入口和程序目录，保留 `.env`、JSON、SQLite、完整缓存、日志及维护快照，便于重新安装或切回 Docker。Windows 普通卸载若仍有程序文件被占用，会列出残留路径。
+
+**彻底卸载** `media-importer uninstall --purge` 自 v0.10.21 起支持。它同时清理此安装登记的 `.env`、配置目录、任务目录、缓存目录，以及安装目录内的日志、程序维护快照和旧版本。**尚未上传的完整缓存也会删除，不能恢复。** 命令先列出实际路径，输入 `DELETE` 后执行；脚本调用需明确使用 `media-importer uninstall --purge --yes`。
+
+清理前会检查目录、原缓存盘和服务占用；路径变化、符号链接、磁盘根目录、用户目录或项目根目录会被拒绝。中途失败不会显示卸载完成，连接原盘或解决权限问题后可用相同命令重试。Windows 使用安装生成的 `media-importer.cmd` 执行，当前进程退出后由命令入口完成程序目录的删除。
+
+两种卸载均不删除 Docker、相机原片或 SMB 中的归档。安装目录之外的独立源码仓库、另存的手工备份、安装包下载文件及其他未登记文件不属于安装管理范围，仍需自行处理。若要切回 Docker，使用普通卸载，不要加 `--purge`。
 
 切回 Docker：先 `media-importer uninstall` 释放数据目录，确认原生服务已停止，然后在原项目执行 `docker compose up -d --no-build`。仅限配置和数据库格式兼容的镜像版本；本次格式仍为 JSON 4 / SQLite 5。不要同时启动。
 
@@ -111,4 +118,4 @@ Windows 使用 `py -3.12 -m venv .build/native-venv` 和 `.build/native-venv/Scr
 dist/native/macos-arm64/media-importer/media-importer install --project "$PWD"
 ```
 
-发布工作流分别构建 Mac ARM64/AMD64、Linux ARM64/AMD64、Windows AMD64，并对实际打包程序执行安装、同版本更新、卸载和数据保留冒烟测试。所有平台测试通过后才将原生附件与 Docker 镜像一起发布；CI 不连接真实相机、SMB 或飞书。
+发布工作流分别构建 Mac ARM64/AMD64、Linux ARM64/AMD64、Windows AMD64，并对实际打包程序执行安装、同版本更新、保留数据卸载和彻底卸载冒烟测试。所有平台测试通过后才将原生附件与 Docker 镜像一起发布；CI 不连接真实相机、SMB 或飞书。

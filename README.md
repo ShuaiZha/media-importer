@@ -37,7 +37,7 @@ Mac / Linux 原生命令安装：
 curl -fsSL https://github.com/ShuaiZha/media-importer/releases/latest/download/install-native.sh | sh
 ```
 
-安装后使用 `media-importer update` 更新、`media-importer uninstall` 卸载；卸载保留配置、任务和缓存。Windows 命令、PATH 设置及 Docker 切换步骤见[原生部署说明](docs/native.md)。也可从 [Releases](https://github.com/ShuaiZha/media-importer/releases) 下载对应安装包。
+安装后使用 `media-importer update` 更新。`media-importer uninstall` 卸载程序并保留数据；`media-importer uninstall --purge` 连同本机数据彻底清理，执行前列出范围并确认。Windows 命令、PATH 设置及 Docker 切换步骤见[原生部署说明](docs/native.md)。也可从 [Releases](https://github.com/ShuaiZha/media-importer/releases) 下载对应安装包。
 
 Linux / Windows 已纳入原生构建和服务适配，设备链路仍待实机验收；目前可继续使用 Docker。GoPro 型号的验证范围见[兼容性说明](docs/deployment.md#相机兼容性)。以下为 Docker 部署。
 

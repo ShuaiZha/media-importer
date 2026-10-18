@@ -118,7 +118,9 @@ def main(argv=None):
     update = commands.add_parser('update', help='升级正式发行版；保留配置、任务及缓存')
     update.add_argument('--version', dest='selected')
     update.add_argument('--bundle', type=Path, help='离线升级：已解压的本机安装包')
-    commands.add_parser('uninstall', help='移除后台服务与程序；保留全部配置、任务、缓存与备份')
+    uninstall = commands.add_parser('uninstall', help='卸载程序并保留数据；--purge 彻底清理此安装的本机数据')
+    uninstall.add_argument('--purge', action='store_true', help='同时删除凭据、配置、任务、缓存、日志及程序维护备份')
+    uninstall.add_argument('--yes', action='store_true', help='与 --purge 配合，确认删除列出的本机数据')
     for name in ('start', 'stop', 'check', 'logs'):
         commands.add_parser(name)
     commands.add_parser('status').add_argument('--json', action='store_true')
@@ -163,6 +165,22 @@ def main(argv=None):
             with lifecycle.environment(record):
                 from ..__main__ import main as core
                 return core(['check', '--json'])
+        if args.command == 'uninstall':
+            if args.yes and not args.purge:
+                raise ValueError('--yes 仅与 uninstall --purge 配合使用')
+            if args.purge:
+                from .purge import plan
+                removal = plan(home, lifecycle.load(home))
+                print('彻底卸载将删除以下本机内容（包含尚未上传的缓存）：')
+                for path in dict.fromkeys([removal['home'], removal['command'], removal['env'], *removal['directories']]):
+                    print('  ' + path)
+                print('相机原片和 SMB 归档不受影响。安装目录外的源码、手工备份和其他未登记文件保留。')
+                if not args.yes:
+                    if not sys.stdin.isatty():
+                        raise ValueError('非交互执行须明确指定 --purge --yes；尚未卸载或删除')
+                    if input('输入 DELETE 确认彻底卸载，其他输入取消：').strip() != 'DELETE':
+                        print('已取消，程序和数据未变。')
+                        return 0
         with file_lock(home / 'install.lock', False) as free:
             if not free:
                 raise RuntimeError('已有安装或维护操作正在运行')
@@ -183,12 +201,14 @@ def main(argv=None):
                     record, changed = lifecycle.update(home, bundle)
                 print(('已更新到 ' if changed else '已是此版本，无需重启：') + record['version'])
             elif args.command == 'uninstall':
-                record, retained = lifecycle.uninstall(home)
-                print('已卸载原生服务与命令；配置、任务、完整缓存与备份保留。')
-                for key in ('config', 'data', 'cache'):
-                    print(key + ': ' + record['paths'][key])
-                if retained:
-                    print('本次正在执行的程序文件仍被系统占用，退出后可移除：' + ', '.join(retained))
+                record, retained = lifecycle.uninstall(home, purge_data=args.purge,
+                                                      purge_plan=removal if args.purge else None)
+                if not args.purge:
+                    print('已卸载原生服务与命令；配置、任务、完整缓存与备份保留。')
+                    for key in ('config', 'data', 'cache'):
+                        print(key + ': ' + record['paths'][key])
+                    if retained:
+                        print('本次正在执行的程序文件仍被系统占用，退出后可移除：' + ', '.join(retained))
             elif args.command == 'start':
                 if describe(home)['service']['running']:
                     print('后台服务已运行')
@@ -196,12 +216,19 @@ def main(argv=None):
                     lifecycle.start(home, lifecycle.load(home)); print('后台服务已启动；同步按现有设置运行')
             elif args.command == 'stop':
                 lifecycle.stop(home); print('后台服务已停止；配置、任务和完整缓存保留')
+        if args.command == 'uninstall' and args.purge:
+            from .purge import finish
+            finish(home, record)
+            print('本机数据已清理，命令退出时完成程序目录清理。' if sys.platform == 'win32' else
+                  '已彻底卸载：程序、启动项、凭据、配置、任务、缓存、日志及程序维护备份已删除。')
         return 0
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         # Network responses and subprocess stderr may contain credential-bearing
         # URLs. Only our own ValueError/RuntimeError messages are user-facing.
         print('操作未完成：' + (str(exc) if isinstance(exc, (ValueError, RuntimeError)) else
-              '网络、文件或系统服务操作失败，请检查磁盘、网络与运行日志；原数据保留'), file=sys.stderr)
+              ('彻底卸载未完成，部分本机数据可能已清理；检查磁盘与权限后用相同命令重试' if
+               args.command == 'uninstall' and args.purge else
+               '网络、文件或系统服务操作失败，请检查磁盘、网络与运行日志；原数据保留')), file=sys.stderr)
         return 2
 
 

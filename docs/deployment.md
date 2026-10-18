@@ -120,7 +120,7 @@ docker compose ps
 docker compose logs --tail 100 backup bot
 ```
 
-`validate` 只检查 JSON 及连接字段格式，不测试账号能否登录。默认镜像为 `ghcr.io/shuaizha/media-importer:0.10.19`，提供 `linux/arm64` 与 `linux/amd64`；Docker 自动选择架构，Windows 使用 Linux 容器模式。镜像公开下载，不需要 Docker Hub 或 GitHub 登录；需能访问 `ghcr.io` 及其镜像层下载服务。架构支持不代表 Windows/Linux 相机链路已实测。
+`validate` 只检查 JSON 及连接字段格式，不测试账号能否登录。默认镜像为 `ghcr.io/shuaizha/media-importer:0.10.21`，提供 `linux/arm64` 与 `linux/amd64`；Docker 自动选择架构，Windows 使用 Linux 容器模式。镜像公开下载，不需要 Docker Hub 或 GitHub 登录；需能访问 `ghcr.io` 及其镜像层下载服务。架构支持不代表 Windows/Linux 相机链路已实测。
 
 镜像只包含程序和依赖，真实配置、任务和缓存通过原目录挂载。已有安装使用 `python3 scripts/manage.py update` 更新；命令核对 GitHub 正式发行版，并将镜像摘要固定在本机 `compose.override.yaml` 中。文件由工具维护且不提交 Git；不要用 `stable` 浮动标签替换摘要。源代码构建保留给开发与离线恢复，见[构建与测试](operations.md#构建与测试)。
 
