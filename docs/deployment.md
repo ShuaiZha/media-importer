@@ -8,7 +8,7 @@ Compose 运行两个服务：`backup` 负责导入与上传，`bot` 负责飞书
 
 - Git、运行中的 Docker，以及 `docker compose`。macOS / Windows 可用 Docker Desktop，Linux 使用 Docker Engine 和 Compose 插件，见[官方安装指南](https://docs.docker.com/compose/install/)。
 - 使用配置与更新脚本时，宿主机需要 Python 3.9+；手动首次配置不需要。
-- 符合[兼容性说明](compatibility.md)的 USB 相机、可访问的缓存盘、已创建的 SMB 共享与子目录。
+- [已适配的 USB 来源设备](compatibility.md)、可访问的缓存盘、已创建的 SMB 共享与子目录；仅有 USB 接口不代表设备已适配。
 - [飞书应用凭据](feishu.md#1-创建应用与获取凭据)：App ID、App Secret、本人在该应用中的 Open ID。
 
 相机、SMB、飞书都必须能从容器中访问。宿主机 Finder、资源管理器或 VPN 连通，不等于容器已经连通。Windows 使用 Linux 容器；实际设备链路仍需验证。

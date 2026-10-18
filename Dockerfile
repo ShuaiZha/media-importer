@@ -1,7 +1,7 @@
 ARG BASE_IMAGE=alpine:3.24.2
 FROM ${BASE_IMAGE}
 LABEL org.opencontainers.image.source="https://github.com/ShuaiZha/media-importer"
-LABEL org.opencontainers.image.description="USB camera import and SMB archiving with Feishu controls"
+LABEL org.opencontainers.image.description="Lightweight media import and archiving; currently GoPro USB, SMB and Feishu"
 RUN apk add --no-cache python3 py3-pip py3-cryptography ca-certificates
 COPY requirements.txt /app/requirements.txt
 RUN python3 -m venv --system-site-packages /opt/venv && /opt/venv/bin/pip install --no-cache-dir -r /app/requirements.txt

@@ -2,7 +2,7 @@
 
 [文档目录](README.md) · [Docker Compose](deployment.md) · [配置参考](configuration.md)
 
-原生版直接运行后台程序，包含 Python 与依赖，无需 Docker、系统 Python、Node.js 或额外 GUI App。它与 Docker 共用传输核心和数据格式。支持的平台及实机验证范围见[兼容性说明](compatibility.md)。
+原生版直接运行后台程序，包含 Python 与依赖，无需 Docker、系统 Python、Node.js 或额外 GUI App。它与 Docker 共用传输核心、设备适配和数据格式。已适配设备、支持的平台及实机验证范围见[兼容性说明](compatibility.md)。
 
 ## 安装
 

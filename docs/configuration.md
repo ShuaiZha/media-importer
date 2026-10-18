@@ -31,11 +31,13 @@
 
 Docker 手动部署前需创建目录并允许 Docker 访问；挂载不自动创建缺失路径。原生部署会登记目录与缓存磁盘，换盘或改路径应按[迁移步骤](recovery.md)重新登记，不能只修改 `.env` 后继续运行。
 
-### 相机
+### 来源设备
+
+`SOURCE_TYPE` 选择已实现的来源适配器。以下参数对应当前 GoPro USB 适配，不能填写其他品牌名称来直接启用尚未接入的设备。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `SOURCE_TYPE` | `gopro` | 当前仅支持 GoPro |
+| `SOURCE_TYPE` | `gopro` | 当前可用的来源适配类型 |
 | `SOURCE_URL` | 空 | 可选优先探测地址，包含 `http://` 和 `:8080` |
 | `SOURCE_SERIAL` | 空 | 可选序列号提示，不代替飞书本次设备确认 |
 | `SOURCE_TIMEOUT_SECONDS` | `20` | 单次相机请求超时，秒 |
@@ -43,11 +45,13 @@ Docker 手动部署前需创建目录并允许 Docker 访问；挂载不自动�
 
 地址与序列号可留空自动发现，实际设备始终以读取到的身份及本次确认结果为准。支持的机型和 USB 地址说明见[兼容性](compatibility.md#gopro)。
 
-### SMB 目的地
+### 归档目的地
+
+`DESTINATION_TYPE` 当前可用值为 `smb`，以下为 SMB 连接参数；目的地不限定为 NAS。
 
 | 变量 | 示例 | 说明 |
 | --- | --- | --- |
-| `DESTINATION_TYPE` | `smb` | 当前仅支持 SMB |
+| `DESTINATION_TYPE` | `smb` | 当前可用的目的地适配类型 |
 | `DESTINATION_NAME` | `SMB 存储` | 消息中的显示名称 |
 | `DESTINATION_HOST` | `storage.example.com` | IP 或域名，不带 `smb://`、端口、路径 |
 | `DESTINATION_PORT` | `445` | SMB 端口 |
@@ -57,7 +61,7 @@ Docker 手动部署前需创建目录并允许 Docker 访问；挂载不自动�
 | `DESTINATION_PASSWORD` | `REPLACE_WITH_SMB_PASSWORD` | 账号密码，必填 |
 | `DESTINATION_DOMAIN` | `WORKGROUP` | 按服务器的认证要求填写 |
 
-上例对应 `smb://storage.example.com/media/imports`，共享和子目录需提前存在；`/home/user/...` 等服务器内部路径不是共享名。程序在其下创建设备目录，平铺保留原文件名：
+上例对应 `smb://storage.example.com/media/imports`，共享和子目录需提前存在；`/home/user/...` 等服务器内部路径不是共享名。程序按实际设备名和序列号创建设备目录，平铺保留原文件名。以下为 GoPro 归档示例：
 
 ```text
 imports/
