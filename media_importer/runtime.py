@@ -93,9 +93,10 @@ def daemon(config_path, directory, stop):
     from .service import Service
     control = Control(Settings(config_path, directory), stop)
     store = Store(directory)
-    # Approval belongs to this running connection session, never to an old card.
-    from .source_connection import KEY as connection_key, run as discover_sources
-    store.set_meta(connection_key, {'state': 'searching', 'online': False})
+    # Old cards stay invalid. The same camera does not need a new approval after restart.
+    from .source_connection import restore, run as discover_sources
+    item = control.settings.read()
+    restore(store, (item.get('config') or {}).get('source') or {})
     from .storage import initialize_cache
     initialize_cache(store)
     store.invalidate_inventory("服务重启后需重新核对相机清单")

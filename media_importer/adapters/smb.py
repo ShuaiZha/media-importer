@@ -39,18 +39,42 @@ def identity(values):
 class SmbDestination:
     def __init__(self, config, stop=None):
         self.config, self.stop = config, stop
+        self._bound = None
 
     def fork(self, stop=None):
         return type(self)(self.config, self.stop if stop is None else stop)
 
     def close(self):
-        pass  # Every operation owns and closes its session.
+        pass  # A bound session closes with the file; unbound calls close themselves.
 
-    def session(self):
+    def _connect(self):
         from ..deployment import destination_password
         session = SmbSession(self.config, destination_password(), self.stop)
         session.on_activity = getattr(self, 'on_activity', None)
         return session
+
+    def session(self):
+        if self._bound is not None:
+            self._bound.on_activity = getattr(self, 'on_activity', None)
+            self._bound.stop = self.stop
+            return self._bound
+        return self._connect()
+
+    def bound(self):
+        from contextlib import contextmanager
+        @contextmanager
+        def scope():
+            if self._bound is not None:
+                yield
+                return
+            session = self._connect()
+            self._bound = session
+            try:
+                with session.hold():
+                    yield
+            finally:
+                self._bound = None
+        return scope()
 
     def redact(self, text):
         from ..deployment import destination_password
@@ -80,8 +104,8 @@ class SmbDestination:
             raise DestinationError("SMB 目标共享或目录不存在，请检查路径与访问权限")
         return {"host": self.config.destination["host"], "target": self.remote(), "name": self.config.destination["name"]}
 
-    def upload(self, local, temporary, progress, created, staged):
-        return self.session().upload(local, temporary, progress, created, staged)
+    def upload(self, local, temporary, progress, created, staged, content_sha256=None):
+        return self.session().upload(local, temporary, progress, created, staged, content_sha256)
 
     def publish(self, temporary, final):
         return self.session().publish(temporary, final)
@@ -90,6 +114,10 @@ class SmbDestination:
         return self.session().delete_owned(relative, identity)
 
     def check_write(self):
+        with self.bound():
+            return self._check_write()
+
+    def _check_write(self):
         result = self.check()
         token = uuid.uuid4().hex
         temporary, final = f".media-import-check-{token}.tmp", f".media-import-check-{token}.done"

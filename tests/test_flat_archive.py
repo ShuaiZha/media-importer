@@ -57,8 +57,8 @@ class FlatArchiveTests(unittest.TestCase):
         row = self.cached()
         parent = 'HERO9-' + footage().serial
         original = self.destination.upload
-        def upload(*args):
-            original(*args)
+        def upload(*args, **kwargs):
+            original(*args, **kwargs)
             self.destination.objects[parent + '/gh010001.mp4'] = b'peer'
         self.destination.upload = upload
         self.service().upload_cached(row)

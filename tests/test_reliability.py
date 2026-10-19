@@ -82,10 +82,10 @@ class ReliabilityTests(unittest.TestCase):
     def test_one_unreadable_file_is_isolated_while_volume_remains_usable(self):
         rows = self.cached()
         original = self.remote.upload
-        def upload(local, *args):
+        def upload(local, *args, **kwargs):
             if local.name == rows[0]['id'] + '.bin':
                 raise PermissionError(errno.EACCES, 'fixture file permission')
-            return original(local, *args)
+            return original(local, *args, **kwargs)
         self.remote.upload = upload
         self.service().cycle()
         self.assertEqual('cache_verification', self.store.get(rows[0]['id'])['error_code'])
@@ -258,7 +258,7 @@ class ReliabilityTests(unittest.TestCase):
             self.remote.stop = stop
             return self.remote
         self.remote.fork = fork
-        def stuck(*args):
+        def stuck(*args, **kwargs):
             self.remote.stop.wait(3)
             raise Cancelled('cancelled')
         self.remote.upload = stuck
@@ -275,7 +275,7 @@ class ReliabilityTests(unittest.TestCase):
         service.cancel_grace = .05
         release, ended = threading.Event(), threading.Event()
         codes = []
-        def stuck(*args):
+        def stuck(*args, **kwargs):
             try:
                 release.wait(4)
                 raise Cancelled('cancelled')

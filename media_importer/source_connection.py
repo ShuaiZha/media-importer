@@ -69,6 +69,24 @@ def require(store, config):
         raise ConfirmationRequired(waiting)
 
 
+def _identity(device):
+    return tuple(device.get(key) for key in ('type', 'serial_number', 'model_name', 'firmware_version', 'url'))
+
+
+def restore(store, source):
+    """Keep approval for the same camera across process start, and retire the old card."""
+    state = store.get_meta(KEY, {})
+    device = state.get('device') or {}
+    same = (state.get('state') == 'approved' and device.get('type') == source.get('type')
+            and device.get('serial_number') and device.get('serial_number') == source.get('serial'))
+    if not same:
+        store.set_meta(KEY, {'state': 'searching', 'online': False})
+        return store.get_meta(KEY)
+    store.set_meta(KEY, {**state, 'id': uuid.uuid4().hex, 'state': 'approved', 'online': False,
+                         'last_seen': 0, 'failures': 0, 'missing_since': None, 'restored': True})
+    return store.get_meta(KEY)
+
+
 def observe(store, device, stamp=None):
     """Preserve decisions across successful probes; revoke after sustained loss."""
     stamp = time.time() if stamp is None else stamp
@@ -77,14 +95,21 @@ def observe(store, device, stamp=None):
         state = store.get_meta(KEY, {})
         old = state.get('device', {})
         if device:
-            identity = lambda d: tuple(d.get(k) for k in ('type', 'serial_number', 'model_name', 'firmware_version', 'url'))
-            if state.get('state') in ('searching', 'offline', None) or identity(old) != identity(device):
+            same = _identity(old) == _identity(device)
+            # A restart may mark the camera offline before it is seen again.
+            # The same serial stays approved; a new session id already retired the old card.
+            if state.get('restored') and same and old.get('serial_number'):
+                state.pop('restored', None)
+                state['state'] = 'approved'
+            elif state.get('state') in ('searching', 'offline', None) or not same:
                 state = {'id': uuid.uuid4().hex, 'state': 'pending', 'device': device, 'created_at': now()}
                 status = store.get_meta('status', {})
                 if status:
                     status['inventory'] = {**status.get('inventory', {}), 'scanned': False, 'verified': False,
                                            'invalidated_reason': '相机连接变化，确认后重新扫描'}
                     store.db.execute("UPDATE meta SET value=? WHERE key='status'", (json.dumps(status),))
+            else:
+                state.pop('restored', None)
             state.update(device=device, online=True, last_seen=stamp, failures=0, missing_since=None)
         elif old:
             state['failures'] = state.get('failures', 0) + 1

@@ -472,6 +472,12 @@ class Service:
         LOG.info("上传完成: %s -> %s", self.store.asset(row).path, row["remote_path"])
 
     def upload_cached(self, row):
+        from contextlib import nullcontext
+        scope = self.destination.bound() if hasattr(self.destination, "bound") else nullcontext()
+        with scope:
+            self._upload_cached(row)
+
+    def _upload_cached(self, row):
         self.check_stop()
         self.verify_destination()
         require_cache(self.store)
@@ -563,7 +569,9 @@ class Service:
             self.store.update(row["id"], state="staged", remote_identity=json.dumps(identity), error=None, error_stage=None)
             self.checkpoint(row)
         try:
-            self.destination.upload(cache, temporary, self.progress, created, staged)
+            recorded = json.loads(row["cache_identity"] or "null")
+            content_sha256 = recorded.get("content_sha256") if isinstance(recorded, dict) else None
+            self.destination.upload(cache, temporary, self.progress, created, staged, content_sha256=content_sha256)
         except BaseException:
             saved = self.store.get(row["id"])
             if saved["state"] == "cached":
@@ -611,7 +619,10 @@ class Service:
         self.store.status(source_work=True)
         committed = False
         try:
-            self.source.download(asset, partial, self.progress)
+            content_sha256 = self.source.download(asset, partial, self.progress)
+            if content_sha256 is not None and (not isinstance(content_sha256, str) or len(content_sha256) != 64
+                                                or any(c not in "0123456789abcdef" for c in content_sha256)):
+                raise SourceError("导入校验无效，已保留相机原片")
             require_cache(self.store)
             # Explicit whole-second metadata avoids delayed write timestamps
             # on external FAT-family volumes shared by Docker Desktop.
@@ -623,6 +634,8 @@ class Service:
             with partial.open("rb") as imported:
                 os.fsync(imported.fileno())
             identity = cache_evidence(partial, row["asset_id"], self.store.get_meta("cache_identity"))
+            if content_sha256:
+                identity["content_sha256"] = content_sha256
             if identity["size"] != asset.size:
                 raise SourceError("导入大小不一致")
             # This intent makes a crash between rename and SQLite commit recoverable.
@@ -633,6 +646,8 @@ class Service:
             with cache.open("rb") as imported:
                 os.fsync(imported.fileno())
             final_identity = cache_evidence(cache, row["asset_id"], self.store.get_meta("cache_identity"))
+            if identity.get("content_sha256"):
+                final_identity["content_sha256"] = identity["content_sha256"]
             if any(final_identity[key] != identity[key] for key in ("asset_id", "volume_id", "size", "samples")):
                 raise CacheUnavailable("正式缓存与导入文件不一致，已保留完整文件和相机原片")
             # A rename can refresh stale external-volume timestamps. Persist

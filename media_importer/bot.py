@@ -158,7 +158,7 @@ class Bot:
                        self.button('确认并备份', {'source_decision': True, 'session_id': state['id']})]
             buttons[-1]['type'] = 'primary'
             elements.append(self.buttons(*buttons))
-        elements.append(note('本次确认仅适用于当前连接；检测到断开或服务重启后需重新确认。'))
+        elements.append(note('本次确认卡在断开、换相机或服务重启后失效。同一台已确认相机在重启后继续同步，不必再点一次。'))
         return card('相机已确认' if state.get('state') == 'approved' else
                     '相机待确认' if support['import_supported'] else '相机尚未适配', elements, 'blue', shared=True)
 

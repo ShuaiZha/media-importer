@@ -148,7 +148,9 @@ def inspect_cached_file(path, expected, asset_id, volume_id):
         result["bytes"] = actual["size"]
         if expected:
             if expected.get("version") == 2:
-                valid = cache_evidence(path, asset_id, volume_id) == expected
+                # content_sha256 is checked while uploading, not by another sample pass.
+                recorded = {key: value for key, value in expected.items() if key != "content_sha256"}
+                valid = cache_evidence(path, asset_id, volume_id) == recorded
             else:
                 valid = actual == expected
             if valid:

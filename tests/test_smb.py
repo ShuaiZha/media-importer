@@ -1,4 +1,4 @@
-import errno,json,os,stat,tempfile,threading,time,unittest
+import errno,hashlib,json,os,stat,tempfile,threading,time,unittest
 from pathlib import Path
 from types import SimpleNamespace
 from media_importer.adapters.smb_transport import SmbSession
@@ -144,6 +144,33 @@ class WholeFileTransportTests(unittest.TestCase):
             with self.assertRaises(Cancelled):session.upload(self.local,'device/.partial',lambda *_:None,self.created.append,self.staged.append)
         finally:timer.cancel()
         self.assertLess(time.monotonic()-start,1.5);self.assertFalse(self.staged)
+
+    def test_upload_hash_must_match_the_bytes_just_read(self):
+        digest = hashlib.sha256(self.local.read_bytes()).hexdigest()
+        self.session().upload(self.local, 'device/.partial', lambda *_: None, self.created.append, self.staged.append, digest)
+        self.assertEqual(1, len(self.staged))
+        self.staged.clear()
+        with self.assertRaises(LocalCacheChanged):
+            self.session().upload(self.local, 'device/.other', lambda *_: None, self.created.append, self.staged.append, '0' * 64)
+        self.assertFalse(self.staged)
+
+    def test_one_file_reuses_the_smb_session(self):
+        from media_importer.adapters.smb import SmbDestination
+        destination = SmbDestination(configuration(), self.stop)
+        opened = []
+        client = self.client
+        def connect():
+            session = SmbSession(destination.config, 'test-only-password', destination.stop, client)
+            session.block_size = 8
+            opened.append(session)
+            return session
+        destination._connect = connect
+        with destination.bound():
+            destination.upload(self.local, 'device/.partial', lambda *_: None, self.created.append, self.staged.append)
+            self.assertIsNotNone(destination.stat('device/.partial'))
+            destination.publish('device/.partial', 'device/final.mp4')
+        self.assertEqual(1, len(opened))
+        self.assertNotIn('password', opened[0].options)
 
     def test_atomic_publish_rejects_existing_final(self):
         self.run_upload();session=self.session();src=session.path('device/.partial');dst=session.path('device/final.mp4')

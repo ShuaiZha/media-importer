@@ -13,7 +13,7 @@ from media_importer.adapters import source_defaults, destination_defaults
 from media_importer.storage import file_identity
 from media_importer.model import Cancelled, CacheUnavailable
 from media_importer.adapters.gopro import make_asset as Asset, GoProSource
-from media_importer.model import SourceError, DestinationError, NameConflict
+from media_importer.model import SourceError, DestinationError, NameConflict, LocalCacheChanged
 from media_importer.service import Service
 from media_importer.store import Store, worker_lock
 
@@ -107,11 +107,13 @@ class FakeSource:
         if self.assets.get(asset.path) != asset:
             raise SourceError("素材已变化")
         self.downloads.append(asset.path)
-        Path(path).write_bytes(self.payload(asset))
+        data = self.payload(asset)
+        Path(path).write_bytes(data)
         if self.fail_download:
             Path(path).write_bytes(b"partial")
             raise SourceError("下载中断")
         progress(asset.size, asset.size)
+        return __import__("hashlib").sha256(data).hexdigest()
 
     def delete(self, asset):
         self.identify()
@@ -159,7 +161,7 @@ class FakeDestination:
         self.check()
         return [PurePosixPath(path).name for path in self.objects if str(PurePosixPath(path).parent) == parent]
 
-    def upload(self, local, temporary, progress, created, staged):
+    def upload(self, local, temporary, progress, created, staged, content_sha256=None):
         self.check()
         self.uploads.append(temporary)
         self.sequence += 1
@@ -174,6 +176,8 @@ class FakeDestination:
         progress(len(data), len(data))
         if self.corrupt_size:
             raise DestinationError("上传大小不一致")
+        if content_sha256 is not None and __import__("hashlib").sha256(data).hexdigest() != content_sha256:
+            raise LocalCacheChanged("上传读取的缓存与导入校验不一致，已停止并保留缓存")
         staged(self.identities[temporary])
 
     def file_identity(self, path):
@@ -233,6 +237,21 @@ class ServiceTests(unittest.TestCase):
         from media_importer.storage import cache_evidence
         self.store.update(row['id'], state='cached', cache_identity=json.dumps(cache_evidence(path, row['asset_id'], self.store.get_meta('cache_identity'))))
         return self.store.get(row['id'])
+
+    def test_upload_stops_when_cache_differs_from_import_hash(self):
+        old = self.source.download
+        def download(asset, path, progress):
+            digest = old(asset, path, progress)
+            file = Path(path)
+            data = bytearray(file.read_bytes())
+            data[0] ^= 0xff
+            file.write_bytes(data)
+            return digest
+        self.source.download = download
+        result = self.service().safe_cycle()
+        self.assertFalse(result["complete"])
+        self.assertEqual([], self.destination.publishes)
+        self.assertTrue(list(self.store.cache.glob("*.bin")))
 
     def test_full_archive_cleans_cache_and_retains_originals(self):
         result=self.service().safe_cycle()
@@ -461,8 +480,8 @@ class ServiceTests(unittest.TestCase):
         self.source=FakeSource([footage(1),footage(2)])
         upload_started=threading.Event();second_started=threading.Event()
         upload=self.destination.upload;download=self.source.download
-        def sending(*args):
-            upload_started.set();self.assertTrue(second_started.wait(3));return upload(*args)
+        def sending(*args, **kwargs):
+            upload_started.set();self.assertTrue(second_started.wait(3));return upload(*args, **kwargs)
         def importing(asset,*args):
             if asset.identity==footage(2).identity:
                 self.assertTrue(upload_started.wait(3));second_started.set()
@@ -493,10 +512,10 @@ class ServiceTests(unittest.TestCase):
         service=self.service();service.stage='upload'
         self.store.stage_status('upload',phase='failed',issue={'code':'permission'})
         upload=self.destination.upload
-        def sending(*args):
+        def sending(*args, **kwargs):
             self.assertIsNone(self.store.get(row['id'])['error'])
             self.assertIsNone(self.store.get_meta('status')['stages']['upload']['issue'])
-            return upload(*args)
+            return upload(*args, **kwargs)
         self.destination.upload=sending
         service.upload_cached(self.store.get(row['id']))
 

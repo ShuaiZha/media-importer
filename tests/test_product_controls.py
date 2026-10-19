@@ -35,10 +35,10 @@ class DrainTests(unittest.TestCase):
                 second.set()
                 release.wait(3)
             return download(asset, *args)
-        def sending(*args):
+        def sending(*args, **kwargs):
             uploading.set()
             release.wait(3)
-            return upload(*args)
+            return upload(*args, **kwargs)
         source.download, destination.upload = importing, sending
         result = {}
         def run():
@@ -102,10 +102,10 @@ class DrainTests(unittest.TestCase):
         source, remote = FakeSource(assets), FakeDestination()
         upload_started, release_upload = threading.Event(), threading.Event()
         upload, download = remote.upload, source.download
-        def sending(*args):
+        def sending(*args, **kwargs):
             upload_started.set()
             release_upload.wait(8)
-            return upload(*args)
+            return upload(*args, **kwargs)
         remote.upload = sending
         # Begin with one full cache so uploading is already active when import drains.
         self.store.batch(config.destination_id, [assets[0]])

@@ -17,7 +17,7 @@ from media_importer.model import ConfigError, SourceError, now
 from media_importer.service import Service
 from media_importer.settings import Settings
 from media_importer.source_connection import (KEY, ConfirmationRequired, decide, fresh,
-                                              observe, reason, require)
+                                              observe, reason, require, restore)
 from media_importer.status import snapshot
 from media_importer.store import Store
 import test_bot
@@ -144,13 +144,41 @@ class ConnectionTests(unittest.TestCase):
         self.assertIsNone(reason(self.store, self.config()))
         self.assertEqual('approved', self.store.get_meta(KEY)['state'])
         self.assertEqual(state['id'], observe(self.store, device())['id'])
-        # Selection survives restart, approval does not.
+        # Selection survives an explicit reset. Approval does not, until restore().
         self.store.set_meta(KEY, {'state': 'searching', 'online': False})
         self.assertEqual(device()['serial_number'], Settings(self.path, self.store.directory).read()['config']['source']['serial'])
         with self.assertRaises(ConfirmationRequired): require(self.store, self.config())
         replacement = observe(self.store, device())
         self.assertNotEqual(state['id'], replacement['id'])
         with self.assertRaises(ConfigError): decide(self.store, self.settings, state['id'], True)
+
+    def test_restart_keeps_the_same_camera_and_retires_the_old_card(self):
+        previous = self.confirmed()
+        restored = restore(self.store, self.config().source)
+        self.assertEqual('approved', restored['state'])
+        self.assertNotEqual(previous['id'], restored['id'])
+        self.assertTrue(restored['restored'])
+        with self.assertRaises(ConfirmationRequired): require(self.store, self.config())
+        with self.assertRaises(ConfigError): decide(self.store, self.settings, previous['id'], True)
+        stamp = time.time()
+        observe(self.store, None, stamp)
+        observe(self.store, None, stamp + 10)
+        self.assertEqual('offline', observe(self.store, None, stamp + 21)['state'])
+        self.assertTrue(self.store.get_meta(KEY)['restored'])
+        seen = observe(self.store, device())
+        self.assertEqual('approved', seen['state'])
+        self.assertEqual(restored['id'], seen['id'])
+        self.assertNotIn('restored', seen)
+        self.assertIsNone(reason(self.store, self.config()))
+        later = time.time()
+        observe(self.store, None, later)
+        observe(self.store, None, later + 10)
+        self.assertEqual('offline', observe(self.store, None, later + 21)['state'])
+        again = observe(self.store, device())
+        self.assertEqual('pending', again['state'])
+        self.assertNotEqual(restored['id'], again['id'])
+        self.confirmed()
+        self.assertEqual('searching', restore(self.store, {**self.config().source, 'serial': 'C0000000000999'})['state'])
 
     def test_approval_is_not_reused_after_disconnect_identity_or_firmware_change(self):
         previous = self.confirmed()

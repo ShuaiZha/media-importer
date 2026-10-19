@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import time
@@ -590,6 +591,7 @@ class GoProSource:
         if asset.metadata["primary"] and asset.metadata["gumi"]:
             self.verify_primary(asset)
         received = 0
+        digest = hashlib.sha256()
         try:
             with self._open("/videos/DCIM/" + quote(asset.path, safe="/")) as response, open(partial_path, "wb") as output:
                 if response.status != 200 or int(response.headers.get("Content-Length", -1)) != asset.size:
@@ -603,6 +605,7 @@ class GoProSource:
                     if not chunk:
                         break
                     output.write(chunk)
+                    digest.update(chunk)
                     received += len(chunk)
                     if received > asset.size:
                         raise SourceError("下载数据超过预期大小")
@@ -614,6 +617,7 @@ class GoProSource:
                 raise SourceError("下载未完整结束或原片已变化")
             if asset.metadata["primary"] and asset.metadata["gumi"]:
                 self.verify_primary(asset)
+            return digest.hexdigest()
         except HTTPException as exc:
             raise SourceConnectionError("相机下载连接中断；未完成文件将从头重试") from exc
         except ValueError as exc:

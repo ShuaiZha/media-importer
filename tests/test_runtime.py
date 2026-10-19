@@ -49,8 +49,8 @@ class RuntimeTests(unittest.TestCase):
         source=FakeSource([footage(1),footage(2)]);destination=FakeDestination()
         upload_started=threading.Event();second_started=threading.Event();release=threading.Event();outcome={}
         download=source.download;upload=destination.upload
-        def sending(*args):
-            upload_started.set();release.wait(3);return upload(*args)
+        def sending(*args, **kwargs):
+            upload_started.set();release.wait(3);return upload(*args, **kwargs)
         def importing(asset,*args):
             if asset.identity==footage(2).identity:
                 upload_started.wait(3);second_started.set();release.wait(3)

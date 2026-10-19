@@ -1,6 +1,7 @@
 """Bounded whole-file writes and identity-checked SMB operations; never read media back."""
 import errno
 from .smb_errors import SmbError
+import hashlib
 import logging
 import os
 import stat
@@ -51,6 +52,8 @@ class SmbSession:
         self.call_started = None
         self.timed_out = False
         self.finished = threading.Event()
+        self._held = 0
+        self._watcher = None
 
     def path(self, relative):
         parts = PurePosixPath(self.config.destination["share"]) / self.config.destination["directory"] / safe_relative(relative, allow_empty=True)
@@ -92,32 +95,62 @@ class SmbSession:
         finally:
             self.call_started = None
 
+    def _begin(self):
+        self.finished.clear()
+        self.timed_out = False
+        self._watcher = threading.Thread(target=self.watchdog, name="smb-write-watchdog", daemon=True)
+        self._watcher.start()
+
+    def _end(self):
+        self.finished.set()
+        self.disconnect()
+        if self._watcher:
+            self._watcher.join(timeout=3)
+        self.options.pop("password", None)
+
+    def _convert(self, exc):
+        self.check_stop()
+        if isinstance(exc, DestinationError):
+            raise exc
+        # Avoid exception text from auth libraries, which can include credentials.
+        code = getattr(exc, "ntstatus", None)
+        suffix = f" (NTSTATUS {code:#x})" if isinstance(code, int) else ""
+        raise SmbError("SMB 操作失败，完整缓存已保留：" + type(exc).__name__ + suffix) from exc
+
+    @contextmanager
+    def hold(self):
+        """Keep one connection open for the enclosed file operations."""
+        self.check_stop()
+        self._held += 1
+        started = self._held == 1
+        if started:
+            self._begin()
+        try:
+            yield
+        finally:
+            self._held -= 1
+            if started:
+                self._end()
+
     @contextmanager
     def operation(self):
         self.check_stop()
-        watcher = threading.Thread(target=self.watchdog, name="smb-write-watchdog", daemon=True)
-        watcher.start()
+        owned = not self._held
+        if owned:
+            self._begin()
         try:
             yield
         except BackupError:
             raise
         except Exception as exc:
-            self.check_stop()
-            if isinstance(exc, DestinationError):
-                raise
-            # Avoid exception text from auth libraries, which can include credentials.
-            code = getattr(exc, "ntstatus", None)
-            suffix = f" (NTSTATUS {code:#x})" if isinstance(code, int) else ""
-            raise SmbError("SMB 操作失败，完整缓存已保留：" + type(exc).__name__ + suffix) from exc
+            self._convert(exc)
         finally:
-            self.finished.set()
-            self.disconnect()
-            watcher.join(timeout=3)
-            self.options.pop("password", None)
+            if owned:
+                self._end()
 
-    def upload(self, local, temporary, progress, created, staged):
+    def upload(self, local, temporary, progress, created, staged, content_sha256=None):
         with self.operation():
-            self._upload(Path(local), self.path(temporary), progress, created, staged)
+            self._upload(Path(local), self.path(temporary), progress, created, staged, content_sha256)
 
     def publish(self, temporary, final):
         with self.operation():
@@ -183,10 +216,11 @@ class SmbSession:
             finally:
                 self.call(handle.close)
 
-    def _upload(self, local, target, progress, created, staged):
+    def _upload(self, local, target, progress, created, staged, content_sha256=None):
         with local.open("rb") as source:
             original = local_identity(os.fstat(source.fileno()))
             total = original["size"]
+            digest = hashlib.sha256()
             self.call(self.client.makedirs, target.rsplit("\\", 1)[0], exist_ok=True, **self.options)
             output = self.call(self.client.open_file, target, mode="xb", buffering=0, share_access="r", **self.options)
             try:
@@ -200,6 +234,7 @@ class SmbSession:
                     block = source.read(min(self.block_size, total - done))
                     if not block:
                         raise LocalCacheChanged("本地缓存被截断，停止上传")
+                    digest.update(block)
                     view = memoryview(block)
                     while view:
                         self.check_stop()
@@ -221,6 +256,8 @@ class SmbSession:
                     raise LocalCacheChanged("上传过程中本地缓存已变化，保留缓存并报告")
                 if remote_identity(info) != remote or info.st_size != total:
                     raise DestinationError("SMB 临时文件身份或大小不一致")
+                if content_sha256 is not None and digest.hexdigest() != content_sha256:
+                    raise LocalCacheChanged("上传读取的缓存与导入校验不一致，已停止并保留缓存")
                 staged(remote)  # Complete-file record, not a resumable byte checkpoint.
             finally:
                 self.call(output.close)
