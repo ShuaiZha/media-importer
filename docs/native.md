@@ -71,7 +71,7 @@ macOS 首次运行或升级后可能要求允许 `media-importer` 访问可移�
 media-importer update
 ```
 
-也可指定正式版本，例如 `media-importer update --version 0.10.22`。离线更新使用已解压的对应平台安装包：
+也可指定正式版本，例如 `media-importer update --version 0.10.23`。离线更新使用已解压的对应平台安装包：
 
 ```sh
 media-importer update --bundle /path/to/package/media-importer
