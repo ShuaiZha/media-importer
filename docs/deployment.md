@@ -1,93 +1,59 @@
-# Docker Compose 部署
+# Docker Compose
 
-[文档目录](README.md) · [原生 CLI](native.md) · [配置参考](configuration.md)
+[文档目录](README.md) · [原生 CLI](native.md)
 
-Compose 运行两个服务：`backup` 负责导入与上传，`bot` 负责飞书交互。它们共享配置、任务与缓存，无需网页服务或对外开放端口。镜像通过 GHCR 公开分发，提供 Linux ARM64 / AMD64。
+两个服务：`backup` 导入与上传，`bot` 接收飞书操作。共享配置与数据，不需要开放服务端口。正式镜像为 `ghcr.io/shuaizha/media-importer`，提供 Linux ARM64 / AMD64。
 
-与原生版共用设备适配；当前来源类型为 `gopro`，经 USB 连接。设备发现、型号与固件能力由适配器判断，不需要新增机型配置项；实际支持范围见[兼容性说明](compatibility.md)。
+## 准备
 
-## 准备条件
+- Git、Python 3.9+、运行中的 [Docker Compose](https://docs.docker.com/compose/install/)。Windows 使用 Linux 容器。
+- [支持的 USB 设备](compatibility.md)、缓存目录、已存在且可读写的 SMB 共享与子目录。
+- [飞书 App ID、App Secret、本人 Open ID](feishu.md#1-准备应用与凭据)。
 
-- Git、运行中的 Docker，以及 `docker compose`。macOS / Windows 可用 Docker Desktop，Linux 使用 Docker Engine 和 Compose 插件，见[官方安装指南](https://docs.docker.com/compose/install/)。
-- 使用配置与更新脚本时，宿主机需要 Python 3.9+；手动首次配置不需要。
-- [已适配的 USB 来源设备](compatibility.md)、可访问的缓存盘、已创建的 SMB 共享与子目录；仅有 USB 接口不代表设备已适配。
-- [飞书应用凭据](feishu.md#1-创建应用与获取凭据)：App ID、App Secret、本人在该应用中的 Open ID。
-
-相机、SMB、飞书都必须能从容器中访问。宿主机 Finder、资源管理器或 VPN 连通，不等于容器已经连通。Windows 使用 Linux 容器；实际设备链路仍需验证。
+USB 通过网络读取，无需设备直通。宿主机连通不等于容器连通，VPN / Tailscale 环境也需从容器检查。
 
 ## 首次部署
-
-### 1. 获取项目
 
 ```sh
 git clone https://github.com/ShuaiZha/media-importer.git
 cd media-importer
-```
-
-以下两种配置方法任选其一。已有安装不要重新运行首次向导，也不要覆盖真实配置。
-
-### 2. 创建配置
-
-推荐向导，填写缓存位置、SMB 和飞书信息：
-
-```sh
 python3 scripts/setup.py
+docker compose up -d --no-build
+docker compose ps
 ```
 
-Windows PowerShell 使用 `py -3 scripts/setup.py`。向导创建 `.env`、JSON 和目录，下载稳定版镜像并检查连接；相机地址和序列号可留空。向导不启动正式同步或发送测试消息，遇到已存在的配置会拒绝覆盖。相机离线时先完成连接检查，再启动服务等待连接。
+Windows 将 `python3` 替换为 `py -3`。向导生成 `.env`、JSON 和目录，拉取正式镜像并检查连接，不覆盖已有配置。相机地址与序列号可留空自动发现。
 
-**手动配置**时，macOS / Linux 执行：
+检查完成后，继续[配置飞书订阅、菜单并发布](feishu.md#3-订阅与菜单)。首次同步前核对身份，保留原片，用少量素材验证。
 
-```sh
-cp .env.example .env
-mkdir -p config data/cache
-cp config/settings.example.json config/settings.json
-chmod 600 .env config/settings.json
-```
+### 手动配置
 
-Windows PowerShell：
-
-```powershell
-Copy-Item .env.example .env
-New-Item -ItemType Directory -Force config, data/cache
-Copy-Item config/settings.example.json config/settings.json
-```
-
-编辑 `.env`，替换 SMB、飞书示例值，填写三个实际目录；使用外接盘时，提前创建并授权 Docker 访问这些目录。按[配置参考](configuration.md)核对路径及 JSON。默认同步、删除原片与自动传输通知关闭。
-
-### 3. 拉取并启动
-
-在项目目录运行：
+不使用向导时，复制 [`.env.example`](../.env.example) 为 `.env`、[`config/settings.example.json`](../config/settings.example.json) 为 `config/settings.json`。按[配置参考](configuration.md)填写真实值，提前创建三个挂载目录并授权 Docker 访问。默认目录为 `config/`、`data/`、`data/cache/`。
 
 ```sh
 docker compose config --quiet
 docker compose pull
 docker compose run --rm --no-deps backup validate
 docker compose up -d --no-build
-docker compose ps
 ```
 
-`validate` 只检查配置格式；容器健康状态表示后台正常，不等于相机或 SMB 在线。进一步检查：
+`validate` 检查格式；容器健康表示后台运行正常，不代表外部设备在线。完整连接诊断：
 
 ```sh
 docker compose exec backup python3 -m media_importer check --json
-docker compose logs --tail 100 bot
 ```
 
-然后按[飞书指南](feishu.md#3-配置事件与卡片回调)配置订阅、菜单并发布应用。通过「查看状态」确认三端状态，连接相机并核对身份后再备份。诊断不会代替实际 SMB 写入验收；首次传输使用小素材并保留原片。
-
-## 启停与日志
+## 管理服务
 
 | 目的 | 命令 |
 | --- | --- |
-| 启动已有服务 | `docker compose up -d --no-build` |
-| 查看健康状态 | `docker compose ps` |
-| 查看任务详情 | `docker compose exec backup python3 -m media_importer status --json` |
-| 查看近期日志 | `docker compose logs --tail 100 backup bot` |
-| 停止全部后台 | `docker compose stop` |
-| 删除容器与 Compose 网络 | `docker compose down` |
+| 健康状态 | `docker compose ps` |
+| 任务状态 | `docker compose exec backup python3 -m media_importer status --json` |
+| 近期日志 | `docker compose logs --tail 100 backup bot` |
+| 停止 / 启动后台 | `docker compose stop` / `docker compose up -d --no-build` |
+| 移除容器和网络 | `docker compose down` |
 
-`stop`、`down` 均保留宿主机上的配置、任务和完整缓存。日常启停传输使用飞书，机器人可继续接收操作；停止后台后机器人也会离线。
+`stop`、`down` 保留宿主机配置、任务与缓存，但机器人会离线。日常暂停传输使用飞书「停止同步」。
 
 ## 更新稳定版
 
@@ -97,27 +63,13 @@ docker compose logs --tail 100 bot
 python3 scripts/manage.py update
 ```
 
-Windows 使用 `py -3 scripts/manage.py update`。指定版本示例：`python3 scripts/manage.py update --version 0.10.23`。
+指定版本可加 `--version 0.10.23`。更新器核对 Release、标签和镜像摘要，下载镜像后停止服务，保存一致快照、快进源码，再恢复原来运行的服务。配置、开关、未完成任务与完整缓存保留。
 
-更新以已发布的镜像为准；拉取 `main` 源码不会替换运行中的容器。验证未发布改动时，在独立目录按[源码构建说明](../CONTRIBUTING.md#docker)操作。
+- 本地源码修改、分叉或自定义 Compose 覆盖可能阻止更新，先按错误提示处理。
+- `backups/update-*/` 不含完整视频；迁移应使用[完整备份](recovery.md)。
+- 生成的 `compose.override.yaml` 固定本机镜像，不提交到 Git。拉取源码不会自动更新容器。
+- v0.10.15 及更早版本先 `git pull --ff-only` 获取更新器；v0.9 使用[一次性迁移](recovery.md#从-v09-迁移)。
 
-更新器核对正式发行版、Git 标签与镜像摘要，先下载镜像，再停止服务、保存配置与 SQLite 一致快照、快进源码，恢复原来运行的服务并等待健康。凭据、开关、未完成任务和完整缓存保留。服务重启后，序列号未变的已确认相机继续同步，旧确认卡失效。
+修改 `.env` 后执行 `docker compose up -d --force-recreate --no-build`；JSON 偏好自动重读。换盘、换电脑和恢复备份见[迁移与恢复](recovery.md)。运行中的数据库只通过容器内 CLI 查询，不在宿主机直接打开。
 
-[v0.10.23](releases/v0.10.23.md) 恢复“一次一清”：整轮归档及必要清理完成后移除任务明细，保留必要去重信息和待发送结果。JSON 4 / SQLite 5 格式不变，旧记录在安全收尾时自动处理；无需清空数据库或缓存，不改动已有归档。
-
-注意以下边界：
-
-- 下载失败不停止服务；停止后发生失败会报告恢复资料路径，不直接用旧数据库覆盖新状态。
-- `backups/update-*/` 包含配置、数据库、源码及镜像身份，**不包含完整视频**，不是完整迁移备份。
-- 本地源码改动、分叉提交、自定义 Compose 覆盖文件或不兼容数据会阻止更新；先处理原因，不要强制重置配置或任务。
-- 工具生成的 `compose.override.yaml` 固定本机镜像版本，不应提交。删除它会回到仓库 `compose.yaml` 的版本。
-
-v0.10.15 及更早版本需先用 `git pull --ff-only` 获取更新脚本，再运行更新；v0.9 的数据格式需要[一次性迁移](recovery.md#从-v09-迁移)。恢复备份生成的目录不含 `.git`，不能直接使用 Git 更新流程。
-
-## 修改配置与迁移
-
-`.env`、JSON、SQLite 和缓存各自的职责见[配置参考](configuration.md)。编辑连接值后执行 `docker compose up -d --force-recreate --no-build`；JSON 偏好会自动重读。
-
-换盘、换电脑或恢复任务请使用[迁移指南](recovery.md)，保留完整缓存、卷标识、恢复清单和数据库。不要在宿主机直接打开运行中的容器数据库；查询使用容器内 CLI。
-
-需要源码构建和镜像发布时，见[贡献指南](../CONTRIBUTING.md)。
+源码构建与发布见[贡献指南](../CONTRIBUTING.md#构建与发布)。

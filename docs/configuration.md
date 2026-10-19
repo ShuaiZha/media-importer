@@ -1,67 +1,59 @@
 # 配置参考
 
-[文档目录](README.md) · [飞书配置](feishu.md) · [备份与迁移](recovery.md)
-
-连接、凭据与目录放在 `.env`；日常偏好放在 `settings.json`；任务与必要的去重信息保存在 SQLite。原生 CLI 与 Docker 使用相同格式。
+[文档目录](README.md) · [飞书](feishu.md) · [迁移与恢复](recovery.md)
 
 ## 文件与目录
 
-| 文件或目录 | 内容 | 是否需要迁移 |
+| 位置 | 内容 | 迁移时 |
 | --- | --- | --- |
-| 项目 `.env` | 连接、凭据、配置 / 任务 / 缓存路径 | 是 |
-| 配置目录中的 `settings.json` | 同步、删除原片、限制、通知偏好 | 是 |
-| 任务目录 | `state.sqlite3`、部署登记、恢复快照等 | 是，停止服务后整体备份 |
-| 缓存目录 | 完整文件、未完成文件、卷标识与 `.receipts/` 恢复清单 | 有未完成任务时必须完整保留 |
+| 项目 `.env` | 连接、凭据、三个数据目录 | 保留并调整路径 |
+| 配置目录 / `settings.json` | 同步、原片处理、限制与通知偏好 | 保留 |
+| 任务目录 | SQLite、部署登记、恢复快照 | 停止后台后整体复制 |
+| 缓存目录 | 完整文件、临时文件、卷标识、`.receipts/` | 有未完成任务时完整保留 |
 
-实际路径以原生 `media-importer status` 或项目 `.env` 为准。配置、任务、缓存目录都应专用于本项目；缓存可位于任务目录内，不能直接使用整块磁盘或用户主目录作为专用目录。
+实际位置见原生 `media-importer status` 或项目 `.env`。相对路径以项目目录为基准；配置、任务和缓存使用专用目录，不能直接指定整块磁盘或用户主目录。目录变更属于[迁移](recovery.md)，不要只改路径。
 
-[`.env.example`](../.env.example) 使用 `./config`、`./data`、`./data/cache`；首次向导的缓存默认值为 `./cache`，也可选择外接盘。相对路径以**项目目录**为基准：Docker 是 `compose.yaml` 所在目录，原生是安装时登记的项目目录。完整缓存、卷标识和恢复清单应一起移动，不要只复制视频。
+## 连接与凭据
 
-## `.env`：连接与凭据
+从 [`.env.example`](../.env.example) 复制为 `.env`。单引号保留空格、`$`、`#` 等字面字符；程序直接读取，不用 Shell `source`。
 
-从 [`.env.example`](../.env.example) 开始，不要把真实值填回示例文件。单引号可保留空格、`$`、`#` 等字面字符；`.env` 由程序读取，不需要通过 Shell `source` 执行。
+### 目录
 
-### 数据位置
+| 变量 | 示例 |
+| --- | --- |
+| `MEDIA_IMPORTER_CONFIG_HOST_DIR` | `./config` |
+| `MEDIA_IMPORTER_DATA_HOST_DIR` | `./data` |
+| `MEDIA_IMPORTER_CACHE_HOST_DIR` | `/Volumes/MediaSSD/media-importer/cache` |
 
-| 变量 | 示例 | 用途 |
-| --- | --- | --- |
-| `MEDIA_IMPORTER_CONFIG_HOST_DIR` | `./config` | `settings.json` 所在目录 |
-| `MEDIA_IMPORTER_DATA_HOST_DIR` | `./data` | SQLite 与运行记录 |
-| `MEDIA_IMPORTER_CACHE_HOST_DIR` | `/Volumes/MediaSSD/media-importer/cache` | 本地素材缓存；Windows 可用 `D:/MediaImport/cache` |
-
-Docker 手动部署前需创建目录并允许 Docker 访问；挂载不自动创建缺失路径。原生部署会登记目录与缓存磁盘，换盘或改路径应按[迁移步骤](recovery.md)重新登记，不能只修改 `.env` 后继续运行。
+Windows 缓存示例：`D:/MediaImport/cache`。示例文件默认 `./data/cache`，向导默认 `./cache`；均可修改。Docker 挂载目录需提前创建并允许访问。
 
 ### 来源设备
 
-`SOURCE_TYPE` 选择已实现的来源适配器。以下参数对应当前 GoPro USB 适配，不能填写其他品牌名称来直接启用尚未接入的设备。
-
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `SOURCE_TYPE` | `gopro` | 当前可用的来源适配类型 |
-| `SOURCE_URL` | 空 | 可选优先探测地址，包含 `http://` 和 `:8080` |
-| `SOURCE_SERIAL` | 空 | 可选序列号提示，不代替飞书本次设备确认 |
-| `SOURCE_TIMEOUT_SECONDS` | `20` | 单次相机请求超时，秒 |
+| `SOURCE_TYPE` | `gopro` | 当前唯一来源适配器 |
+| `SOURCE_URL` | 空 | 优先探测地址，含 `http://` 和 `:8080` |
+| `SOURCE_SERIAL` | 空 | 可选序列号提示 |
+| `SOURCE_TIMEOUT_SECONDS` | `20` | 请求超时，秒 |
 | `SOURCE_REQUEST_ATTEMPTS` | `3` | 请求尝试次数 |
 
-地址与序列号可留空自动发现，实际设备始终以读取到的身份及本次确认结果为准。支持的机型和 USB 地址说明见[兼容性](compatibility.md#gopro)。
+地址和序列号可留空自动发现，不能代替飞书中的设备确认。机型能力及 USB 地址规则见[兼容性](compatibility.md#gopro)。
 
-### 归档目的地
-
-`DESTINATION_TYPE` 当前可用值为 `smb`，以下为 SMB 连接参数；目的地不限定为 NAS。
+### SMB
 
 | 变量 | 示例 | 说明 |
 | --- | --- | --- |
-| `DESTINATION_TYPE` | `smb` | 当前可用的目的地适配类型 |
-| `DESTINATION_NAME` | `SMB 存储` | 消息中的显示名称 |
-| `DESTINATION_HOST` | `storage.example.com` | IP 或域名，不带 `smb://`、端口、路径 |
-| `DESTINATION_PORT` | `445` | SMB 端口 |
-| `DESTINATION_SHARE` | `media` | SMB 共享名，必填 |
-| `DESTINATION_DIRECTORY` | `imports` | 共享内相对目录；显式留空表示共享根目录 |
-| `DESTINATION_USERNAME` | `backup` | 有读写权限的账号 |
-| `DESTINATION_PASSWORD` | `REPLACE_WITH_SMB_PASSWORD` | 账号密码，必填 |
-| `DESTINATION_DOMAIN` | `WORKGROUP` | 按服务器的认证要求填写 |
+| `DESTINATION_TYPE` | `smb` | 当前唯一目的地适配器 |
+| `DESTINATION_NAME` | `SMB 存储` | 消息显示名称 |
+| `DESTINATION_HOST` | `storage.example.com` | IP 或域名，不带协议、端口或路径 |
+| `DESTINATION_PORT` | `445` | 端口 |
+| `DESTINATION_SHARE` | `media` | 共享名，必填 |
+| `DESTINATION_DIRECTORY` | `imports` | 共享内目录；显式留空使用共享根目录 |
+| `DESTINATION_USERNAME` | `backup` | 读写账号 |
+| `DESTINATION_PASSWORD` | `REPLACE_WITH_SMB_PASSWORD` | 密码，必填 |
+| `DESTINATION_DOMAIN` | `WORKGROUP` | 按服务器认证要求填写 |
 
-上例对应 `smb://storage.example.com/media/imports`，共享和子目录需提前存在；`/home/user/...` 等服务器内部路径不是共享名。程序按实际设备名和序列号创建设备目录，平铺保留原文件名。以下为 GoPro 归档示例：
+上例对应 `smb://storage.example.com/media/imports`。共享与子目录需提前存在；服务器内部的 `/home/user/...` 不是 SMB 共享名。归档布局示例：
 
 ```text
 imports/
@@ -71,69 +63,67 @@ imports/
     └── GH010001_1.MP4
 ```
 
-不同素材重名时追加 `_1`、`_2`，不区分大小写，不覆盖已有文件。同一份素材是否跳过，由本机记录的素材身份决定，不是目的地里的同名文件或文件大小。新导入文件的 SHA-256 只用于发现缓存在上传前被改过，规则见[完整性与归档](operations.md#完整性与归档)。域名或 IP 变化与更换存储是两回事，见[目的地身份](operations.md#目的地身份)。
+设备目录采用实际型号和序列号。重名加后缀，不覆盖、不按日期分层；去重与目的地身份规则见[使用说明](operations.md#传输与清理规则)。
 
 ### 飞书
 
-| 变量 | 示例 | 用途 |
-| --- | --- | --- |
-| `FEISHU_APP_ID` | `cli_EXAMPLE00000000` | 企业自建应用 ID |
-| `FEISHU_APP_SECRET` | `REPLACE_WITH_APP_SECRET` | 应用密钥 |
-| `FEISHU_OWNER_OPEN_ID` | `ou_EXAMPLE00000000` | 本人在**该应用**中的 Open ID |
+| 变量 | 示例 |
+| --- | --- |
+| `FEISHU_APP_ID` | `cli_EXAMPLE00000000` |
+| `FEISHU_APP_SECRET` | `REPLACE_WITH_APP_SECRET` |
+| `FEISHU_OWNER_OPEN_ID` | `ou_EXAMPLE00000000` |
 
-只接收此人的单聊和卡片操作，通知也发送给此人。不是群机器人 Webhook，不使用群 `chat_id` 或其他应用中的 Open ID。[获取方式](feishu.md#1-创建应用与获取凭据)。
+Open ID 必须属于本人在**当前应用**中的身份，不是群 ID 或其他应用的 ID。程序只接收此人的单聊和卡片操作。[获取步骤 →](feishu.md#1-准备应用与凭据)
 
-## `settings.json`：日常偏好
+## 日常偏好
 
-完整示例见 [`config/settings.example.json`](../config/settings.example.json)。JSON 不支持注释；未知键、重复键和无效类型会报错，不会静默换用另一套规则。当前 `version` 必须为 `4`。
+完整文件见 [`settings.example.json`](../config/settings.example.json)。`version` 为 `4`；JSON 不支持注释，未知键、重复键或无效类型会报错。
 
 ### 同步与素材
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
-| `backup.enabled` | `false` | 同步总开关，通常通过飞书操作 |
-| `backup.delete_source_after_import` | `false` | 整组完整导入后删除相机原片；建议通过飞书确认后开启 |
-| `backup.media_scope` | `"all"` | `all` 全部、`video` 视频、`photo` 照片及 RAW；可在飞书「素材范围」中修改 |
-| `backup.archive_previews` | `false` | 是否归档能确认关联的 LRV、THM 预览文件；可在飞书「预览文件」中修改 |
-| `backup.source_transport` | `"usb"` | 当前固定使用 USB |
-| `backup.stop_after_current` | `false` | 结束两路当前文件后停止，不开始新文件；通常保持默认 |
-| `backup.poll_seconds` | `10` | 轮询间隔，秒，至少 1 |
-| `backup.retry_seconds` | `30` | 重试基础间隔，秒，至少 1 |
-| `backup.stability_seconds` | `2` | 素材清单稳定性复查间隔，秒 |
+| `backup.enabled` | `false` | 同步总开关 |
+| `backup.delete_source_after_import` | `false` | 整组完整导入后删除原片，建议通过飞书确认开启 |
+| `backup.media_scope` | `"all"` | `all` 全部 / `video` 视频 / `photo` 照片与 RAW |
+| `backup.archive_previews` | `false` | 归档确认关联的 LRV、THM |
+| `backup.source_transport` | `"usb"` | 当前固定为 USB |
+| `backup.stop_after_current` | `false` | 两路当前文件结束后停止，不开始新文件 |
+| `backup.poll_seconds` | `10` | 轮询间隔，秒 |
+| `backup.retry_seconds` | `30` | 重试基础间隔，秒 |
+| `backup.stability_seconds` | `2` | 清单稳定性复查间隔，秒 |
 
-LRV 是低分辨率预览视频，THM 是缩略图。关闭预览归档只排除**能够确认关联**的文件；关联不明的文件保守保留。删除关联预览文件也要满足所属素材组的副本保护条件。已归档文件不因修改开关被删除。
+LRV 为低分辨率预览视频，THM 为缩略图。关闭预览归档只排除确认关联的文件，关联不明的保守保留。开关不删除已有归档；改变素材范围不清空完整缓存。
 
-**删除原片发生在完整导入本地后，早于远端归档。** 开启后，远端上传结束前缓存盘可能是唯一副本。待验证机型仍强制保留原片，详见[兼容性](compatibility.md#gopro)。归档成功后清理对应完整缓存是固定行为，无单独开关。
+**原片删除早于远端归档，缓存可能暂时是唯一副本。** 未通过删除验证的机型仍强制保留原片。具体保护条件见[原片删除](operations.md#原片删除)。
 
 ### 传输限制
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `limits.upload_mib_per_second` | `0` | 上传限速，MiB/s；`0` 不限速 |
-| `limits.min_free_disk_gib` | `10` | 导入后仍需保留的缓存盘空间，GiB |
+| `limits.min_free_disk_gib` | `10` | 导入后需保留的磁盘空间，GiB |
 | `limits.max_cache_gib` | `50` | 本实例缓存额度，GiB；`0` 不限额 |
 
-两路各一次处理一个文件。导入前同时检查额度与磁盘剩余空间，任一不足都会等待；上传可继续释放缓存。修改素材类别只影响相应导入范围，已有完整缓存不会被当作无用文件清空。
+导入前同时检查额度与实际剩余空间，不足时等待；上传继续释放缓存。归档成功后清理对应缓存是固定行为。
 
 ### 通知
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
-| `notifications.enabled` | `false` | 自动进度、完成和异常通知；可在飞书「自动通知」中修改 |
+| `notifications.enabled` | `false` | 自动进度、完成及异常提醒 |
 | `notifications.connection_events` | `true` | 连接断开提醒 |
-| `notifications.progress_interval_seconds` | `300` | 进度卡更新间隔，整数秒，范围 60–86400 |
-| `notifications.keyword` | `""` | 可选消息前缀，最多 100 字符 |
+| `notifications.progress_interval_seconds` | `300` | 进度更新间隔，60–86400 整数秒 |
+| `notifications.keyword` | `""` | 消息前缀，最多 100 字符 |
 
-关闭自动通知不影响手动查询、控制回执和设备确认卡。消息时间使用北京时间，进度更新同一张卡，完成及需要处理的失败单独提醒。
+关闭自动通知不影响手动查询、控制回执与设备确认。所有消息时间使用北京时间。
 
-## 修改后如何生效
+## 修改后生效
 
-| 修改内容 | 原生 CLI | Docker Compose |
+| 修改 | 原生 CLI | Docker |
 | --- | --- | --- |
-| JSON 偏好 | 自动重读；避免同时从飞书修改同一设置 | 同左 |
-| `.env` 连接与凭据 | `media-importer stop`，再 `media-importer start` | `docker compose up -d --force-recreate --no-build` |
-| 配置、任务或缓存路径 | 停止、迁移、重新安装登记路径 | 停止、迁移、修改挂载后重建容器 |
+| JSON 偏好 | 自动重读；避免同时从飞书改同一设置 | 同左 |
+| `.env` 连接与凭据 | `media-importer stop` 后 `media-importer start` | `docker compose up -d --force-recreate --no-build` |
+| 三个数据目录 | 停止、迁移、重新登记 | 停止、迁移、修改挂载并重建 |
 
-保存配置不代表外部连接已成功。修改后通过飞书状态或 CLI `check` 核对结果；目录迁移按[迁移指南](recovery.md)执行。
-
-真实 `.env`、JSON、数据库、缓存、日志及备份都不应提交。自定义到仓库内的新目录需加入本机忽略规则；默认 `.gitignore` 不可能覆盖任意自定义路径。
+保存不代表连接成功，修改后用 `check` 或飞书状态核对。真实配置、记录、缓存与备份不提交到 Git；自定义仓库内目录需另加忽略规则。

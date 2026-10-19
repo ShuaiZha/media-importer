@@ -1,44 +1,62 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="228" viewBox="0 0 900 228" role="img" aria-labelledby="title description">
-  <title id="title">导入与上传并行</title>
-  <desc id="description">文件 A 完整导入本地后开始上传。上传 A 时继续导入 B，上传 B 时继续导入 C。每路各处理一个文件，无需等待全部素材导入完成。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="320" viewBox="0 0 960 320" role="img" aria-labelledby="title description">
+  <title id="title">第一个文件导入完成即可上传</title>
+  <desc id="description">来源设备通过 USB 导入本地缓存，完整文件上传 SMB。下方时间轴中，导入 A 完成后开始上传 A，同时导入 B、C。两路各处理一个文件，示意宽度不代表实际速度。</desc>
   <style>
     :root { color-scheme: light dark; }
-    .background { fill: #f6f8fa; }
-    .label { fill: #24292f; }
-    .note { fill: #57606a; }
-    .grid { stroke: #d0d7de; }
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; }
+    .bg { fill: #f6f8fa; }
+    .node { fill: #ffffff; stroke: #d0d7de; }
+    .title { fill: #1f2328; font-size: 18px; font-weight: 600; }
+    .note { fill: #59636e; font-size: 14px; }
+    .line { stroke: #8c959f; fill: none; stroke-width: 1.5; }
+    .arrow { fill: #8c959f; }
     .import { fill: #ddf4ff; stroke: #54aeff; }
     .upload { fill: #dafbe1; stroke: #4ac26b; }
-    .import-label { fill: #0550ae; }
-    .upload-label { fill: #116329; }
-    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; font-size: 18px; }
+    .importText { fill: #0550ae; font-size: 17px; font-weight: 600; }
+    .uploadText { fill: #116329; font-size: 17px; font-weight: 600; }
     @media (prefers-color-scheme: dark) {
-      .background { fill: #161b22; }
-      .label { fill: #e6edf3; }
-      .note { fill: #9da7b3; }
-      .grid { stroke: #30363d; }
+      .bg { fill: #161b22; }
+      .node { fill: #212830; stroke: #3d444d; }
+      .title { fill: #f0f6fc; }
+      .note { fill: #b1bac4; }
       .import { fill: #122c46; stroke: #388bfd; }
       .upload { fill: #122d20; stroke: #3fb950; }
-      .import-label { fill: #79c0ff; }
-      .upload-label { fill: #7ee787; }
+      .importText { fill: #79c0ff; }
+      .uploadText { fill: #7ee787; }
     }
   </style>
-  <rect class="background" width="900" height="228" rx="10"/>
-  <text class="note" x="254" y="30" style="font-size:14px">时间 →</text>
-  <path class="grid" d="M450 42V184M650 42V184" stroke-dasharray="4 5"/>
-  <text class="label" x="24" y="78" font-weight="600">导入队列</text>
-  <text class="note" x="24" y="100" style="font-size:14px">来源设备 → 本地缓存</text>
-  <rect class="import" x="254" y="48" width="180" height="58" rx="7"/>
-  <rect class="import" x="450" y="48" width="180" height="58" rx="7"/>
-  <rect class="import" x="650" y="48" width="180" height="58" rx="7"/>
-  <text class="import-label" x="344" y="84" text-anchor="middle">导入 A</text>
-  <text class="import-label" x="540" y="84" text-anchor="middle">导入 B</text>
-  <text class="import-label" x="740" y="84" text-anchor="middle">导入 C</text>
-  <text class="label" x="24" y="154" font-weight="600">上传队列</text>
-  <text class="note" x="24" y="176" style="font-size:14px">完整缓存 → 归档目的地</text>
-  <rect class="upload" x="450" y="124" width="210" height="58" rx="7"/>
-  <rect class="upload" x="678" y="124" width="190" height="58" rx="7"/>
-  <text class="upload-label" x="555" y="160" text-anchor="middle">上传 A</text>
-  <text class="upload-label" x="773" y="160" text-anchor="middle">上传 B</text>
-  <text class="note" x="254" y="210" style="font-size:14px">A 完整缓存后即可上传；图中宽度不代表实际耗时。</text>
+  <rect class="bg" width="960" height="320" rx="12"/>
+  <rect class="node" x="32" y="24" width="236" height="68" rx="8"/>
+  <text class="title" x="150" y="53" text-anchor="middle">来源设备</text>
+  <text class="note" x="150" y="77" text-anchor="middle">当前适配 GoPro USB</text>
+  <path class="line" d="M282 58H346"/><path class="arrow" d="m346 54 8 4-8 4z"/>
+  <rect class="node" x="362" y="24" width="236" height="68" rx="8"/>
+  <text class="title" x="480" y="53" text-anchor="middle">本地缓存</text>
+  <text class="note" x="480" y="77" text-anchor="middle">内置磁盘 / 外接 SSD</text>
+  <path class="line" d="M612 58H676"/><path class="arrow" d="m676 54 8 4-8 4z"/>
+  <rect class="node" x="692" y="24" width="236" height="68" rx="8"/>
+  <text class="title" x="810" y="53" text-anchor="middle">SMB 归档</text>
+  <text class="note" x="810" y="77" text-anchor="middle">NAS / 电脑共享</text>
+  <text class="note" x="218" y="127">时间</text>
+  <path class="line" d="M256 122H920"/><path class="arrow" d="m920 118 8 4-8 4z"/>
+  <text class="title" x="32" y="174">导入队列</text>
+  <text class="note" x="32" y="196">来源 → 本地</text>
+  <rect class="import" x="218" y="151" width="162" height="48" rx="6"/>
+  <rect class="import" x="388" y="151" width="162" height="48" rx="6"/>
+  <rect class="import" x="558" y="151" width="162" height="48" rx="6"/>
+  <text class="importText" x="299" y="181" text-anchor="middle">导入 A</text>
+  <text class="importText" x="469" y="181" text-anchor="middle">导入 B</text>
+  <text class="importText" x="639" y="181" text-anchor="middle">导入 C</text>
+  <text class="title" x="32" y="246">上传队列</text>
+  <text class="note" x="32" y="268">完整缓存 → SMB</text>
+  <path class="line" d="M384 141V278" stroke-dasharray="4 4"/>
+  <rect class="upload" x="388" y="223" width="244" height="48" rx="6"/>
+  <rect class="upload" x="640" y="223" width="162" height="48" rx="6"/>
+  <rect class="upload" x="810" y="223" width="118" height="48" rx="6"/>
+  <text class="uploadText" x="510" y="253" text-anchor="middle">上传 A</text>
+  <text class="uploadText" x="721" y="253" text-anchor="middle">上传 B</text>
+  <text class="uploadText" x="869" y="253" text-anchor="middle">上传 C</text>
+  <text class="note" x="398" y="216">A 完整后，上传与后续导入同时进行</text>
+  <text class="note" x="32" y="301">每路各处理一个文件，无需等待整批导入。</text>
+  <text class="note" x="928" y="301" text-anchor="end">示意时序，不代表实际耗时</text>
 </svg>
