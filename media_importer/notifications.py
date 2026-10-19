@@ -225,8 +225,11 @@ class NotificationWorker:
                     view.get('status', {}).get('phase') in ('checking_cleanup', 'cleaning_source'))
 
     def _enqueue(self, db, key, kind, scope, title, text, stamp, batch_id=None, state="pending"):
-        if batch_id and not db.execute('SELECT 1 FROM transfer_runs WHERE id=?', (batch_id,)).fetchone():
-            return  # A stale observer must not resurrect a retired round.
+        if batch_id:
+            run = db.execute('SELECT 1 FROM transfer_runs WHERE id=?', (batch_id,)).fetchone()
+            settled = json.loads((db.execute("SELECT value FROM meta WHERE key='settled_runs'").fetchone() or ('[]',))[0])
+            if not run or batch_id in settled:
+                return  # A stale observer must not resurrect a closed round.
         db.execute("""INSERT OR IGNORE INTO notification_events
             (id,kind,scope,batch_id,payload,state,created_at) VALUES (?,?,?,?,?,?,?)""",
             (key, kind, scope, batch_id, json.dumps({"title": title, "text": text}, ensure_ascii=False), state, stamp))
@@ -440,7 +443,8 @@ class NotificationWorker:
     def _save_progress(db, key, pointer, batch_id):
         """A send may finish after the round retired; attach its message to the result."""
         db.execute('BEGIN IMMEDIATE')
-        if not batch_id or db.execute('SELECT 1 FROM transfer_runs WHERE id=?', (batch_id,)).fetchone():
+        settled = json.loads((db.execute("SELECT value FROM meta WHERE key='settled_runs'").fetchone() or ('[]',))[0])
+        if not batch_id or (db.execute('SELECT 1 FROM transfer_runs WHERE id=?', (batch_id,)).fetchone() and batch_id not in settled):
             _put_meta(db, key, pointer)
             return
         if not pointer.get('message_id'):

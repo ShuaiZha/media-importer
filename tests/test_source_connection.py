@@ -315,7 +315,8 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual(0, view['cleanup']['source_pending'])
         self.assertEqual(1, service.settle())
         self.assertTrue(self.config().backup['delete_source_after_import'])
-        self.assertEqual(1, len(self.store.db.execute('SELECT * FROM source_index').fetchall()))
+        self.assertEqual('uploaded', self.store.files()[0]['state'])
+        self.assertEqual([], self.store.db.execute('SELECT * FROM source_index').fetchall())
 
     def test_pending_connection_never_claims_old_inventory_complete(self):
         self.confirmed()

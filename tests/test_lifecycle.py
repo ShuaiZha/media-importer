@@ -39,30 +39,32 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(3, len(self.store.files()))
         self.store.update(rows[0]['id'], cache_cleanup_error=None)
         self.assertEqual(3, service.settle())
-        for table in ('files', 'source_groups', 'batches', 'batch_files', 'transfer_runs', 'transfer_run_files', 'cache_receipts'):
-            self.assertEqual(0, self.store.db.execute('SELECT count(*) FROM ' + table).fetchone()[0], table)
+        self.assertEqual(3, len(self.store.files()))
         self.assertEqual([], self.index())
+        self.assertEqual(0, service.settle())
         self.assertEqual(archive, self.remote.objects)
         self.assertFalse(list(self.store.cache.glob('*.bin')))
         self.assertIsNone(self.store.get_meta('last_result'))
 
-    def test_retained_original_deduplicates_across_restart_and_absence_prunes_index(self):
+    def test_retained_original_stays_deduplicated_after_restart_and_camera_absence(self):
         self.service().cycle()
         self.assertEqual(2, self.service().settle())
-        self.assertEqual(2, len(self.index()))
+        self.assertEqual(2, len(self.store.files()))
+        self.assertEqual([], self.index())
         self.store.close()
         self.store = Store(self.root / 'data')
         self.service().cycle()
-        self.assertEqual([], self.store.files())
+        self.assertEqual(2, len(self.store.files()))
         self.assertEqual(2, len(self.remote.uploads))
         self.assertEqual(2, len(self.source.downloads))
         self.source.online = False
         self.service().safe_cycle()
-        self.assertEqual(2, len(self.index()))
+        self.assertEqual(2, len(self.store.files()))
         self.source.online = True
         self.source.assets.clear()
         self.service().cycle()
-        self.assertEqual([], self.index())
+        self.assertEqual(2, len(self.store.files()))
+        self.assertEqual(2, len(self.source.downloads))
 
     def test_delete_enabled_later_checks_archive_then_cleans_without_reupload(self):
         self.service().cycle()
@@ -71,8 +73,9 @@ class LifecycleTests(unittest.TestCase):
         self.service().cycle()
         self.assertEqual(2, len(self.source.deletes))
         self.assertEqual(2, len(self.remote.uploads))
-        self.assertEqual(2, self.service().settle())
+        self.assertEqual(0, self.service().settle())
         self.assertEqual([], self.index())
+        self.assertTrue(all(r['cleanup'] == 'deleted' for r in self.store.files()))
 
     def test_changed_archive_identity_prevents_deleting_retained_original(self):
         self.service().cycle()
@@ -103,7 +106,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse(service.config.backup['delete_source_after_import'])
         service.cycle()
         self.assertEqual(2, len(self.source.deletes))
-        self.assertEqual(2, service.settle())
+        self.assertEqual(0, service.settle())
         self.assertEqual(2, len(self.remote.uploads))
         self.assertEqual([], self.index())
 
@@ -155,7 +158,7 @@ class LifecycleTests(unittest.TestCase):
         sender = Mock(side_effect=DestinationError('fixture delivery failure'))
         worker = NotificationWorker(self.store.directory, settings, threading.Event(), sender=sender)
         self.assertEqual(2, service.settle())
-        self.assertEqual([], self.store.files())
+        self.assertEqual(2, len(self.store.files()))
         saved = self.store.db.execute("SELECT * FROM notification_events WHERE kind='completed'").fetchone()
         self.assertEqual(1, saved['detached'])
         self.assertNotIn('100GOPRO', saved['payload'])

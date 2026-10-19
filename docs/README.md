@@ -14,6 +14,7 @@ Media Importer 是轻量的素材导入与归档工具：从来源设备导入�
 | --- | --- |
 | 确认设备、存储协议与系统是否适用 | [兼容性与运行条件](compatibility.md) |
 | 理解导入、上传、确认和校验 | [传输与清理规则](operations.md#传输与清理规则) |
+| 看代码时模块各管什么 | [架构](architecture.md) |
 | 不用 Docker，直接安装后台程序 | [原生 CLI 部署](native.md) |
 | 使用容器部署 | [Docker Compose 部署](deployment.md) |
 | 创建机器人、配置菜单与通知 | [飞书配置](feishu.md) |
