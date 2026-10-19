@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="392" viewBox="0 0 960 392" role="img" aria-labelledby="title description">
+<title id="title">两条并行队列的运行结构</title>
+<desc id="description">飞书控制写入 JSON 偏好，两条线程读取设置。来源经导入线程写入完整本地缓存，再由上传线程正式归档。两路读写 SQLite 未完成事项，各一次处理一个文件。</desc>
+<style>
+:root{color-scheme:light dark}
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans CJK SC","Microsoft YaHei",sans-serif}
+.bg{fill:#f6f8fa}.box{fill:#fff;stroke:#d0d7de}.blue{fill:#ddf4ff;stroke:#54aeff}.green{fill:#dafbe1;stroke:#4ac26b}.gold{fill:#fff8c5;stroke:#d4a72c}
+.title{font-size:18px;font-weight:600;fill:#1f2328}.note{font-size:14px;fill:#59636e}
+.line{fill:none;stroke:#8c959f;stroke-width:1.5;marker-end:url(#arrow)}.dashed{stroke-dasharray:5 4}.arrow{fill:#8c959f}
+@media(prefers-color-scheme:dark){.bg{fill:#161b22}.box{fill:#212830;stroke:#3d444d}.blue{fill:#122c46;stroke:#388bfd}.green{fill:#122d20;stroke:#3fb950}.gold{fill:#342d0e;stroke:#9e6a03}.title{fill:#f0f6fc}.note{fill:#b1bac4}}
+</style>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto-start-reverse"><path class="arrow" d="M0 0L8 4L0 8Z"/></marker></defs>
+<rect class="bg" width="960" height="392" rx="12"/>
+<rect class="box" x="360" y="24" width="240" height="64" rx="8"/>
+<text class="title" x="480" y="51" text-anchor="middle">飞书控制</text>
+<text class="note" x="480" y="75" text-anchor="middle">保存 JSON 偏好</text>
+<path class="line dashed" d="M480 88V112H280V144"/>
+<path class="line dashed" d="M480 112H680V144"/>
+<rect class="box" x="24" y="144" width="144" height="64" rx="8"/>
+<rect class="blue" x="208" y="144" width="144" height="64" rx="8"/>
+<rect class="box" x="408" y="144" width="144" height="64" rx="8"/>
+<rect class="green" x="608" y="144" width="144" height="64" rx="8"/>
+<rect class="box" x="800" y="144" width="136" height="64" rx="8"/>
+<text class="title" x="96" y="182" text-anchor="middle">来源设备</text>
+<text class="title" x="280" y="182" text-anchor="middle">导入线程</text>
+<text class="title" x="480" y="171" text-anchor="middle">完整缓存</text>
+<text class="note" x="480" y="194" text-anchor="middle">两路交接点</text>
+<text class="title" x="680" y="182" text-anchor="middle">上传线程</text>
+<text class="title" x="868" y="182" text-anchor="middle">正式归档</text>
+<path class="line" d="M168 176H202"/><path class="line" d="M352 176H402"/>
+<path class="line" d="M552 176H602"/><path class="line" d="M752 176H794"/>
+<rect class="box" x="360" y="272" width="240" height="64" rx="8"/>
+<text class="title" x="480" y="299" text-anchor="middle">SQLite</text>
+<text class="note" x="480" y="323" text-anchor="middle">未完成事项 · 完成事实</text>
+<path class="line dashed" d="M430 272V248H280V214" marker-start="url(#arrow)"/>
+<path class="line dashed" d="M530 272V248H680V214" marker-start="url(#arrow)"/>
+<text class="note" x="32" y="369">实线：文件传输　　虚线：控制与持久化</text>
+<text class="note" x="928" y="369" text-anchor="end">每路各处理一个文件</text>
+</svg>

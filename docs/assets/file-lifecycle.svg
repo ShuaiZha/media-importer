@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="590" viewBox="0 0 960 590" role="img" aria-labelledby="title description">
+<title id="title">导入、归档与原片清理的完成边界</title>
+<desc id="description">临时导入经大小、来源身份与落盘核验后成为完整缓存。上传核对流式 SHA-256，远端大小和 SMB 身份通过后禁止覆盖改名，记录完成再清理缓存。整组完整副本可核验且开启删除时可并行清理原片，不等待远端归档，否则保留原片。</desc>
+<style>
+:root{color-scheme:light dark}
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans CJK SC","Microsoft YaHei",sans-serif}
+.bg{fill:#f6f8fa}.box{fill:#fff;stroke:#d0d7de}.blue{fill:#ddf4ff;stroke:#54aeff}.green{fill:#dafbe1;stroke:#4ac26b}.gold{fill:#fff8c5;stroke:#d4a72c}
+.title{font-size:18px;font-weight:600;fill:#1f2328}.note{font-size:14px;fill:#59636e}
+.line{fill:none;stroke:#8c959f;stroke-width:1.5;marker-end:url(#arrow)}.dashed{stroke-dasharray:5 4}.arrow{fill:#8c959f}
+@media(prefers-color-scheme:dark){.bg{fill:#161b22}.box{fill:#212830;stroke:#3d444d}.blue{fill:#122c46;stroke:#388bfd}.green{fill:#122d20;stroke:#3fb950}.gold{fill:#342d0e;stroke:#9e6a03}.title{fill:#f0f6fc}.note{fill:#b1bac4}}
+</style>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto-start-reverse"><path class="arrow" d="M0 0L8 4L0 8Z"/></marker></defs>
+<rect class="bg" width="960" height="590" rx="12"/>
+<rect class="blue" x="48" y="20" width="432" height="64" rx="8"/>
+<text class="title" x="264" y="47" text-anchor="middle">写入本地临时文件</text>
+<text class="note" x="264" y="71" text-anchor="middle">导入时计算流式 SHA-256</text>
+<path class="line" d="M264 84V104"/>
+<rect class="box" x="48" y="110" width="432" height="64" rx="8"/>
+<text class="title" x="264" y="137" text-anchor="middle">核对并持久化</text>
+<text class="note" x="264" y="161" text-anchor="middle">大小 / 来源身份 / 落盘</text>
+<path class="line" d="M264 174V194"/>
+<rect class="blue" x="48" y="200" width="432" height="64" rx="8"/>
+<text class="title" x="264" y="227" text-anchor="middle">完整缓存</text>
+<text class="note" x="264" y="251" text-anchor="middle">保存任务记录与恢复清单</text>
+<path class="line" d="M264 264V284"/>
+<rect class="green" x="48" y="290" width="432" height="64" rx="8"/>
+<text class="title" x="264" y="317" text-anchor="middle">上传到远端临时文件</text>
+<text class="note" x="264" y="341" text-anchor="middle">顺序读取缓存，同时核对 SHA-256</text>
+<path class="line" d="M264 354V374"/>
+<rect class="green" x="48" y="380" width="432" height="64" rx="8"/>
+<text class="title" x="264" y="407" text-anchor="middle">正式归档</text>
+<text class="note" x="264" y="431" text-anchor="middle">核对大小 / SMB 身份，禁止覆盖改名</text>
+<path class="line" d="M264 444V464"/>
+<rect class="box" x="48" y="470" width="432" height="64" rx="8"/>
+<text class="title" x="264" y="497" text-anchor="middle">记录完成 → 清理缓存</text>
+<text class="note" x="264" y="521" text-anchor="middle">等待原片清理的组保护解除</text>
+<path class="line dashed" d="M480 232H582"/>
+<path class="gold" d="M754 164L920 232L754 300L588 232Z"/>
+<text class="title" x="754" y="225" text-anchor="middle">已开启删除，且整组</text>
+<text class="title" x="754" y="250" text-anchor="middle">完整副本可核验？</text>
+<path class="line" d="M754 300V342"/>
+<text class="note" x="767" y="328">是</text>
+<rect class="gold" x="588" y="348" width="332" height="80" rx="8"/>
+<text class="title" x="754" y="377" text-anchor="middle">复核设备与成员</text>
+<text class="note" x="754" y="403" text-anchor="middle">逐文件删除并复扫，不等待远端归档</text>
+<path class="line dashed" d="M920 232H940V478H926"/>
+<text class="note" x="923" y="326">否</text>
+<rect class="box" x="588" y="454" width="332" height="48" rx="8"/>
+<text class="title" x="754" y="484" text-anchor="middle">保留原片</text>
+<text class="note" x="32" y="568">原片清理期间保护整组缓存；结果未确认时保留文件与核验依据。</text>
+</svg>

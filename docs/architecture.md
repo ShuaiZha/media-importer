@@ -6,37 +6,13 @@
 
 ## 两条并行队列
 
-```mermaid
-flowchart LR
-  source["来源设备"] --> importer["导入线程"]
-  importer --> cache["完整本地缓存"]
-  cache --> uploader["上传线程"]
-  uploader --> destination["正式归档"]
-  db[("SQLite · 未完成事项")] -.-> importer
-  importer -.-> db
-  db -.-> uploader
-  uploader -.-> db
-  bot["飞书控制"] -.-> config["JSON 偏好"]
-  config -.-> importer
-  config -.-> uploader
-```
+![并行队列：完整缓存交接文件，SQLite 保存任务，JSON 控制两路传输](assets/architecture.svg)
 
 实线为文件传输，虚线为记录与控制。两路各一次处理一个文件，以完整缓存和持久化任务交接。SMB 离线不阻止额度内导入，来源断开不阻止完整缓存上传。
 
 ## 一个文件的完成边界
 
-```mermaid
-flowchart TD
-  download["导入临时文件 · 流式 SHA-256"] --> verify["大小 / 来源身份核对 · 落盘"]
-  verify --> cached["完整缓存 + SQLite + 恢复清单"]
-  cached --> upload["远端临时文件 · 上传时核对 SHA-256"]
-  upload --> publish["大小 / SMB 身份核对 · 禁止覆盖改名"]
-  publish --> recorded["保存归档结果"]
-  recorded --> cleanup["解除组保护后清理缓存"]
-  cached -.-> group{"删除已开启且整组副本可核验？"}
-  group -->|是| remove["复核设备与成员 · 逐文件删除并复扫"]
-  group -->|否| retain["保留原片"]
-```
+![文件完成边界：完整导入后可按策略清理原片，远端归档记录后再清理缓存](assets/file-lifecycle.svg)
 
 原片清理与上传可并行；清理源文件期间保护该组缓存。归档改名结果未知时进入发布恢复，不按半文件清理。中断的传输从头开始，不重复处理已经完成的文件。
 
