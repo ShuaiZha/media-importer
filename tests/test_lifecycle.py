@@ -39,32 +39,140 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(3, len(self.store.files()))
         self.store.update(rows[0]['id'], cache_cleanup_error=None)
         self.assertEqual(3, service.settle())
-        self.assertEqual(3, len(self.store.files()))
+        for table in ('files', 'source_groups', 'batches', 'batch_files', 'transfer_runs', 'transfer_run_files', 'cache_receipts'):
+            self.assertEqual(0, self.store.db.execute('SELECT count(*) FROM ' + table).fetchone()[0], table)
         self.assertEqual([], self.index())
-        self.assertEqual(0, service.settle())
         self.assertEqual(archive, self.remote.objects)
         self.assertFalse(list(self.store.cache.glob('*.bin')))
         self.assertIsNone(self.store.get_meta('last_result'))
 
-    def test_retained_original_stays_deduplicated_after_restart_and_camera_absence(self):
+    def test_retained_original_deduplicates_across_restart_and_absence_prunes_index(self):
         self.service().cycle()
         self.assertEqual(2, self.service().settle())
-        self.assertEqual(2, len(self.store.files()))
-        self.assertEqual([], self.index())
+        self.assertEqual(2, len(self.index()))
         self.store.close()
         self.store = Store(self.root / 'data')
         self.service().cycle()
-        self.assertEqual(2, len(self.store.files()))
+        self.assertEqual([], self.store.files())
         self.assertEqual(2, len(self.remote.uploads))
         self.assertEqual(2, len(self.source.downloads))
         self.source.online = False
         self.service().safe_cycle()
-        self.assertEqual(2, len(self.store.files()))
+        self.assertEqual(2, len(self.index()))
         self.source.online = True
         self.source.assets.clear()
         self.service().cycle()
+        self.assertEqual([], self.index())
+
+    def test_legacy_settled_round_retires_without_replaying_completion(self):
+        values = copy.deepcopy(self.config.values)
+        values['notifications']['enabled'] = True
+        self.config = Config.from_values(values)
+        self.service().settle()
+        self.service().cycle()
+        runs = [r[0] for r in self.store.db.execute('SELECT id FROM transfer_runs')]
+        self.store.set_meta('settled_runs', runs)
+        archive = copy.deepcopy(self.remote.objects)
+        self.store.close()
+        self.store = Store(self.root / 'data')
+        self.assertIsNone(self.store.get_meta('settled_runs'))
+        self.assertEqual(2, self.service().settle())
+        self.assertFalse(self.store.files())
+        self.assertEqual(2, len(self.index()))
+        self.assertEqual(0, self.store.db.execute('SELECT count(*) FROM notification_events').fetchone()[0])
+        self.assertEqual(archive, self.remote.objects)
+
+    def test_migration_keeps_unfinished_task_and_complete_cache_verbatim(self):
+        self.service().cycle()
+        runs = [r[0] for r in self.store.db.execute('SELECT id FROM transfer_runs')]
+        self.store.set_meta('settled_runs', runs)
+        asset = footage(3)
+        self.source.assets[asset.path] = asset
+        service = self.service()
+        service.prepare_imports()
+        row = next(r for r in service.rows() if r['asset_id'] == asset.identity)
+        service.import_asset(row)
+        before = self.store.get(row['id'])
+        content = self.store.cached_path(before).read_bytes()
+        archive = copy.deepcopy(self.remote.objects)
+        self.store.close()
+        self.store = Store(self.root / 'data')
+        self.assertEqual(2, self.service().settle())
+        self.assertEqual([before], self.store.files())
+        self.assertEqual(content, self.store.cached_path(before).read_bytes())
+        self.assertEqual(archive, self.remote.objects)
+
+    def test_legacy_migration_preserves_detached_delivery_and_cancels_stale_progress(self):
+        from media_importer.notifications import freeze_completion
+        values = copy.deepcopy(self.config.values)
+        values['notifications']['enabled'] = True
+        self.config = Config.from_values(values)
+        service = self.service()
+        service.settle()
+        service.cycle()
+        run = dict(self.store.db.execute('SELECT * FROM transfer_runs').fetchone())
+        scope = _digest([self.config.destination_id, self.config.source['type'], self.config.source['serial']])
+        self.store.set_meta('notification_progress_card:' + scope, {
+            'batch_id': run['id'], 'message_id': 'om_existing_progress', 'recipient': 'fixture-recipient'})
+        with self.store.db:
+            freeze_completion(self.store.db, service.config, run, self.store.files(), create=True)
+            self.store.db.execute("UPDATE notification_events SET attempts=2,next_attempt_at=?", (time.time() + 60,))
+            self.store.db.execute("DELETE FROM meta WHERE key LIKE 'notification_progress_card:%'")
+            self.store.db.execute("""INSERT INTO notification_events
+                (id,kind,scope,batch_id,payload,state,created_at) VALUES
+                ('old-progress','progress',?,?,'{}','pending',?)""", (scope, run['id'], time.time()))
+        expected = dict(self.store.db.execute("SELECT * FROM notification_events WHERE detached=1").fetchone())
+        self.store.set_meta('settled_runs', [run['id']])
+        self.store.close()
+        self.store = Store(self.root / 'data')
+        self.assertEqual('cancelled', self.store.db.execute("SELECT state FROM notification_events WHERE id='old-progress'").fetchone()[0])
+        self.assertEqual(2, self.service().settle())
+        self.assertEqual([expected], [dict(r) for r in self.store.db.execute('SELECT * FROM notification_events')])
+
+    def test_finished_previous_camera_retires_after_switch_without_touching_pending_work(self):
+        self.service().cycle()
+        previous = self.store.files()
+        for row in previous:
+            self.store.update(row['id'], cleanup='blocked', source_cleanup_error='old failure')
+        values = copy.deepcopy(self.config.values)
+        values['source']['serial'] = 'C0000000000999'
+        self.config = Config.from_values(values)
+        asset = replace(footage(3), serial=self.config.source['serial'])
+        self.store.batch(self.config.destination_id, [asset])
+        pending = self.store.files()[-1]
+        self.assertEqual(2, self.service().settle())
+        self.assertEqual([pending], self.store.files())
+        self.assertEqual(2, len(self.index()))
+
+    def test_uncertain_delete_is_not_retired_when_deletion_disabled(self):
+        self.service().cycle()
+        self.store.update(self.store.files()[0]['id'], cleanup='deleting')
+        self.assertEqual(0, self.service().settle())
         self.assertEqual(2, len(self.store.files()))
-        self.assertEqual(2, len(self.source.downloads))
+
+    def test_idle_status_and_progress_pointer_survive_round_retirement(self):
+        from media_importer.config import preferences
+        from media_importer.settings import Settings
+        from media_importer.status import snapshot
+        self.service().cycle()
+        self.service().settle()
+        path = self.root / 'settings.json'
+        path.write_text(json.dumps(preferences(self.config.values)))
+        view = snapshot(self.store.directory, Settings(path))
+        self.assertIsNone(view['batch']['id'])
+        self.assertEqual(0, view['batch']['total_files'])
+        self.assertFalse(view['files'])
+        settings = Mock()
+        settings.notification_credentials.return_value = CREDENTIALS
+        sender, updater = Mock(return_value='om_idle_progress'), Mock()
+        worker = NotificationWorker(self.store.directory, settings, threading.Event(), sender=sender, updater=updater)
+        scope = _digest([self.config.destination_id, self.config.source['type'], self.config.source['serial']])
+        with _database(self.store.directory) as db:
+            worker._send_progress(db, scope, view, self.config.values['notifications'], time.time())
+            worker._send_progress(db, scope, view, self.config.values['notifications'], time.time() + 301)
+        sender.assert_called_once()
+        updater.assert_called_once()
+        self.assertEqual(1, self.store.db.execute("SELECT count(*) FROM meta WHERE key LIKE 'notification_progress_card:%'").fetchone()[0])
 
     def test_delete_enabled_later_checks_archive_then_cleans_without_reupload(self):
         self.service().cycle()
@@ -73,9 +181,8 @@ class LifecycleTests(unittest.TestCase):
         self.service().cycle()
         self.assertEqual(2, len(self.source.deletes))
         self.assertEqual(2, len(self.remote.uploads))
-        self.assertEqual(0, self.service().settle())
+        self.assertEqual(2, self.service().settle())
         self.assertEqual([], self.index())
-        self.assertTrue(all(r['cleanup'] == 'deleted' for r in self.store.files()))
 
     def test_changed_archive_identity_prevents_deleting_retained_original(self):
         self.service().cycle()
@@ -106,7 +213,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse(service.config.backup['delete_source_after_import'])
         service.cycle()
         self.assertEqual(2, len(self.source.deletes))
-        self.assertEqual(0, service.settle())
+        self.assertEqual(2, service.settle())
         self.assertEqual(2, len(self.remote.uploads))
         self.assertEqual([], self.index())
 
@@ -158,7 +265,7 @@ class LifecycleTests(unittest.TestCase):
         sender = Mock(side_effect=DestinationError('fixture delivery failure'))
         worker = NotificationWorker(self.store.directory, settings, threading.Event(), sender=sender)
         self.assertEqual(2, service.settle())
-        self.assertEqual(2, len(self.store.files()))
+        self.assertEqual([], self.store.files())
         saved = self.store.db.execute("SELECT * FROM notification_events WHERE kind='completed'").fetchone()
         self.assertEqual(1, saved['detached'])
         self.assertNotIn('100GOPRO', saved['payload'])

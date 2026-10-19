@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import tempfile
 import threading
@@ -115,8 +116,23 @@ class CacheStatusTests(unittest.TestCase):
         self.assertEqual(original, self.config_path.read_bytes())
         self.assertEqual([], self.source.downloads + self.source.deletes + self.remote.uploads)
 
+    def test_new_import_with_streaming_hash_passes_maintenance_verification_offline(self):
+        active = Service(configuration(), self.store, self.source, self.remote, threading.Event())
+        active.import_asset(self.store.get(self.row['id']))
+        before = self.store.get(self.row['id'])
+        expected = json.loads(before['cache_identity'])
+        self.assertEqual(hashlib.sha256(self.path.read_bytes()).hexdigest(), expected['content_sha256'])
+        self.source.online = False
+        with patch.object(self.source, 'snapshot', side_effect=AssertionError('healthy cache needs no source read')):
+            self.assertEqual({'verified': [footage().path], 'pending': []}, self.service.verify_caches())
+        self.assertEqual(expected, json.loads(self.store.get(self.row['id'])['cache_identity']))
+        self.assertEqual(1, self.view()['batch']['imported_files'])
+        self.assertEqual([], self.remote.uploads + self.source.deletes)
+
     def test_v2_timestamp_drift_requires_original_identity_and_matching_samples(self):
-        self.cache()
+        evidence = self.cache()
+        evidence['content_sha256'] = hashlib.sha256(self.path.read_bytes()).hexdigest()
+        self.store.update(self.row['id'], cache_identity=json.dumps(evidence))
         previous = self.path.stat()
         os.utime(self.path, ns=(previous.st_atime_ns, previous.st_mtime_ns + 15_000_000_000))
         self.assertFalse(self.service.cache_valid(self.store.get(self.row['id'])))
@@ -133,6 +149,7 @@ class CacheStatusTests(unittest.TestCase):
         self.assertEqual([footage().path], result['verified'])
         self.assertFalse(result['pending'])
         self.assertTrue(self.service.cache_valid(self.store.get(self.row['id'])))
+        self.assertEqual(evidence['content_sha256'], json.loads(self.store.get(self.row['id'])['cache_identity'])['content_sha256'])
         self.assertFalse(self.source.downloads + self.source.deletes + self.remote.uploads)
 
     def test_v2_changed_content_is_never_repaired_as_timestamp_drift(self):

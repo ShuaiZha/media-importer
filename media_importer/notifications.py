@@ -86,16 +86,19 @@ def freeze_completion(db, config, run, rows, *, create):
     """Detach a bounded result from file details in the retirement transaction."""
     from .paths import archive_location
     from pathlib import PurePosixPath
-    scope = _digest([config.destination_id, config.source['type'], config.source['serial']])
+    scope = _digest([config.destination_id, run['source_type'], run['serial']])
     key = 'completed:' + scope + ':' + run['id']
     saved = db.execute('SELECT * FROM notification_events WHERE id=?', (key,)).fetchone()
+    if saved and saved['detached']:
+        return  # Preserve an already-frozen result, retries and progress-message references.
     enabled = config.values['notifications']['enabled']
     if not enabled or saved and saved['state'] in ('suppressed', 'cancelled') or not saved and not create:
         return
     if not create and saved and saved['state'] == 'sent':
         return
     from .source_connection import deletion_enabled
-    view = {'policy': {'delete_source': deletion_enabled(config, _meta(db, 'source_selection', {}))},
+    active_source = (run['source_type'], run['serial']) == (config.source['type'], config.source['serial'])
+    view = {'policy': {'delete_source': active_source and deletion_enabled(config, _meta(db, 'source_selection', {}))},
             'files': [{**r, 'cache_state': 'missing'} for r in rows]}
     result = NotificationWorker._completion_result(rows, view)
     text = NotificationWorker._completion(rows, view)
@@ -227,8 +230,7 @@ class NotificationWorker:
     def _enqueue(self, db, key, kind, scope, title, text, stamp, batch_id=None, state="pending"):
         if batch_id:
             run = db.execute('SELECT 1 FROM transfer_runs WHERE id=?', (batch_id,)).fetchone()
-            settled = json.loads((db.execute("SELECT value FROM meta WHERE key='settled_runs'").fetchone() or ('[]',))[0])
-            if not run or batch_id in settled:
+            if not run:
                 return  # A stale observer must not resurrect a closed round.
         db.execute("""INSERT OR IGNORE INTO notification_events
             (id,kind,scope,batch_id,payload,state,created_at) VALUES (?,?,?,?,?,?,?)""",
@@ -443,8 +445,7 @@ class NotificationWorker:
     def _save_progress(db, key, pointer, batch_id):
         """A send may finish after the round retired; attach its message to the result."""
         db.execute('BEGIN IMMEDIATE')
-        settled = json.loads((db.execute("SELECT value FROM meta WHERE key='settled_runs'").fetchone() or ('[]',))[0])
-        if not batch_id or (db.execute('SELECT 1 FROM transfer_runs WHERE id=?', (batch_id,)).fetchone() and batch_id not in settled):
+        if not batch_id or db.execute('SELECT 1 FROM transfer_runs WHERE id=?', (batch_id,)).fetchone():
             _put_meta(db, key, pointer)
             return
         if not pointer.get('message_id'):

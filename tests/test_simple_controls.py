@@ -35,9 +35,8 @@ class SimpleControlsTests(unittest.TestCase):
         payloads = [
             {'form': 'transfer'}, {'operation': 'verify_cache'},
             {'changes': {'limits': {'min_free_disk_gib': 0}}},
-            {'changes': {'notifications': {'enabled': False}}},
-            {'changes': {'backup': {'media_scope': 'photo'}}},
-            {'changes': {'backup': {'archive_previews': True}}},
+            {'changes': {'notifications': {'progress_interval_seconds': 60}}},
+            {'changes': {'backup': {'media_scope': 'other'}}},
             {'changes': {'backup': {'source_transport': 'wifi'}}},
             {'changes': {'backup': {'stop_after_current': True}}},
             {'changes': {'backup': {'enabled': 'true'}}}]
@@ -50,7 +49,7 @@ class SimpleControlsTests(unittest.TestCase):
     def test_old_queued_or_applied_control_never_executes_after_upgrade(self):
         before = self.path.read_bytes()
         for state in ('queued', 'applied', 'waiting'):
-            self.bot.enqueue('old-'+state, {'changes': {'backup': {'archive_previews': True}}, 'revision': self.settings.read()['revision']})
+            self.bot.enqueue('old-'+state, {'changes': {'limits': {'max_cache_gib': 1}}, 'revision': self.settings.read()['revision']})
             with self.bot.db() as db:
                 db.execute('UPDATE bot_jobs SET state=?,response=? WHERE id=?', (state, '{}', 'old-'+state))
             self.assertTrue(self.bot.process_one())
@@ -72,6 +71,42 @@ class SimpleControlsTests(unittest.TestCase):
             self.assertEqual('photo',current['backup']['media_scope'])
             self.assertTrue(current['backup']['archive_previews'])
         with self.assertRaises(ConfigError):self.settings.update_preferences({'limits': {'max_cache_gib': float('nan')}})
+
+    def test_daily_scope_preview_and_notification_switches_save_only_themselves(self):
+        before = self.settings.read()['config']
+        self.bot.receive_message(self.message('素材范围', event_id='scope'))
+        with patch('media_importer.bot.time.monotonic', side_effect=[1, 6]):
+            self.assertTrue(self.bot.process_one())
+        card = self.sender.call_args.args[1]
+        labels = [button['text']['content'] for element in card['elements'] if element['tag'] == 'action' for button in element['actions']]
+        self.assertEqual(['全部素材', '仅视频', '仅照片'], labels)
+        video = card['elements'][-1]['actions'][1]['value']
+        self.bot.receive_card(self.callback(video, event_id='scope-video'))
+        with patch('media_importer.bot.time.monotonic', side_effect=[1, 6]):
+            self.assertTrue(self.bot.process_one())
+        self.assertEqual('video', self.settings.read()['config']['backup']['media_scope'])
+        self.settings.update_preferences({'backup': {'archive_previews': False}})
+        previews = self.bot.panel('previews')
+        self.assertEqual(['归档预览文件'], [button['text']['content'] for element in previews['elements'] if element['tag'] == 'action' for button in element['actions']])
+        self.assertFalse(self.settings.read()['config']['backup']['archive_previews'])
+        confirmation = self.bot.panel('confirm_previews')
+        self.assertIn('正在进行的这一轮保持原设置', json.dumps(confirmation, ensure_ascii=False))
+        enable = confirmation['elements'][-1]['actions'][-1]
+        self.bot.receive_card(self.callback(enable['value'], event_id='previews-on'))
+        with patch('media_importer.bot.time.monotonic', side_effect=[1, 6]):
+            self.assertTrue(self.bot.process_one())
+        self.assertTrue(self.settings.read()['config']['backup']['archive_previews'])
+        notes = self.bot.panel('notifications')
+        toggle = notes['elements'][-1]['actions'][0]
+        self.assertEqual('开启自动通知', toggle['text']['content'])
+        self.bot.receive_card(self.callback(toggle['value'], event_id='notes-on'))
+        with patch('media_importer.bot.time.monotonic', side_effect=[1, 6]):
+            self.assertTrue(self.bot.process_one())
+        current = self.settings.read()['config']
+        self.assertTrue(current['notifications']['enabled'])
+        self.assertEqual(before['limits'], current['limits'])
+        self.assertFalse(current['backup']['enabled'])
+        self.assertFalse(current['backup']['delete_source_after_import'])
 
     def test_original_delete_toggle_requires_confirmation_then_can_disable(self):
         self.bot.panel('cleanup')

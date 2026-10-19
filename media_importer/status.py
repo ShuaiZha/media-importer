@@ -178,7 +178,9 @@ def snapshot(directory, settings):
         transferred = min(size, max(0, progress.get('current_bytes', 0))) if uploading else 0
         received = min(size, max(0, progress.get('current_bytes', 0))) if downloading else 0
         evidence = {'state': 'unavailable', 'valid': False, 'bytes': 0, 'reason': cache_health.get('reason')}
-        if cache_health['available']:
+        if row['state'] == 'uploaded' and row.get('cache_cleared_at') and not row.get('cache_cleanup_error'):
+            evidence = {'state': 'missing', 'valid': False, 'bytes': 0, 'reason': '完整缓存文件不在原位置'}
+        elif cache_health['available']:
             evidence = observe_cached_file(cache / (row['id'] + '.bin'), json.loads(row['cache_identity'] or 'null'),
                                            row['asset_id'], meta.get('cache_identity'))
         cached = evidence['valid']

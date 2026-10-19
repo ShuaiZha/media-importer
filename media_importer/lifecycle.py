@@ -1,4 +1,4 @@
-"""Close a finished round in place. Uploaded file rows stay and are the dedup record."""
+"""Retire settled rounds; keep only live work and source-presence deduplication."""
 import json
 import time
 
@@ -12,6 +12,21 @@ def initialize(db):
         serial TEXT NOT NULL, state TEXT NOT NULL, role TEXT NOT NULL,
         size INTEGER NOT NULL, remote_path TEXT, remote_identity TEXT,
         PRIMARY KEY(destination,asset_id))''')
+    # A short-lived version kept completed rows and a growing settled_runs list.
+    # Convert that marker once, without changing file tasks or replaying notices.
+    # Actual retirement still requires settle() to prove all cleanup is finished.
+    if db.execute("SELECT 1 FROM meta WHERE key='settled_runs'").fetchone():
+        db.execute('BEGIN IMMEDIATE')
+        saved = db.execute("SELECT value FROM meta WHERE key='settled_runs'").fetchone()
+        if saved:
+            keys = [(key,) for key in json.loads(saved[0])]
+            db.executemany('UPDATE transfer_runs SET historical=1 WHERE id=?',
+                           keys)
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='notification_events'").fetchone():
+                db.executemany("""UPDATE notification_events SET state='cancelled'
+                    WHERE batch_id=? AND detached=0 AND state='pending'
+                    AND kind IN ('progress','imported','completed')""", keys)
+            db.execute("DELETE FROM meta WHERE key='settled_runs'")
 
 
 def indexed(store, config, assets):
@@ -78,7 +93,6 @@ def settle(service):
         store.db.execute('BEGIN IMMEDIATE')
         notification_schema(store.db)
         rows = store.files(destination)
-        rows = [r for r in rows if (lambda a: a.serial == config.source['serial'] and a.source_type == config.source['type'])(store.asset(r))]
         initialized = store.get_meta('once_clear_initialized', False)
         groups = store.groups(destination)
         runs = [dict(r) for r in store.db.execute('SELECT * FROM transfer_runs WHERE destination=?', (destination,))]
@@ -91,35 +105,47 @@ def settle(service):
                 return False
             if row['state'] == 'uploaded' and not all(row[k] for k in ('remote_path', 'remote_identity', 'cache_cleared_at')):
                 return False
-            if row['cache_cleanup_error']:
+            if row['cache_cleanup_error'] or row['cleanup'] == 'deleting':
                 return False
-            if delete_source and row['id'] in cleanup_selected and (
+            asset = store.asset(row)
+            active_source = (asset.source_type, asset.serial) == (config.source['type'], config.source['serial'])
+            if delete_source and active_source and row['id'] in cleanup_selected and (
                     row['cleanup'] not in ('deleted', 'absent') or row['source_cleanup_error']):
                 return False
             cache = store.cached_path(row)
             # A disconnected cache is checked above; unknown complete files are never discarded.
             return not any(p.exists() or p.is_symlink() for p in (
                 cache, cache.with_suffix('.download'), store.cache / '.receipts' / (row['id'] + '.json')))
-        ready = {r['id'] for group in _components(rows, relations) if all(done(r) for r in group) for r in group}
-        settled = set(store.get_meta('settled_runs', []))
-        closed_runs = [r for r in runs if r['id'] not in settled and members[r['id']] and members[r['id']] <= ready]
-        retired = [r for r in rows if r['id'] in {file_id for run in closed_runs for file_id in members[run['id']]}]
+        retired = [r for group in _components(rows, relations) if all(done(r) for r in group) for r in group]
         ids = {r['id'] for r in retired}
-        if closed_runs:
-            for run in closed_runs:
+        if ids:
+            for run in runs:
                 keys = members[run['id']]
-                freeze_completion(store.db, config, run, [r for r in retired if r['id'] in keys],
-                                  create=bool(initialized and not run['historical']))
-            store.db.execute("INSERT OR REPLACE INTO meta VALUES ('settled_runs',?)",
-                             (json.dumps(sorted(settled | {r['id'] for r in closed_runs})),))
+                if keys and keys <= ids:
+                    freeze_completion(store.db, config, run, [r for r in retired if r['id'] in keys],
+                                      create=bool(initialized and not run['historical']))
             for row in retired:
-                if row['state'] != 'uploaded':
-                    continue
                 asset = store.asset(row)
-                store.db.execute("INSERT OR REPLACE INTO meta VALUES ('destination_anchor',?)",
-                    (json.dumps({'destination': destination, 'path': row['remote_path'],
-                                 'identity': json.loads(row['remote_identity']), 'size': asset.size}),))
-            closed = {r['id'] for r in closed_runs}
+                if row['cleanup'] not in ('deleted', 'absent'):
+                    store.db.execute('''INSERT OR REPLACE INTO source_index VALUES (?,?,?,?,?,?,?,?,?)''',
+                        (destination, asset.identity, asset.source_type, asset.serial, row['state'], row['role'],
+                         asset.size, row['remote_path'], row['remote_identity']))
+                else:
+                    store.db.execute('DELETE FROM source_index WHERE destination=? AND asset_id=?', (destination, asset.identity))
+                if row['state'] == 'uploaded':
+                    # One bounded proof preserves destination identity after history is gone.
+                    store.db.execute("INSERT OR REPLACE INTO meta VALUES ('destination_anchor',?)",
+                        (json.dumps({'destination': destination, 'path': row['remote_path'],
+                                     'identity': json.loads(row['remote_identity']), 'size': asset.size}),))
+            for table, column in (('cache_receipts', 'file_id'), ('batch_files', 'file_id'),
+                                  ('transfer_run_files', 'file_id'), ('temporary_cleanup', 'file_id'), ('files', 'id')):
+                store.db.executemany(f'DELETE FROM {table} WHERE {column}=?', ((key,) for key in ids))
+            store.db.executemany('DELETE FROM source_groups WHERE id=?',
+                ((g['id'],) for g in groups if set(json.loads(g['members'])) <= ids))
+            store.db.execute('DELETE FROM batches WHERE id NOT IN (SELECT batch_id FROM batch_files)')
+            store.db.execute('DELETE FROM transfer_runs WHERE id NOT IN (SELECT run_id FROM transfer_run_files)')
+            closed = {r['id'] for r in runs if members[r['id']] and members[r['id']] <= ids}
+            store.db.execute("DELETE FROM notification_events WHERE detached=0 AND batch_id IS NOT NULL AND batch_id NOT IN (SELECT id FROM transfer_runs)")
             for entry in store.db.execute("SELECT key,value FROM meta WHERE key LIKE 'notification_progress_card:%' OR key LIKE 'event_message:completed:%'").fetchall():
                 value = json.loads(entry['value'])
                 if value.get('batch_id') in closed or any(entry['key'].endswith(':' + key) for key in closed):
@@ -134,8 +160,7 @@ def settle(service):
             if notice:
                 store.db.execute("UPDATE meta SET value=? WHERE key='notification_state'", (json.dumps(notice),))
             state = store.get_meta('status', {})
-            batch_members = {r[0] for r in store.db.execute('SELECT file_id FROM batch_files WHERE batch_id=?', (state.get('batch_id'),))}
-            if batch_members and batch_members <= ids:
+            if not store.db.execute('SELECT 1 FROM batches WHERE id=?', (state.get('batch_id'),)).fetchone():
                 state.update(batch_id=None, phase='idle', message='本轮已收尾，等待新素材', current_file=None, current_file_id=None,
                              current_bytes=0, current_total_bytes=0, speed_bytes_per_second=0, eta_seconds=None)
                 state['inventory'] = {**state.get('inventory', {}), 'batch_id': None, 'new_files': 0}

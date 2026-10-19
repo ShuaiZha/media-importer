@@ -137,6 +137,47 @@ class ArchitectureTests(unittest.TestCase):
             changed.verify_destination()
             stat.assert_not_called()  # Connection already proved; don't rescan remotely.
 
+    def _extra_archive(self, row, inode):
+        asset = json.loads(row['asset'])
+        self.remote.objects['other.MP4'] = b'y' * asset['size']
+        self.remote.identities['other.MP4'] = {'inode': inode}
+        with self.store.db:
+            self.store.db.execute("""INSERT INTO files
+                (id,destination,asset_id,asset,state,remote_path,remote_identity,created_at,updated_at,cache_cleared_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                ('other-file', row['destination'], 'other-asset', row['asset'], 'uploaded', 'other.MP4',
+                 json.dumps({'inode': 4242}), row['created_at'], row['updated_at'], row['cache_cleared_at']))
+
+    def test_matched_anchor_does_not_stat_historical_files(self):
+        row = self.archived()
+        self.service().settle()
+        self._extra_archive(row, 4242)
+        anchor = self.store.get_meta('destination_anchor')
+        with patch.object(self.remote, 'stat', wraps=self.remote.stat) as stat:
+            self.service(self.changed()).verify_destination()
+        self.assertEqual([anchor['path']], [call.args[0] for call in stat.call_args_list])
+
+    def test_missing_anchor_still_checks_each_archived_file(self):
+        row = self.archived()
+        self.service().settle()
+        self._extra_archive(row, 4242)
+        with self.store.db:
+            self.store.db.execute("DELETE FROM meta WHERE key='destination_anchor'")
+        with patch.object(self.remote, 'stat', wraps=self.remote.stat) as stat:
+            self.service(self.changed()).verify_destination()
+        self.assertEqual(['other.MP4'], [call.args[0] for call in stat.call_args_list])
+
+    def test_unfinished_remote_temporary_still_checks_each_archived_file(self):
+        row = self.archived()
+        self.service().settle()
+        self._extra_archive(row, 999)
+        self.remote.objects['.partial'] = b'x'
+        self.remote.identities['.partial'] = {'inode': 7}
+        self.store.queue_temporary(row, 'remote', '.partial', {'inode': 7})
+        with self.assertRaises(DestinationError) as error:
+            self.service(self.changed()).verify_destination()
+        self.assertEqual('destination_identity', error.exception.code)
+
     def test_same_name_and_size_on_other_server_cannot_claim_archive(self):
         row = self.archived()
         other = FakeDestination()

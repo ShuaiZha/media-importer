@@ -231,6 +231,47 @@ class ConnectionTests(unittest.TestCase):
         with self.assertRaises(ConfigError): decide(self.store, self.settings, state['id'], True)
         self.assertEqual(before, (self.path.read_bytes(), self.store.files()))
 
+    def test_switch_allows_another_camera_when_the_previous_round_is_finished(self):
+        self.store.batch(self.config().destination_id, [footage()])
+        row = self.store.files()[0]
+        self.store.update(row['id'], state='uploaded', remote_path='HERO9-C0000000000123/GH010001.MP4',
+                          remote_identity=json.dumps({'inode': 1}), cache_cleared_at=now())
+        state = observe(self.store, device(serial='C0000000000999'))
+        self.assertTrue(decide(self.store, self.settings, state['id'], True))
+        self.assertEqual('C0000000000999', self.config().source['serial'])
+
+    def test_switch_stays_blocked_while_the_previous_camera_still_owes_deletion(self):
+        self.settings.update_preferences({'backup': {'delete_source_after_import': True}})
+        self.store.set_meta('source_selection', device())
+        self.store.batch(self.config().destination_id, [footage()])
+        row = self.store.files()[0]
+        self.store.update(row['id'], state='uploaded', remote_path='HERO9-C0000000000123/GH010001.MP4',
+                          remote_identity=json.dumps({'inode': 1}), cache_cleared_at=now())
+        state = observe(self.store, device(serial='C0000000000999'))
+        with self.assertRaises(ConfigError):
+            decide(self.store, self.settings, state['id'], True)
+
+    def test_switch_after_deletion_disabled_ignores_old_failure_but_not_uncertain_delete(self):
+        self.settings.update_preferences({'backup': {'delete_source_after_import': True}})
+        self.store.set_meta('source_selection', device())
+        self.store.batch(self.config().destination_id, [footage()])
+        row = self.store.files()[0]
+        self.store.update(row['id'], state='uploaded', remote_path='camera/GH010001.MP4',
+                          remote_identity=json.dumps({'inode': 1}), cache_cleared_at=now(),
+                          cleanup='blocked', source_cleanup_error='fixture delete failure')
+        state = observe(self.store, device(serial='C0000000000999'))
+        with self.assertRaises(ConfigError):
+            decide(self.store, self.settings, state['id'], True)
+        self.settings.update_preferences({'backup': {'delete_source_after_import': False}})
+        self.store.update(row['id'], cleanup='deleting')
+        with self.assertRaises(ConfigError):
+            decide(self.store, self.settings, state['id'], True)
+        self.store.update(row['id'], cleanup='blocked')
+        before = self.store.get(row['id'])
+        self.assertTrue(decide(self.store, self.settings, state['id'], True))
+        self.assertEqual(before, self.store.get(row['id']))
+        self.assertEqual('C0000000000999', self.config().source['serial'])
+
     def test_confirmed_different_camera_is_selected_without_rewriting_env(self):
         self.confirmed(device(serial='C0000000000999'))
         self.assertEqual('C0000000000999', self.config().source['serial'])
@@ -315,8 +356,8 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual(0, view['cleanup']['source_pending'])
         self.assertEqual(1, service.settle())
         self.assertTrue(self.config().backup['delete_source_after_import'])
-        self.assertEqual('uploaded', self.store.files()[0]['state'])
-        self.assertEqual([], self.store.db.execute('SELECT * FROM source_index').fetchall())
+        self.assertEqual([], self.store.files())
+        self.assertEqual(1, len(self.store.db.execute('SELECT * FROM source_index').fetchall()))
 
     def test_pending_connection_never_claims_old_inventory_complete(self):
         self.confirmed()

@@ -79,7 +79,8 @@ class Bot:
         """Retired cards and queued requests cannot modify file-only settings."""
         if payload.get('form') or payload.get('operation'):
             return False
-        if payload.get('panel', 'status') not in ('status', 'cleanup', 'confirm_delete', 'source_confirmation', 'source_offline'):
+        if payload.get('panel', 'status') not in ('status', 'cleanup', 'confirm_delete', 'source_confirmation', 'source_offline',
+                                                  'notifications', 'previews', 'confirm_previews', 'scope'):
             return False
         if 'source_decision' in payload:
             return (type(payload['source_decision']) is bool and
@@ -88,12 +89,17 @@ class Bot:
         changes = payload.get('changes', payload.get('changes_applied'))
         if changes is None:
             return True
-        if not isinstance(changes, dict) or set(changes) != {'backup'}:
+        if not isinstance(changes, dict) or len(changes) != 1:
             return False
-        backup = changes['backup']
-        return (isinstance(backup, dict) and len(backup) == 1
-                and set(backup) <= {'enabled', 'delete_source_after_import'}
-                and all(type(value) is bool for value in backup.values()))
+        group, updates = next(iter(changes.items()))
+        if not isinstance(updates, dict) or len(updates) != 1:
+            return False
+        key, value = next(iter(updates.items()))
+        if group == 'backup' and key in ('enabled', 'delete_source_after_import', 'archive_previews'):
+            return type(value) is bool
+        if group == 'backup' and key == 'media_scope':
+            return value in ('all', 'video', 'photo')
+        return group == 'notifications' and key == 'enabled' and type(value) is bool
 
     def panel(self, page="status", notice=None):
         item = self.settings.read()
@@ -117,6 +123,40 @@ class Bot:
                 self.buttons(self.button('取消', {'panel': 'cleanup'}), self.button('确认启用',
                     {'changes': {'backup': {'delete_source_after_import': True}}, 'page': 'cleanup'}, rev, danger=True))
             ], 'orange', shared=True)
+        if page == 'notifications':
+            enabled = values['notifications']['enabled']
+            return card('自动通知', [
+                markdown('**自动通知：' + ('已开启' if enabled else '已关闭') + '**'),
+                paragraph('开启后发送进度、完成和异常。确认相机、查看状态和下面的设置不依赖这个开关。'),
+                self.buttons(self.button('关闭自动通知' if enabled else '开启自动通知',
+                    {'changes': {'notifications': {'enabled': not enabled}}, 'page': 'notifications'}, rev))
+            ], 'blue', shared=True)
+        if page == 'confirm_previews':
+            return card('归档预览文件', [
+                paragraph('开启后，已确认关联的 LRV、THM 将随原片归档。'),
+                note('正在进行的这一轮保持原设置。之后新扫描到的素材才按新设置处理。'),
+                self.buttons(self.button('取消', {'panel': 'previews'}), self.button('确认归档预览',
+                    {'changes': {'backup': {'archive_previews': True}}, 'page': 'previews'}, rev, danger=True))
+            ], 'orange', shared=True)
+        if page == 'previews':
+            enabled = values['backup']['archive_previews']
+            action = ({'changes': {'backup': {'archive_previews': False}}, 'page': 'previews'} if enabled
+                      else {'panel': 'confirm_previews'})
+            return card('预览文件', [
+                markdown('**归档预览：' + ('已开启' if enabled else '已关闭') + '**'),
+                paragraph('已开启时，关联的 LRV、THM 随原片归档。' if enabled else '目前只归档原片，跳过能确认关联的预览文件。'),
+                note('正在进行的这一轮保持原设置。'),
+                self.buttons(self.button('改为不归档预览' if enabled else '归档预览文件', action, rev))
+            ], 'blue', shared=True)
+        if page == 'scope':
+            from .media import MEDIA_SCOPES
+            current = values['backup']['media_scope']
+            return card('素材范围', [
+                markdown('**当前范围：' + MEDIA_SCOPES[current] + '**'),
+                paragraph('之后的扫描只导入所选类别。已经开始传输的文件会继续完成。'),
+                self.buttons(*(self.button(label, {'changes': {'backup': {'media_scope': key}}, 'page': 'scope'}, rev)
+                               for key, label in MEDIA_SCOPES.items()))
+            ], 'blue', shared=True)
         if page == 'cleanup':
             enabled = values['backup']['delete_source_after_import']
             from .source_connection import read, deletion_enabled
@@ -201,6 +241,8 @@ class Bot:
                     "当前任务": {"panel": "status"}, "归档结果": {"panel": "status"},
                     "原片处理": {"panel": "cleanup"}, "删除原片": {"panel": "cleanup"}, "删除原片开关": {"panel": "cleanup"},
                     "清理设置": {"panel": "cleanup"},
+                    "自动通知": {"panel": "notifications"}, "通知开关": {"panel": "notifications"},
+                    "预览文件": {"panel": "previews"}, "素材范围": {"panel": "scope"},
                     "开启同步": {"changes": {"backup": {"enabled": True}}},
                     "停止同步": {"changes": {"backup": {"enabled": False}}},
                     "关闭同步": {"changes": {"backup": {"enabled": False}}}}

@@ -48,6 +48,19 @@ def settings_result(changes, applied, stopping):
         if stopping:
             return {'title': '正在停止同步', 'detail': '正在结束当前操作，任务与完整缓存保留。', 'level': 'warning'}
         return {'title': '同步已停止', 'detail': '导入、上传及原片删除均已停止，任务与完整缓存保留。', 'level': 'success'}
+    if 'archive_previews' in backup:
+        enabled = backup['archive_previews']
+        return {'title': '预览文件将随原片归档' if enabled else '预览文件不再归档',
+                'detail': '正在进行的这一轮保持原设置。之后新扫描到的素材才按新设置处理。', 'level': 'success'}
+    if 'media_scope' in backup:
+        from .media import MEDIA_SCOPES
+        return {'title': '素材范围已改为' + MEDIA_SCOPES[backup['media_scope']],
+                'detail': '之后的扫描只导入所选类别。已经开始传输的文件会继续完成。', 'level': 'success'}
+    notes = changes.get('notifications', {})
+    if 'enabled' in notes:
+        return {'title': '自动通知已开启' if notes['enabled'] else '自动通知已关闭',
+                'detail': '进度、完成和异常会发到这个会话。' if notes['enabled'] else '确认相机、查看状态和设置操作仍会回复。',
+                'level': 'success'}
     enabled = backup.get('delete_source_after_import')
     return {'title': '原片删除已启用' if enabled else '原片删除已停用',
             'detail': '整组素材完成本地导入与核验后自动删除原片，不等待远端归档。' if enabled else '后续导入保留相机原片。',

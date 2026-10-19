@@ -93,8 +93,8 @@ imports/
 | --- | --- | --- |
 | `backup.enabled` | `false` | 同步总开关，通常通过飞书操作 |
 | `backup.delete_source_after_import` | `false` | 整组完整导入后删除相机原片；建议通过飞书确认后开启 |
-| `backup.media_scope` | `"all"` | `all` 全部、`video` 视频、`photo` 照片及 RAW |
-| `backup.archive_previews` | `false` | 是否归档能确认关联的 LRV、THM 预览文件 |
+| `backup.media_scope` | `"all"` | `all` 全部、`video` 视频、`photo` 照片及 RAW；可在飞书「素材范围」中修改 |
+| `backup.archive_previews` | `false` | 是否归档能确认关联的 LRV、THM 预览文件；可在飞书「预览文件」中修改 |
 | `backup.source_transport` | `"usb"` | 当前固定使用 USB |
 | `backup.stop_after_current` | `false` | 结束两路当前文件后停止，不开始新文件；通常保持默认 |
 | `backup.poll_seconds` | `10` | 轮询间隔，秒，至少 1 |
@@ -119,7 +119,7 @@ LRV 是低分辨率预览视频，THM 是缩略图。关闭预览归档只排除
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
-| `notifications.enabled` | `false` | 自动进度、完成和异常通知 |
+| `notifications.enabled` | `false` | 自动进度、完成和异常通知；可在飞书「自动通知」中修改 |
 | `notifications.connection_events` | `true` | 连接断开提醒 |
 | `notifications.progress_interval_seconds` | `300` | 进度卡更新间隔，整数秒，范围 60–86400 |
 | `notifications.keyword` | `""` | 可选消息前缀，最多 100 字符 |

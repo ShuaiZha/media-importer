@@ -140,6 +140,11 @@ def cache_evidence(path, asset_id, volume_id):
             "size": before["size"], "mtime_ns": before["mtime_ns"], "samples": digest.hexdigest()}
 
 
+def sampled_evidence(recorded):
+    """Fields verifiable by bounded reads; the streaming hash is checked on upload."""
+    return {key: value for key, value in recorded.items() if key != "content_sha256"}
+
+
 def inspect_cached_file(path, expected, asset_id, volume_id):
     """Shared by transfer, cleanup and status: one definition of a valid cache."""
     result = {"state": "unverified", "valid": False, "bytes": 0, "reason": "缓存缺少完整导入凭据"}
@@ -148,9 +153,7 @@ def inspect_cached_file(path, expected, asset_id, volume_id):
         result["bytes"] = actual["size"]
         if expected:
             if expected.get("version") == 2:
-                # content_sha256 is checked while uploading, not by another sample pass.
-                recorded = {key: value for key, value in expected.items() if key != "content_sha256"}
-                valid = cache_evidence(path, asset_id, volume_id) == recorded
+                valid = cache_evidence(path, asset_id, volume_id) == sampled_evidence(expected)
             else:
                 valid = actual == expected
             if valid:

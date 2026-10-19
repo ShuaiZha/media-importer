@@ -30,13 +30,14 @@ Media Importer 是轻量的素材导入与归档工具：从来源设备导入�
 - `main` 分支文档说明当前代码；使用旧版时，请查看对应 Git 标签下的文档。
 - 命令块注明 Shell；未注明平台的 `sh` 命令用于 macOS / Linux。Windows 使用 PowerShell 示例。
 - `storage.example.com`、`/path/to/...`、`/Volumes/MediaSSD/...` 和示例 ID 均需替换，不是真实连接信息。
-- MiB / GiB 按 1024 进制计算。“导入完成”表示本地副本完整，并已记下本次读取的 SHA-256。“归档完成”表示目的地正式文件已按大小和 SMB 身份核验并记录；新导入的文件还会核对该 SHA-256。程序不把归档文件从 SMB 读回来。
+- MiB / GiB 按 1024 进制计算。“导入完成”表示本地副本完整、导入依据已持久化。“归档完成”表示目的地正式文件已按大小和 SMB 身份核验并记录；提供了导入流 SHA-256 的文件还会在上传时核对该值。程序不把归档文件从 SMB 读回来。
 - 本仓库不包含运行配置、凭据、任务数据库、素材或本机备份。克隆代码不等于迁移实例。
 
 ## 版本说明
 
 所有发行版与安装附件见 [Releases](https://github.com/ShuaiZha/media-importer/releases)。仓库中保留的版本说明：
 
+- [v0.10.23：缓存核验修复与“一次一清”恢复（源码版本）](releases/v0.10.23.md)
 - [v0.10.22：设备适配边界与 Windows 卸载恢复](releases/v0.10.22.md)
 - [v0.10.21：原生 CLI 彻底卸载](releases/v0.10.21.md)
 - [v0.10.20：原生 CLI 部署](releases/v0.10.20.md)

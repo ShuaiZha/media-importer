@@ -259,6 +259,24 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual([],self.source.deletes);self.assertFalse(list(self.store.cache.glob('*.bin')))
         self.service().safe_cycle();self.assertEqual(2,len(self.destination.uploads))
 
+    def test_upload_engine_obeys_destination_contract_with_and_without_import_hash(self):
+        import inspect
+        from media_importer.contracts import ArchiveDestination
+        upload = self.destination.upload
+        supplied = []
+        def contract_upload(*args, **kwargs):
+            bound = inspect.signature(ArchiveDestination.upload).bind(self.destination, *args, **kwargs)
+            supplied.append(bound.arguments['content_sha256'])
+            return upload(*args, **kwargs)
+        self.destination.upload = contract_upload
+        # Existing cache evidence has no stream hash; the new source supplies one.
+        self.cached()
+        self.assertTrue(self.service().cycle()['complete'])
+        self.assertEqual(2, len(supplied))
+        self.assertIsNone(supplied[0])
+        self.assertEqual(__import__('hashlib').sha256(FakeSource.payload(footage(primary=False))).hexdigest(), supplied[1])
+        self.assertEqual(2, len(self.destination.publishes))
+
     def test_group_deleted_after_local_import_while_destination_offline(self):
         self.destination.online=False
         result=self.service(configuration(delete_source_after_import=True)).safe_cycle()

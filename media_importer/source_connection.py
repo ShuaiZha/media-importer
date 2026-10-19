@@ -122,6 +122,35 @@ def observe(store, device, stamp=None):
     return state
 
 
+def _other_camera_busy(store, config, device):
+    selection = {}
+    raw = store.db.execute("SELECT value FROM meta WHERE key='source_selection'").fetchone()
+    if raw:
+        selection = json.loads(raw[0])
+    delete_ready = bool(config['backup']['delete_source_after_import'] and
+                        selection.get('compatibility', {}).get('delete_verified'))
+    open_temps = {item['file_id'] for item in store.temporary_items()}
+    for row in store.files():
+        asset = store.asset(row)
+        if (asset.source_type, asset.serial) == (device['type'], device['serial_number']):
+            continue
+        owes_delete = (delete_ready and selection.get('type') == asset.source_type and
+                       selection.get('serial_number') == asset.serial)
+        if row['id'] in open_temps or _unfinished_row(row, owes_delete):
+            return True
+    return False
+
+
+def _unfinished_row(row, owes_delete):
+    if row['state'] not in ('uploaded', 'excluded'):
+        return True
+    if row['state'] == 'uploaded' and not all(row[key] for key in ('remote_path', 'remote_identity', 'cache_cleared_at')):
+        return True
+    if row.get('cache_cleanup_error') or row['cleanup'] == 'deleting':
+        return True
+    return bool(owes_delete and (row.get('source_cleanup_error') or row['cleanup'] not in ('deleted', 'absent')))
+
+
 def decide(store, settings, session_id, accept):
     """Only called by authenticated, deduplicated bot jobs; stale cards do nothing."""
     with store.db:
@@ -145,11 +174,9 @@ def decide(store, settings, session_id, accept):
             device = state['device']
             if not device['compatibility']['import_supported']:
                 raise ConfigError('此型号尚未适配，未开启备份')
-            # One active camera only. Do not strand another camera's unfinished work.
-            for row in store.files():
-                asset = store.asset(row)
-                if (asset.source_type, asset.serial) != (device['type'], device['serial_number']):
-                    raise ConfigError('另一台相机仍有传输或清理事项，请先完成原任务后再切换设备')
+            # One active camera only. Completed work awaiting retirement does not block a switch.
+            if _other_camera_busy(store, configured['config'], device):
+                raise ConfigError('另一台相机仍有传输或清理事项，请先完成原任务后再切换设备')
             # Save the switch first. A crash before committing approval remains gated.
             settings.set_enabled(True)
             state['state'] = 'approved'

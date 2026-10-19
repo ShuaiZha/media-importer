@@ -14,7 +14,7 @@ from .model import (BackupError, SourceError, SourceBlocked, CacheUnavailable, C
 from .store import Store, fsync_directory
 from .runtime import Reconfigure, SyncDisabled
 from .storage import (require_cache, file_identity, unlink_cache, cache_evidence,
-                      inspect_cached_file, sample_ranges)
+                      inspect_cached_file, sample_ranges, sampled_evidence)
 from .issues import describe
 from .contracts import MediaSource, ArchiveDestination
 from .media import MEDIA_SCOPES, select_groups, selected_file_ids
@@ -308,7 +308,8 @@ class Service:
                     raise CacheUnavailable("缺少完整导入凭据或大小不符，保留缓存待人工核验")
                 if expected.get("version") == 2:
                     actual = cache_evidence(path, row["asset_id"], volume)
-                    if actual == expected:
+                    recorded = sampled_evidence(expected)
+                    if actual == recorded:
                         if row['state'] in ('cached', 'staged', 'publishing', 'uploaded'):
                             self.checkpoint(row)
                         self.store.update(row['id'], error=None, error_stage=None, error_code=None, retry_at=0)
@@ -316,7 +317,7 @@ class Service:
                         continue
                     # Recover only timestamp drift, and only after a fresh
                     # identity and sample comparison against the original.
-                    if any(actual.get(key) != value for key, value in expected.items() if key != "mtime_ns"):
+                    if any(actual.get(key) != value for key, value in recorded.items() if key != "mtime_ns"):
                         raise CacheUnavailable("缓存与导入凭据不符，保留缓存待人工核验")
                     verify_source = True
                 else:
@@ -341,6 +342,8 @@ class Service:
                     if asset.identity not in {a.identity for a in self.source.snapshot()}:
                         raise SourceError("核验期间原片身份变化，保留缓存")
                 evidence = cache_evidence(path, row["asset_id"], volume)
+                if expected.get("content_sha256"):
+                    evidence["content_sha256"] = expected["content_sha256"]
                 if file_identity(path) != before:
                     raise CacheUnavailable("核验期间缓存变化，未更新凭据")
                 # Preserve task timestamps, archive paths and all other business fields.
@@ -804,14 +807,21 @@ class Service:
         archive_previews = self.store.preview_policy(self.config)
         from .lifecycle import indexed, restore_member
         seen = indexed(self.store, self.config, assets)
-        existing = {r['asset_id'] for r in self.rows()}
+        known_rows = {r['asset_id']: r for r in self.rows()}
+        delete_source = self.allowed('delete_source_after_import')
+        def outstanding(asset):
+            row = known_rows.get(asset.identity)
+            if row is None:
+                return asset.identity not in seen
+            if row['state'] not in ('uploaded', 'excluded'):
+                return True
+            return delete_source and row['cleanup'] not in ('deleted', 'absent')
         working_groups = []
         with self.store.db:
             for group in groups:
                 members = group['members']
-                needed = any(a.identity not in seen or a.identity in existing for a in members)
-                needed = needed or self.allowed('delete_source_after_import') and any(a.identity in seen for a in members)
-                if needed:
+                legacy = delete_source and any(a.identity in seen and a.identity not in known_rows for a in members)
+                if any(outstanding(a) for a in members) or legacy:
                     for asset in members:
                         if asset.identity in seen:
                             restore_member(self.store, self.destination_id, asset, seen[asset.identity])

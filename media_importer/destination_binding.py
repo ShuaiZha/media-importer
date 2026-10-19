@@ -49,13 +49,15 @@ def verify_connection(store, config, remote):
     connection = destination_identity(config.destination)
     if not binding or binding['connection'] == connection:
         return
-    # Check every known final file once per connection change, using metadata
-    # only. A filename/size match is never enough to adopt another server.
+    # Metadata only. A filename or size match is never enough to adopt another server.
+    # A matching archive anchor is enough, unless a remote temporary file is still unfinished.
     rows = store.db.execute("""SELECT remote_path,remote_identity,asset FROM files
         WHERE destination=? AND state='uploaded'""", (binding['id'],)).fetchall()
     anchor = store.get_meta('destination_anchor')
     if anchor and anchor.get('destination') != binding['id']:
         anchor = None
+    pending_cleanup = store.db.execute("""SELECT 1 FROM temporary_cleanup WHERE destination=?
+        AND kind='remote' AND state<>'done' LIMIT 1""", (binding['id'],)).fetchone()
     if anchor:
         item = remote.stat(anchor['path'])
         actual = item.get('identity') if item else None
@@ -63,10 +65,11 @@ def verify_connection(store, config, remote):
             actual = remote.file_identity(anchor['path'])
         if not (item and not item['is_directory'] and item['size'] == anchor['size'] and actual == anchor['identity']):
             raise DestinationError('新连接与已绑定存储身份不符，请检查共享目录；任务与缓存保留', code='destination_identity')
+        if not pending_cleanup:
+            _accept(store, binding, connection)
+            return
     remote_work = store.db.execute("""SELECT 1 FROM files WHERE destination=?
         AND (remote_path IS NOT NULL OR temp_path IS NOT NULL OR remote_identity IS NOT NULL) LIMIT 1""", (binding['id'],)).fetchone()
-    pending_cleanup = store.db.execute("""SELECT 1 FROM temporary_cleanup WHERE destination=?
-        AND kind='remote' AND state<>'done' LIMIT 1""", (binding['id'],)).fetchone()
     if not rows and not anchor and (remote_work or pending_cleanup):
         raise DestinationError('连接已变化，但没有可核验的归档；请恢复原连接。新目的地请使用独立数据目录',
                                code='destination_identity')
@@ -80,6 +83,10 @@ def verify_connection(store, config, remote):
                 item['size'] == json.loads(row['asset'])['size'] and actual == expected):
             raise DestinationError('新连接与原归档身份不符；上传和远端清理已暂停，请恢复原连接或检查共享目录',
                                    code='destination_identity')
+    _accept(store, binding, connection)
+
+
+def _accept(store, binding, connection):
     with store.db:
         store.db.execute('BEGIN IMMEDIATE')
         latest = read(store.db)
