@@ -16,11 +16,11 @@ class SmokeEnvironmentTests(unittest.TestCase):
             docker.chmod(0o755)
             with patch.dict(os.environ, {'PATH': temporary + os.pathsep + os.environ.get('PATH', '')}):
                 before = os.environ['PATH']
-                self.assertEqual(str(docker), shutil.which('docker'))
+                self.assertEqual(os.path.normcase(str(docker)), os.path.normcase(shutil.which('docker')))
                 with isolated_commands():
                     self.assertIsNone(shutil.which('docker'))
                     if os.name == 'nt':
-                        self.assertIsNotNone(shutil.which('cmd.exe'))
+                        self.assertTrue((Path(os.environ['SystemRoot']) / 'System32/cmd.exe').is_file())
                         self.assertIsNotNone(shutil.which('powershell.exe'))
                 self.assertEqual(before, os.environ['PATH'])
 

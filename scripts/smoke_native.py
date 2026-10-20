@@ -22,9 +22,10 @@ def isolated_commands():
     with tempfile.TemporaryDirectory(prefix='media-importer-smoke-path-') as empty:
         commands = [empty]
         if os.name == 'nt':
-            # The real Windows purge wrapper requires these OS commands.
+            # cmd.exe is launched by Windows itself. Only PowerShell needs PATH;
+            # hosted runners can place docker.exe directly in System32.
             system = Path(os.environ['SystemRoot']) / 'System32'
-            commands += [str(system), str(system / 'WindowsPowerShell/v1.0')]
+            commands.append(str(system / 'WindowsPowerShell/v1.0'))
         os.environ['PATH'] = os.pathsep.join(commands)
         try:
             if shutil.which('docker'):
