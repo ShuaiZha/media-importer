@@ -12,7 +12,7 @@
 - **并行传输**：第一个文件完整导入后立即上传，同时继续导入后续文件。
 - **离线缓冲**：SMB 离线时先缓存，相机断开后仍可上传完整文件。
 - **自动整理**：按设备平铺归档，保留原文件名，重名加后缀；归档成功后清理缓存。
-- **飞书控制**：确认设备、启停同步、接收进度与结果，可选完整导入后删除原片。
+- **飞书控制**：确认设备、启停同步、调整传输与通知参数、设置 SMB 归档位置，可选导入后删除原片。
 
 ![并行传输：文件 A 完整导入本地后开始上传，同时继续导入文件 B、C](docs/assets/parallel-transfer.svg)
 
@@ -21,6 +21,8 @@
 ## 快速开始
 
 准备 USB 数据线、可读写的 SMB 共享和[飞书应用凭据](docs/feishu.md#1-准备应用与凭据)。**以下两种部署方式任选其一，功能相同。**
+
+安装命令获取正式版本。飞书参数表单需要 **v0.10.24+**；当前源码与正式发布的区别见[版本说明](docs/releases/v0.10.24.md)。
 
 ### 部署方式一：原生 CLI
 
@@ -47,13 +49,13 @@ curl -fsSL https://github.com/ShuaiZha/media-importer/releases/latest/download/i
 适合已有 Docker 环境的用户。需要 Git、Python 3.9+ 和运行中的 Docker Compose。
 
 ```sh
-git clone https://github.com/ShuaiZha/media-importer.git
+git clone --branch v0.10.23 https://github.com/ShuaiZha/media-importer.git
 cd media-importer
 python3 scripts/setup.py
 docker compose up -d --no-build
 ```
 
-更新使用 `python3 scripts/manage.py update`；Windows 将 `python3` 换成 `py -3`。[完整说明 →](docs/deployment.md)
+示例使用已发布的 v0.10.23；体验尚未发布的源码功能见[构建说明](CONTRIBUTING.md#构建与发布)。更新使用 `python3 scripts/manage.py update`；Windows 将 `python3` 换成 `py -3`。[完整说明 →](docs/deployment.md)
 
 ## 首次备份
 

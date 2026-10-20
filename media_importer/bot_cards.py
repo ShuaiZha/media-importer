@@ -57,6 +57,20 @@ def settings_result(changes, applied, stopping):
         return {'title': '素材范围已改为' + MEDIA_SCOPES[backup['media_scope']],
                 'detail': '之后的扫描只导入所选类别。已经开始传输的文件会继续完成。', 'level': 'success'}
     notes = changes.get('notifications', {})
+    if 'limits' in changes:
+        limits = changes['limits']
+        return {'title': '传输设置已生效', 'detail':
+                f"上传限速：{str(limits['upload_mib_per_second']) + ' MiB/s' if limits['upload_mib_per_second'] else '不限速'}\n"
+                f"缓存额度：{str(limits['max_cache_gib']) + ' GiB' if limits['max_cache_gib'] else '不限额'}\n"
+                f"磁盘预留：{limits['min_free_disk_gib']} GiB", 'level': 'success'}
+    if 'archive' in changes:
+        from .bot_settings import location
+        return {'title': '归档位置已生效', 'detail': location(changes['archive']) + '\n已有归档保持原位置。', 'level': 'success'}
+    if notes and set(notes) != {'enabled'}:
+        return {'title': '通知设置已生效', 'detail':
+                ('自动通知：开启' if notes['enabled'] else '自动通知：关闭') +
+                f"\n进度更新间隔：{notes['progress_interval_seconds']} 秒\n连接提醒：" +
+                ('开启' if notes['connection_events'] else '关闭'), 'level': 'success'}
     if 'enabled' in notes:
         return {'title': '自动通知已开启' if notes['enabled'] else '自动通知已关闭',
                 'detail': '进度、完成和异常会发到这个会话。' if notes['enabled'] else '确认相机、查看状态和设置操作仍会回复。',

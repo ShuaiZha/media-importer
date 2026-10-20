@@ -79,8 +79,14 @@ class Bot:
         """Retired cards and queued requests cannot modify file-only settings."""
         if payload.get('form') or payload.get('operation'):
             return False
+        from .bot_settings import FORMS, PAGES
+        modern = payload.get('settings_version') == 1
+        if 'settings_form' in payload:
+            return modern and payload['settings_form'] in FORMS
+        if 'archive_change' in payload or 'archive_draft' in payload:
+            return modern and payload.get('mode') in ('connection', 'new')
         if payload.get('panel', 'status') not in ('status', 'cleanup', 'confirm_delete', 'source_confirmation', 'source_offline',
-                                                  'notifications', 'previews', 'confirm_previews', 'scope'):
+                                                  'notifications', 'previews', 'confirm_previews', 'scope', *PAGES):
             return False
         if 'source_decision' in payload:
             return (type(payload['source_decision']) is bool and
@@ -89,6 +95,14 @@ class Bot:
         changes = payload.get('changes', payload.get('changes_applied'))
         if changes is None:
             return True
+        if modern:
+            if not isinstance(changes, dict) or len(changes) != 1:
+                return False
+            group, updates = next(iter(changes.items()))
+            allowed = {'limits': {'upload_mib_per_second', 'max_cache_gib', 'min_free_disk_gib'},
+                       'notifications': {'enabled', 'connection_events', 'progress_interval_seconds', 'keyword'},
+                       'archive': {'host', 'port', 'share', 'directory'}}
+            return group in allowed and isinstance(updates, dict) and set(updates) == allowed[group]
         if not isinstance(changes, dict) or len(changes) != 1:
             return False
         group, updates = next(iter(changes.items()))
@@ -110,9 +124,16 @@ class Bot:
             if isinstance(notice, str):
                 notice = {'title': '操作说明', 'detail': notice, 'level': 'info'}
             color = {'error': 'red', 'warning': 'orange', 'success': 'green', 'info': 'blue'}[notice['level']]
+            actions = [self.button('查看状态', {'panel': 'status'})]
+            from .bot_settings import PAGES
+            if page in PAGES:
+                actions.insert(0, self.button('继续设置', {'panel': page}))
             return card(notice['title'], ([paragraph(notice['detail'])] if notice.get('detail') else []) + [note(format_time(now()))] +
-                        [self.buttons(self.button('查看状态', {'panel': 'status'}))], color, shared=True)
+                        [self.buttons(*actions)], color, shared=True)
         values, rev = item["config"], item["revision"]
+        from .bot_settings import PAGES, panel as settings_panel
+        if page in PAGES:
+            return settings_panel(self, page, item)
         if page in ('source_confirmation', 'source_offline'):
             return self.source_panel(values, page)
         if page == 'confirm_delete':
@@ -237,6 +258,9 @@ class Bot:
             return False
         # Keep no arbitrary chat text, media, or credentials in the task database.
         commands = {"状态": {"panel": "status"}, "进度": {"panel": "status"}, "查看状态": {"panel": "status"},
+                    "设置": {"panel": "settings"}, "参数设置": {"panel": "settings"},
+                    "素材与清理": {"panel": "media_settings"}, "传输与缓存": {"panel": "transfer_settings"},
+                    "消息通知": {"panel": "notification_settings"}, "归档位置": {"panel": "destination_settings"},
                     "运行总览": {"panel": "status"}, "设备与存储": {"panel": "status"},
                     "当前任务": {"panel": "status"}, "归档结果": {"panel": "status"},
                     "原片处理": {"panel": "cleanup"}, "删除原片": {"panel": "cleanup"}, "删除原片开关": {"panel": "cleanup"},
@@ -247,7 +271,7 @@ class Bot:
                     "停止同步": {"changes": {"backup": {"enabled": False}}},
                     "关闭同步": {"changes": {"backup": {"enabled": False}}}}
         action = dict(commands.get(command, {"panel": "status", "notice":
-            "请选择底部「状态」「同步」或「原片处理」菜单。其他设置请在本机配置文件中修改。"}))
+            "请选择「状态」「同步」或「设置」。发送「设置」可调整传输、通知和归档位置；凭据与缓存目录迁移仍在本机配置文件中处理。"}))
         if "changes" in action:
             action["revision"] = self.settings.read()["revision"]
             try:
@@ -275,6 +299,19 @@ class Bot:
         if not self.supported(payload):
             return {"toast": {"type": "error", "content": "此操作已停用，请通过菜单重新打开卡片"}}
         payload["revision"] = row["revision"]
+        if payload.get('settings_form'):
+            from .bot_settings import parse
+            try:
+                name = payload.pop('settings_form')
+                parsed = parse(name, event.get('action', {}).get('form_value'))
+                payload['page'] = name
+                if name == 'destination_settings':
+                    payload.update(archive_draft={k: v for k, v in parsed.items() if k != 'mode'},
+                                   mode=parsed['mode'], change_id=uuid.uuid4().hex)
+                else:
+                    payload['changes'] = parsed
+            except ConfigError as exc:
+                return {'toast': {'type': 'error', 'content': str(exc)}}
         context_id = event.get('context', {}).get('open_message_id')
         if isinstance(context_id, str) and re.fullmatch(r'om_[A-Za-z0-9_-]{1,128}', context_id):
             payload['response_message_id'] = context_id
@@ -330,8 +367,24 @@ class Bot:
                     db.execute("UPDATE bot_jobs SET state='applied',response=?,payload=? WHERE id=?", (json.dumps(response, ensure_ascii=False), json.dumps(payload, ensure_ascii=False), job['id']))
             if job["state"] == "queued":
                 page, notice = payload.get("panel", payload.get("page", "status")), payload.get("notice")
+                custom_response = None
                 try:
                     changes = payload.get("changes")
+                    archive_change = payload.get('archive_change')
+                    if payload.get('archive_draft') or archive_change:
+                        from .archive_settings import check
+                        from .bot_settings import confirm_archive
+                        if time.time() - job['created'] > 300:
+                            raise ConfigError('归档位置请求已过期，请重新检查')
+                        checked = check(self.settings, payload.get('archive_draft') or archive_change,
+                                        payload['mode'], payload['revision'], payload['connection_revision'],
+                                        save=bool(archive_change), change_id=payload['change_id'])
+                        if archive_change:
+                            changes = {'archive': archive_change}
+                            item = checked
+                        else:
+                            custom_response = confirm_archive(self, self.settings.read(), checked, payload['mode'],
+                                                              payload['connection_revision'], payload['change_id'])
                     if 'source_decision' in payload:
                         from .source_connection import decide
                         if time.time() - job['created'] > 300:
@@ -354,7 +407,8 @@ class Bot:
                     if changes and not stop_request and time.time() - job["created"] > 300:
                         raise ConfigError("控制请求已经过期，未执行；请重新操作")
                     if changes:
-                        item = self.settings.update_preferences(changes, None if stop_request else payload.get("revision"))
+                        if not archive_change:
+                            item = self.settings.update_preferences(changes, None if stop_request else payload.get("revision"))
                         applied, stopping = False, False
                         until = time.monotonic() + 4
                         while time.monotonic() < until:
@@ -382,7 +436,7 @@ class Bot:
                             return True
                 except (ConfigError, ValueError) as exc:
                     notice = {"title": "相机确认未完成" if 'source_decision' in payload else "本次修改未保存", "detail": str(exc), "level": "error"}
-                response = self.panel(page, notice)
+                response = custom_response or self.panel(page, notice)
                 with self.db() as db:
                     db.execute("UPDATE bot_jobs SET state='applied',response=?,payload=? WHERE id=?", (json.dumps(response, ensure_ascii=False), json.dumps(payload, ensure_ascii=False), job["id"]))
             elif job['state'] != 'waiting':

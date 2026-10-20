@@ -54,6 +54,8 @@ export PATH="$HOME/.local/bin:$PATH"
 
 停止后台会让机器人离线；日常暂停传输请在飞书选择「停止同步」。
 
+v0.10.24 起可在飞书「设置」中调整传输、通知及 SMB 归档位置，保存后自动应用。归档位置需先停止同步、检查连接并确认；账号凭据和缓存目录迁移仍在本机处理。见[参数设置](feishu.md#参数设置)与[配置优先级](configuration.md#smb)。
+
 ## 更新
 
 ```sh
@@ -63,6 +65,8 @@ media-importer update
 指定版本使用 `media-importer update --version 0.10.23`；离线更新使用 `media-importer update --bundle /path/to/package/media-importer`。
 
 更新按“下载与核验 → 停止后台 → 配置与 SQLite 一致快照 → 切换程序 → 恢复运行状态”执行。配置、开关、未完成任务和完整缓存保留。已是目标版本则不替换、不重启；拉取源码也不会更新已安装程序。
+
+在线安装与更新只获取已发布的正式包。若 `main` 的版本尚未出现在 Releases，需等待发布或按[贡献指南](../CONTRIBUTING.md#原生包)构建后使用 `--bundle` 更新。
 
 快照不含视频，不能替代[完整备份](recovery.md)。失败时保留诊断和快照，不直接用旧数据库覆盖已产生的新任务。
 

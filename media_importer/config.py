@@ -1,4 +1,4 @@
-"""One runtime-settings format; all connections come from the deployment environment."""
+"""Runtime preferences and optional archive overrides; credentials stay in the environment."""
 import json
 import math
 from dataclasses import dataclass
@@ -55,7 +55,19 @@ DEFAULTS = {
 def runtime_config(raw):
     if not isinstance(raw, dict) or type(raw.get("version")) is not int or raw["version"] != 4:
         raise ConfigError("settings.json 必须使用 version: 4；请先停止服务并运行一次性迁移")
-    values = _merge(raw, DEFAULTS)
+    values = _merge({k: v for k, v in raw.items() if k != "archive"}, DEFAULTS)
+    if "archive" in raw:
+        archive = raw["archive"]
+        if not isinstance(archive, dict) or set(archive) != {"host", "port", "share", "directory", "id", "change_id"}:
+            raise ConfigError("archive 格式无效，请通过飞书重新配置归档位置")
+        archive = _merge(archive, {"host": "", "port": 445, "share": "", "directory": "", "id": "", "change_id": ""}, "archive.")
+        if len(archive["change_id"]) != 32 or any(c not in "0123456789abcdef" for c in archive["change_id"]):
+            raise ConfigError("archive.change_id 无效")
+        if not (archive["id"] and len(archive["id"]) <= 2048):
+            raise ConfigError("archive.id 无效，请通过飞书重新配置归档位置")
+        if any(ord(c) < 32 for value in archive.values() if isinstance(value, str) for c in value):
+            raise ConfigError("归档位置不能包含控制字符")
+        values["archive"] = archive
     if values["backup"]["media_scope"] not in MEDIA_SCOPES:
         raise ConfigError("backup.media_scope 必须为 all、video 或 photo")
     if values["backup"]["source_transport"] != "usb":
@@ -73,7 +85,7 @@ def runtime_config(raw):
 
 
 def preferences(values):
-    return {key: values[key] for key in DEFAULTS}
+    return {key: values[key] for key in (*DEFAULTS, "archive") if key in values}
 
 
 @dataclass(frozen=True)
@@ -92,14 +104,17 @@ class Config:
     def from_dict(cls, raw):
         from .deployment import connections
         data = {**runtime_config(raw), **connections()}
-        # Existing installations retain their .env choice until the first saved
-        # preference. Addresses and credentials always remain in .env.
+        if "archive" in data:
+            data["destination"].update({k: data["archive"][k] for k in ("host", "port", "share", "directory")})
+            data["destination"]["archive_id"] = data["archive"]["id"]
+        # Existing installations retain their .env source choice until the first
+        # saved preference. Source connection and credentials remain in .env.
         data["source"]["transport"] = raw.get("backup", {}).get("source_transport", data["source"]["transport"])
         return cls.from_values(data)
 
     @classmethod
     def from_values(cls, values):
-        # Internal construction only; serialized settings never include connections.
+        # Internal construction only; serialized settings exclude credentials.
         data = runtime_config(preferences(values))
         data.update(source=dict(values["source"]), destination=dict(values["destination"]))
         validate_source(data["source"])

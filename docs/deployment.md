@@ -15,7 +15,7 @@ USB 通过网络读取，无需设备直通。宿主机连通不等于容器连�
 ## 首次部署
 
 ```sh
-git clone https://github.com/ShuaiZha/media-importer.git
+git clone --branch v0.10.23 https://github.com/ShuaiZha/media-importer.git
 cd media-importer
 python3 scripts/setup.py
 docker compose up -d --no-build
@@ -23,6 +23,8 @@ docker compose ps
 ```
 
 Windows 将 `python3` 替换为 `py -3`。向导生成 `.env`、JSON 和目录，拉取正式镜像并检查连接，不覆盖已有配置。相机地址与序列号可留空自动发现。
+
+示例固定为已发布的 v0.10.23。选择其他版本时，先在 [Releases](https://github.com/ShuaiZha/media-importer/releases) 确认对应镜像已发布；`main` 可能包含尚未发布的版本，此时按[源码构建说明](../CONTRIBUTING.md#构建与发布)操作。
 
 检查完成后，继续[配置飞书订阅、菜单并发布](feishu.md#3-订阅与菜单)。首次同步前核对身份，保留原片，用少量素材验证。
 
@@ -71,5 +73,7 @@ python3 scripts/manage.py update
 - v0.10.15 及更早版本先 `git pull --ff-only` 获取更新器；v0.9 使用[一次性迁移](recovery.md#从-v09-迁移)。
 
 修改 `.env` 后执行 `docker compose up -d --force-recreate --no-build`；JSON 偏好自动重读。换盘、换电脑和恢复备份见[迁移与恢复](recovery.md)。运行中的数据库只通过容器内 CLI 查询，不在宿主机直接打开。
+
+v0.10.24 起可在飞书「设置」中调整传输、通知和 SMB 归档位置，无需重建容器。修改归档位置需先停止同步并检查确认；保存到 JSON 的归档连接优先于 `.env`，凭据仍由 `.env` 提供。步骤见[飞书参数设置](feishu.md#参数设置)。
 
 源码构建与发布见[贡献指南](../CONTRIBUTING.md#构建与发布)。

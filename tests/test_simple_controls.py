@@ -130,7 +130,7 @@ class SimpleControlsTests(unittest.TestCase):
         self.bot.process_one()
         response = json.dumps(self.sender.call_args.args[1],ensure_ascii=False)
         self.assertIn('配置文件',response)
-        self.assertIn('原片处理',response)
+        self.assertIn('设置',response)
         self.assertNotIn('private example value',response)
 
     def test_one_status_card_has_both_lanes_storage_path_and_cleanup_problem(self):

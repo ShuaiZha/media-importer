@@ -25,6 +25,15 @@ def identity(db, config):
 def bind(store, config):
     """Additive migration; no file, group, round or notification IDs change."""
     binding = read(store.db)
+    requested = config.values.get('archive', {}).get('id')
+    if requested and (not binding or requested != binding['id']):
+        # The JSON write is the durable switch intent. Commit the binding only
+        # after proving the old work is settled; a restart can safely repeat it.
+        with store.db:
+            store.db.execute('BEGIN IMMEDIATE')
+            assert_settled(store)
+            binding = {'id': requested, 'connection': destination_identity(config.destination), 'bound_at': now()}
+            store.db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', (KEY, json.dumps(binding)))
     if not binding:
         with store.db:
             store.db.execute('BEGIN IMMEDIATE')
@@ -44,7 +53,7 @@ def bind(store, config):
     return Config.from_values(values)
 
 
-def verify_connection(store, config, remote):
+def verify_connection(store, config, remote, *, accept=True, require_proof=False):
     binding = read(store.db)
     connection = destination_identity(config.destination)
     if not binding or binding['connection'] == connection:
@@ -66,12 +75,13 @@ def verify_connection(store, config, remote):
         if not (item and not item['is_directory'] and item['size'] == anchor['size'] and actual == anchor['identity']):
             raise DestinationError('新连接与已绑定存储身份不符，请检查共享目录；任务与缓存保留', code='destination_identity')
         if not pending_cleanup:
-            _accept(store, binding, connection)
+            if accept:
+                _accept(store, binding, connection)
             return
     remote_work = store.db.execute("""SELECT 1 FROM files WHERE destination=?
         AND (remote_path IS NOT NULL OR temp_path IS NOT NULL OR remote_identity IS NOT NULL) LIMIT 1""", (binding['id'],)).fetchone()
-    if not rows and not anchor and (remote_work or pending_cleanup):
-        raise DestinationError('连接已变化，但没有可核验的归档；请恢复原连接。新目的地请使用独立数据目录',
+    if not rows and not anchor and (remote_work or pending_cleanup or require_proof):
+        raise DestinationError('连接已变化，但没有可核验的归档；请恢复原连接。切换新位置请先完成收尾，再使用飞书归档位置设置',
                                code='destination_identity')
     for row in rows:
         item = remote.stat(row['remote_path']) if row['remote_path'] else None
@@ -83,7 +93,21 @@ def verify_connection(store, config, remote):
                 item['size'] == json.loads(row['asset'])['size'] and actual == expected):
             raise DestinationError('新连接与原归档身份不符；上传和远端清理已暂停，请恢复原连接或检查共享目录',
                                    code='destination_identity')
-    _accept(store, binding, connection)
+    if accept:
+        _accept(store, binding, connection)
+
+
+def assert_settled(store):
+    """Changing the archive never abandons tasks or moves complete cache files."""
+    from .storage import inspect_cache
+    cache = inspect_cache(store.cache, store.get_meta('cache_identity'))
+    if not cache['available']:
+        raise DestinationError(cache['reason'])
+    if store.db.execute('SELECT 1 FROM files LIMIT 1').fetchone() or store.temporary_items():
+        raise DestinationError('仍有任务或清理事项，请完成收尾后再切换归档位置；现有任务与缓存保留')
+    if any(p.is_file() or p.is_symlink() for pattern in ('*.bin', '*.download', '.receipts/*.json')
+           for p in store.cache.glob(pattern)):
+        raise DestinationError('缓存目录仍有素材或恢复凭据，请完成归档或恢复后再切换位置')
 
 
 def _accept(store, binding, connection):
