@@ -62,7 +62,7 @@ v0.10.24 起可在飞书「设置」中调整传输、通知及 SMB 归档位置
 media-importer update
 ```
 
-指定版本使用 `media-importer update --version 0.10.23`；离线更新使用 `media-importer update --bundle /path/to/package/media-importer`。
+指定版本使用 `media-importer update --version 0.10.24`；离线更新使用 `media-importer update --bundle /path/to/package/media-importer`。
 
 更新按“下载与核验 → 停止后台 → 配置与 SQLite 一致快照 → 切换程序 → 恢复运行状态”执行。配置、开关、未完成任务和完整缓存保留。已是目标版本则不替换、不重启；拉取源码也不会更新已安装程序。
 
