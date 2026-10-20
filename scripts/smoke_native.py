@@ -1,8 +1,10 @@
 """Exercise the packaged installer/uninstaller without camera, network or services."""
 import argparse
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,6 +13,28 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from media_importer.config import DEFAULTS
 from media_importer.native.releases import executable
+
+
+@contextmanager
+def isolated_commands():
+    """Do not probe a CI host's Docker daemon from a disposable installation."""
+    original = os.environ.get('PATH')
+    with tempfile.TemporaryDirectory(prefix='media-importer-smoke-path-') as empty:
+        commands = [empty]
+        if os.name == 'nt':
+            # The real Windows purge wrapper requires these OS commands.
+            system = Path(os.environ['SystemRoot']) / 'System32'
+            commands += [str(system), str(system / 'WindowsPowerShell/v1.0')]
+        os.environ['PATH'] = os.pathsep.join(commands)
+        try:
+            if shutil.which('docker'):
+                raise RuntimeError('Smoke command environment unexpectedly contains Docker')
+            yield
+        finally:
+            if original is None:
+                os.environ.pop('PATH', None)
+            else:
+                os.environ['PATH'] = original
 
 
 def purge_with_windows_lock(root, launcher):
@@ -28,7 +52,7 @@ def purge_with_windows_lock(root, launcher):
 
 
 def smoke(bundle):
-    with tempfile.TemporaryDirectory(prefix='media-importer-smoke-') as temporary:
+    with isolated_commands(), tempfile.TemporaryDirectory(prefix='media-importer-smoke-') as temporary:
         root = Path(temporary).resolve(); project = root / 'project with spaces 素材'; project.mkdir()
         for name in ('config', 'data', 'cache'):
             (project / name).mkdir()

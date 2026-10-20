@@ -56,7 +56,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 飞书「设置」提供素材、传输、通知与归档配置。v0.10.25 起也可修改 SMB 账号密码、相机连接和运行间隔；连接修改前须停止同步，SMB 检查通过后确认保存。首次飞书凭据由安装向导填写，目录迁移仍在本机进行。见[参数设置](feishu.md#参数设置)与[配置优先级](configuration.md#smb)；升级程序后还需在飞书后台[更新并发布菜单](feishu.md#3-订阅与菜单)。
 
-「相机状态」「选择素材」「清理原片」需要 [v0.10.26](releases/v0.10.26.md)。当前正式包仍为 v0.10.25；提前使用需[从源码构建](../CONTRIBUTING.md#原生包)，通过 `update --bundle` 安装后补齐飞书菜单，无需新增飞书权限或更换凭据。
+「相机状态」「选择素材」「清理原片」需要 [v0.10.26](releases/v0.10.26.md)。从旧版更新后补齐飞书菜单，无需新增飞书权限或更换凭据。
 
 ## 更新
 
@@ -64,7 +64,7 @@ export PATH="$HOME/.local/bin:$PATH"
 media-importer update
 ```
 
-指定版本使用 `media-importer update --version 0.10.25`；离线更新使用 `media-importer update --bundle /path/to/package/media-importer`。
+指定版本使用 `media-importer update --version 0.10.26`；离线更新使用 `media-importer update --bundle /path/to/package/media-importer`。
 
 更新按“下载与核验 → 停止后台 → 配置与 SQLite 一致快照 → 切换程序 → 恢复运行状态”执行。配置、开关、未完成任务和完整缓存保留。已是目标版本则不替换、不重启；拉取源码也不会更新已安装程序。
 

@@ -15,7 +15,7 @@ USB 通过网络读取，无需设备直通。宿主机连通不等于容器连�
 ## 首次部署
 
 ```sh
-git clone --branch v0.10.25 https://github.com/ShuaiZha/media-importer.git
+git clone --branch v0.10.26 https://github.com/ShuaiZha/media-importer.git
 cd media-importer
 python3 scripts/setup.py
 docker compose up -d --no-build
@@ -24,11 +24,11 @@ docker compose ps
 
 Windows 将 `python3` 替换为 `py -3`。向导生成 `.env`、JSON 和目录，拉取正式镜像并检查连接，不覆盖已有配置。相机地址与序列号可留空自动发现。
 
-示例固定为 v0.10.25。选择其他版本时，先在 [Releases](https://github.com/ShuaiZha/media-importer/releases) 确认对应镜像已发布；`main` 可能包含尚未发布的版本，此时按[源码构建说明](../CONTRIBUTING.md#构建与发布)操作。
+示例固定为 v0.10.26。选择其他版本时，先在 [Releases](https://github.com/ShuaiZha/media-importer/releases) 确认对应镜像已发布；`main` 可能包含尚未发布的版本，此时按[源码构建说明](../CONTRIBUTING.md#构建与发布)操作。
 
 检查完成后，继续[配置飞书订阅、菜单并发布](feishu.md#3-订阅与菜单)。首次同步前核对身份，保留原片，用少量素材验证。
 
-「相机状态」「选择素材」「清理原片」属于 [v0.10.26](releases/v0.10.26.md)，当前尚未发布镜像；上面的 v0.10.25 镜像不包含这三项。需要提前使用时按源码构建说明构建并启动，再补齐飞书菜单，无需新增飞书权限或更换凭据。
+从旧版升级到 [v0.10.26](releases/v0.10.26.md) 后，补齐飞书菜单中的「相机状态」「选择素材」「清理原片」，无需新增飞书权限或更换凭据。
 
 ### 手动配置
 
@@ -67,7 +67,7 @@ docker compose exec backup python3 -m media_importer check --json
 python3 scripts/manage.py update
 ```
 
-指定版本可加 `--version 0.10.25`。更新器核对 Release、标签和镜像摘要，下载镜像后停止服务，保存一致快照、快进源码，再恢复原来运行的服务。配置、开关、未完成任务与完整缓存保留。
+指定版本可加 `--version 0.10.26`。更新器核对 Release、标签和镜像摘要，下载镜像后停止服务，保存一致快照、快进源码，再恢复原来运行的服务。配置、开关、未完成任务与完整缓存保留。
 
 - 本地源码修改、分叉或自定义 Compose 覆盖可能阻止更新，先按错误提示处理。
 - `backups/update-*/` 不含完整视频；迁移应使用[完整备份](recovery.md)。
