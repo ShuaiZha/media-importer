@@ -133,12 +133,14 @@ def restore(bundle, project, cache):
     project.mkdir(mode=0o700)
     cache.mkdir(mode=0o700)
     for expected in manifest['entries']:
-        for prefix, destination in (('project', project), ('cache', cache)):
+        for prefix, destination in (('project', project), ('cache', cache), ('credentials', project / 'config/credentials')):
             if expected['path'].startswith(prefix + '/'):
                 relative = Path(expected['path']).relative_to(prefix)
                 target = destination / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 copy_media(bundle / expected['path'], target)
+                if prefix == 'credentials':
+                    os.chmod(target, 0o600)
     (project / 'data').mkdir()
     copy_media(bundle / 'state.sqlite3', project / 'data/state.sqlite3')
     settings = json.loads((bundle / 'settings.json').read_text(encoding='utf-8'))

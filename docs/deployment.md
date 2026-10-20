@@ -55,7 +55,7 @@ docker compose exec backup python3 -m media_importer check --json
 | 停止 / 启动后台 | `docker compose stop` / `docker compose up -d --no-build` |
 | 移除容器和网络 | `docker compose down` |
 
-`stop`、`down` 保留宿主机配置、任务与缓存，但机器人会离线。日常暂停传输使用飞书「停止同步」。
+`stop`、`down` 保留宿主机配置、任务与缓存，但机器人会离线。日常暂停传输使用飞书「同步 → 立即停止」或「当前文件完成后停止」。
 
 ## 更新稳定版
 
@@ -74,6 +74,6 @@ python3 scripts/manage.py update
 
 修改 `.env` 后执行 `docker compose up -d --force-recreate --no-build`；JSON 偏好自动重读。换盘、换电脑和恢复备份见[迁移与恢复](recovery.md)。运行中的数据库只通过容器内 CLI 查询，不在宿主机直接打开。
 
-v0.10.24 起可在飞书「设置」中调整传输、通知和 SMB 归档位置，无需重建容器。修改归档位置需先停止同步并检查确认；保存到 JSON 的归档连接优先于 `.env`，凭据仍由 `.env` 提供。步骤见[飞书参数设置](feishu.md#参数设置)。
+飞书「设置」提供传输、通知和 SMB 归档位置；v0.10.25 起也支持 SMB 账号密码、相机连接和运行间隔，无需重建容器。JSON 中保存连接覆盖值，密码单独保存在已挂载的配置目录内；原 `.env` 保留。连接修改须先停止同步，SMB 检查后确认。Docker 宿主机挂载与换盘仍在本机处理。见[飞书参数设置](feishu.md#参数设置)；升级程序后还需在飞书后台[更新并发布菜单](feishu.md#3-订阅与菜单)。
 
 源码构建与发布见[贡献指南](../CONTRIBUTING.md#构建与发布)。

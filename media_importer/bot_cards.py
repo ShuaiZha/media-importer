@@ -48,6 +48,14 @@ def settings_result(changes, applied, stopping):
         if stopping:
             return {'title': '正在停止同步', 'detail': '正在结束当前操作，任务与完整缓存保留。', 'level': 'warning'}
         return {'title': '同步已停止', 'detail': '导入、上传及原片删除均已停止，任务与完整缓存保留。', 'level': 'success'}
+    if 'stop_after_current' in backup:
+        return {'title': '将在当前文件完成后停止', 'detail': '两路不再启动新文件；当前操作结束后关闭同步。', 'level': 'success'}
+    if 'source_options' in changes:
+        return {'title': '相机连接设置已生效', 'detail': '后台按新提示重新发现相机；识别到其他设备仍需确认。同步与原片处理开关保持不变。', 'level': 'success'}
+    intervals = (f"扫描间隔：{backup['poll_seconds']:g} 秒\n重试基础间隔：{backup['retry_seconds']:g} 秒\n"
+                 f"清单复查间隔：{backup['stability_seconds']:g} 秒") if 'poll_seconds' in backup else ''
+    if intervals and 'limits' not in changes:
+        return {'title': '运行间隔已生效', 'detail': intervals, 'level': 'success'}
     if 'archive_previews' in backup:
         enabled = backup['archive_previews']
         return {'title': '预览文件将随原片归档' if enabled else '预览文件不再归档',
@@ -59,10 +67,10 @@ def settings_result(changes, applied, stopping):
     notes = changes.get('notifications', {})
     if 'limits' in changes:
         limits = changes['limits']
-        return {'title': '传输设置已生效', 'detail':
-                f"上传限速：{str(limits['upload_mib_per_second']) + ' MiB/s' if limits['upload_mib_per_second'] else '不限速'}\n"
-                f"缓存额度：{str(limits['max_cache_gib']) + ' GiB' if limits['max_cache_gib'] else '不限额'}\n"
-                f"磁盘预留：{limits['min_free_disk_gib']} GiB", 'level': 'success'}
+        return {'title': '传输与缓存已生效' if intervals else '传输设置已生效', 'detail':
+                f"上传限速：{format(limits['upload_mib_per_second'], 'g') + ' MiB/s' if limits['upload_mib_per_second'] else '不限速'}\n"
+                f"缓存额度：{format(limits['max_cache_gib'], 'g') + ' GiB' if limits['max_cache_gib'] else '不限额'}\n"
+                f"磁盘预留：{limits['min_free_disk_gib']:g} GiB" + ('\n\n' + intervals if intervals else ''), 'level': 'success'}
     if 'archive' in changes:
         from .bot_settings import location
         return {'title': '归档位置已生效', 'detail': location(changes['archive']) + '\n已有归档保持原位置。', 'level': 'success'}

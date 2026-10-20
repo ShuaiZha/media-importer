@@ -49,7 +49,12 @@ class SmbDestination:
 
     def _connect(self):
         from ..deployment import destination_password
-        session = SmbSession(self.config, destination_password(), self.stop)
+        from ..model import ConfigError
+        try:
+            password = destination_password(self.config.destination)
+        except ConfigError as exc:
+            raise DestinationError(str(exc), code='authentication') from None
+        session = SmbSession(self.config, password, self.stop)
         session.on_activity = getattr(self, 'on_activity', None)
         return session
 
@@ -80,7 +85,7 @@ class SmbDestination:
         from ..deployment import destination_password
         from ..model import ConfigError
         try:
-            return text.replace(destination_password(), "***")
+            return text.replace(destination_password(self.config.destination), "***")
         except ConfigError:
             return text
 

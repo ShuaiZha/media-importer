@@ -96,6 +96,8 @@ def export(directory, settings_path, env_path, bundle):
             with closing(sqlite3.connect(bundle / 'state.sqlite3')) as target:
                 store.db.backup(target)
             shutil.copy2(settings_path, bundle / 'settings.json')
+            from .credentials import copy_credentials
+            copy_credentials(Path(settings_path).parent, bundle)
             shutil.copy2(env_path, bundle / 'connection.env')
             os.chmod(bundle / 'connection.env', 0o600)
             draft = {"format": 1, "version": __version__, "created_at": now(),
@@ -143,6 +145,11 @@ def prepare_restore(directory, settings_path, bundle=None):
     if bundle is not None:
         manifest = verify(bundle)
         for expected in manifest['entries']:
+            if expected['path'].startswith('credentials/'):
+                root = Path(settings_path).parent
+                path = safe_path(root, expected['path'])
+                if not path.is_file() or entry(root, path) != expected:
+                    raise BackupError('恢复后的凭据与备份不符，请完整复制配置目录')
             if expected['path'] == 'state.sqlite3' or expected['path'].startswith('cache/'):
                 path = safe_path(Path(directory), expected['path'])
                 if not path.is_file() or entry(Path(directory), path) != expected:

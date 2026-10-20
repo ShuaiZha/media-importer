@@ -201,7 +201,7 @@ def run(directory, settings, stop):
             source = item['config']['source']
             hint = item.get('source_hint', source)
             state = store.get_meta(KEY, {})
-            hints = [state.get('device', {}), source, hint]
+            hints = [hint, state.get('device', {}), source]
             device = discover_source(source['type'], hints, stop)
             state = observe(store, device)
             # Publish loss before slower discovery, so old approval expires promptly.

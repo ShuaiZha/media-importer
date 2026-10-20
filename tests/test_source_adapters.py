@@ -129,7 +129,7 @@ class SourceAdapterTests(unittest.TestCase):
             run(self.store.directory, self.settings, self.stop)
         self.assertEqual(1, len(calls))
         self.assertFalse(calls[0][1])
-        self.assertEqual(KIND, calls[0][0][1]['type'])
+        self.assertEqual(KIND, calls[0][0][0]['type'])  # Configured hint is tried first.
         self.assertEqual(identity(), self.store.get_meta(KEY)['device'])
 
     def test_connections_use_adapter_defaults_and_reject_explicit_empty_type(self):

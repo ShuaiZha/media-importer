@@ -147,3 +147,75 @@ class DrainTests(unittest.TestCase):
             thread.join(5)
         self.assertFalse(thread.is_alive())
         self.assertTrue(result['value']['complete'])
+
+
+class DrainReceiptTests(unittest.TestCase):
+    setUp = test_bot.BotTests.setUp
+    tearDown = test_bot.BotTests.tearDown
+    message = test_bot.BotTests.message
+
+    def request_stop(self):
+        self.settings.set_enabled(True)
+        self.sender.return_value = 'om_drain_result'
+        self.bot.receive_message(self.message('当前文件完成后停止'))
+        with patch('media_importer.bot.time.monotonic', side_effect=[1, 6]):
+            self.assertTrue(self.bot.process_one())
+        self.assertIn('等待生效', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        with self.bot.db() as db:
+            db.execute('UPDATE bot_jobs SET retry_at=0')
+
+    def applied(self):
+        self.store.set_meta('service', {'running': True})
+        self.store.status(worker_heartbeat_at=now(),
+                          configuration={'applied_revision': self.settings.read()['revision'], 'pending': False},
+                          stages={name: {'phase': 'paused'} for name in ('import', 'upload')})
+        with self.bot.db() as db:
+            db.execute('UPDATE bot_jobs SET retry_at=0')
+
+    def test_finished_drain_waits_for_actual_stop_then_updates_receipt_without_resave(self):
+        self.request_stop()
+        self.assertTrue(self.settings.finish_stop())
+        saved = self.path.read_bytes()
+        # Saved enabled=False is not proof that the worker has stopped yet.
+        self.assertFalse(self.bot.process_one())
+        self.updater.assert_not_called()
+        self.applied()
+        self.assertTrue(self.bot.process_one())
+        self.assertEqual('om_drain_result', self.updater.call_args.args[1])
+        text = json.dumps(self.updater.call_args.args[2], ensure_ascii=False)
+        self.assertIn('同步已停止', text)
+        self.assertNotIn('回执已失效', text)
+        self.assertEqual(saved, self.path.read_bytes())
+
+    def test_new_start_is_not_reported_as_finished_drain(self):
+        self.request_stop()
+        self.settings.set_enabled(True)
+        self.assertFalse(self.settings.finish_stop())
+        self.applied()
+        self.assertTrue(self.bot.process_one())
+        text = json.dumps(self.updater.call_args.args[2], ensure_ascii=False)
+        self.assertNotIn('同步已停止', text)
+        self.assertIn('设置已变更', text)
+        self.assertTrue(self.settings.read()['config']['backup']['enabled'])
+
+    def test_accepted_drain_receipt_keeps_waiting_until_current_files_finish(self):
+        self.settings.set_enabled(True)
+        self.sender.return_value = 'om_drain_result'
+        self.bot.receive_message(self.message('当前文件完成后停止'))
+        from media_importer.status import snapshot as actual_snapshot
+        def adopt(*args):
+            self.applied()
+            return actual_snapshot(*args)
+        with patch('media_importer.bot.snapshot', side_effect=adopt):
+            self.assertTrue(self.bot.process_one())
+        self.assertIn('将在当前文件完成后停止', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        with self.bot.db() as db:
+            self.assertEqual('waiting', db.execute('SELECT state FROM bot_jobs').fetchone()[0])
+            db.execute('UPDATE bot_jobs SET retry_at=0')
+        self.assertFalse(self.bot.process_one())
+        self.updater.assert_not_called()
+        self.assertTrue(self.settings.finish_stop())
+        self.applied()
+        self.assertTrue(self.bot.process_one())
+        self.assertEqual('om_drain_result', self.updater.call_args.args[1])
+        self.assertIn('同步已停止', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))

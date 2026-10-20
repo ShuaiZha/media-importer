@@ -128,6 +128,8 @@ def snapshot(home, record):
                          (home / 'installation.json', 'installation.json')):
         if Path(source).is_file():
             shutil.copyfile(source, folder / name); os.chmod(folder / name, 0o600)
+    from ..credentials import copy_credentials
+    copy_credentials(Path(record['paths']['settings']).parent, folder)
     source = Path(record['paths']['data']) / 'state.sqlite3'
     if source.exists():
         # Work on copies: SQLite never creates SHM or checkpoints the original DB.

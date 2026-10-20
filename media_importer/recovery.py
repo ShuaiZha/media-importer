@@ -195,6 +195,9 @@ def recover(cache, output, settings_path=None, *, export=False):
         values = json.loads(Path(settings_path).read_text()) if settings_path and Path(settings_path).is_file() else json.loads(json.dumps(DEFAULTS))
         values = runtime_config(values)
         values['backup'].update(enabled=False, delete_source_after_import=False, stop_after_current=False)
+        if settings_path:
+            from .credentials import copy_credentials
+            copy_credentials(Path(settings_path).parent, output / 'config')
         atomic_write(output / 'config/settings.json', json.dumps(values, ensure_ascii=False, indent=2) + '\n')
         result['activation'] = '停止原 Compose 后使用新 data/config 目录，缓存仍挂载原目录；原 .env 凭据不变。'
     atomic_write(output / 'recovery-report.json', json.dumps(result, ensure_ascii=False, indent=2) + '\n')

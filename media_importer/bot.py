@@ -76,13 +76,14 @@ class Bot:
 
     @staticmethod
     def supported(payload):
-        """Retired cards and queued requests cannot modify file-only settings."""
+        """Accept only the explicitly supported, versioned settings controls."""
         if payload.get('form') or payload.get('operation'):
             return False
-        from .bot_settings import FORMS, PAGES
-        modern = payload.get('settings_version') == 1
+        from .bot_settings import FORMS, PAGES, LIMIT_FIELDS, INTERVAL_FIELDS
+        modern = payload.get('settings_version') in (1, 2)
         if 'settings_form' in payload:
-            return modern and payload['settings_form'] in FORMS
+            return ((modern and payload['settings_form'] in FORMS) or
+                    (payload.get('settings_version') == 3 and payload['settings_form'] == 'transfer_settings'))
         if 'archive_change' in payload or 'archive_draft' in payload:
             return modern and payload.get('mode') in ('connection', 'new')
         if payload.get('panel', 'status') not in ('status', 'cleanup', 'confirm_delete', 'source_confirmation', 'source_offline',
@@ -95,13 +96,24 @@ class Bot:
         changes = payload.get('changes', payload.get('changes_applied'))
         if changes is None:
             return True
+        if payload.get('settings_version') == 3:
+            return (isinstance(changes, dict) and set(changes) == {'limits', 'backup'} and
+                    isinstance(changes['limits'], dict) and set(changes['limits']) == LIMIT_FIELDS and
+                    isinstance(changes['backup'], dict) and set(changes['backup']) == INTERVAL_FIELDS)
         if modern:
             if not isinstance(changes, dict) or len(changes) != 1:
                 return False
             group, updates = next(iter(changes.items()))
+            if group == 'backup' and isinstance(updates, dict) and set(updates) == {'stop_after_current'}:
+                return payload['settings_version'] == 2 and type(updates['stop_after_current']) is bool
             allowed = {'limits': {'upload_mib_per_second', 'max_cache_gib', 'min_free_disk_gib'},
                        'notifications': {'enabled', 'connection_events', 'progress_interval_seconds', 'keyword'},
-                       'archive': {'host', 'port', 'share', 'directory'}}
+                       'source_options': {'url', 'serial', 'timeout_seconds', 'request_attempts'},
+                       'backup': {'poll_seconds', 'retry_seconds', 'stability_seconds'}}
+            if group == 'archive':
+                from .archive_settings import FIELDS, EXTRA_FIELDS
+                return (isinstance(updates, dict) and set(FIELDS).issubset(updates)
+                        and not set(updates) - set(FIELDS) - set(EXTRA_FIELDS))
             return group in allowed and isinstance(updates, dict) and set(updates) == allowed[group]
         if not isinstance(changes, dict) or len(changes) != 1:
             return False
@@ -258,9 +270,12 @@ class Bot:
             return False
         # Keep no arbitrary chat text, media, or credentials in the task database.
         commands = {"状态": {"panel": "status"}, "进度": {"panel": "status"}, "查看状态": {"panel": "status"},
+                    "运行状态": {"panel": "status"},
                     "设置": {"panel": "settings"}, "参数设置": {"panel": "settings"},
                     "素材与清理": {"panel": "media_settings"}, "传输与缓存": {"panel": "transfer_settings"},
                     "消息通知": {"panel": "notification_settings"}, "归档位置": {"panel": "destination_settings"},
+                    "归档存储": {"panel": "destination_settings"}, "相机连接": {"panel": "source_settings"},
+                    "高级设置": {"panel": "advanced_settings"}, "本机目录": {"panel": "local_storage"},
                     "运行总览": {"panel": "status"}, "设备与存储": {"panel": "status"},
                     "当前任务": {"panel": "status"}, "归档结果": {"panel": "status"},
                     "原片处理": {"panel": "cleanup"}, "删除原片": {"panel": "cleanup"}, "删除原片开关": {"panel": "cleanup"},
@@ -269,9 +284,12 @@ class Bot:
                     "预览文件": {"panel": "previews"}, "素材范围": {"panel": "scope"},
                     "开启同步": {"changes": {"backup": {"enabled": True}}},
                     "停止同步": {"changes": {"backup": {"enabled": False}}},
+                    "立即停止": {"changes": {"backup": {"enabled": False}}},
+                    "完成当前文件后停止": {"changes": {"backup": {"stop_after_current": True}}, "settings_version": 2},
+                    "当前文件完成后停止": {"changes": {"backup": {"stop_after_current": True}}, "settings_version": 2},
                     "关闭同步": {"changes": {"backup": {"enabled": False}}}}
         action = dict(commands.get(command, {"panel": "status", "notice":
-            "请选择「状态」「同步」或「设置」。发送「设置」可调整传输、通知和归档位置；凭据与缓存目录迁移仍在本机配置文件中处理。"}))
+            "请选择「状态」「同步」或「设置」。设置中可修改素材、传输、通知、相机及 SMB 连接与凭据；本机目录入口提供实际路径和迁移步骤。"}))
         if "changes" in action:
             action["revision"] = self.settings.read()["revision"]
             try:
@@ -303,15 +321,40 @@ class Bot:
             from .bot_settings import parse
             try:
                 name = payload.pop('settings_form')
-                parsed = parse(name, event.get('action', {}).get('form_value'))
+                parsed = parse(name, event.get('action', {}).get('form_value'), payload['settings_version'])
                 payload['page'] = name
                 if name == 'destination_settings':
+                    # Passwords bypass SQLite entirely. The durable request contains
+                    # only a random local-file reference, checked again before commit.
+                    password = parsed.pop('password', '')
+                    change_id = uuid.uuid5(uuid.NAMESPACE_URL, self.scope + ':card:' + event_id).hex
+                    with self.settings.lock():
+                        item = self.settings.read()
+                        from .archive_settings import _stopped, candidate, connection_revision
+                        from .settings import Conflict
+                        if (item['error'] or item['revision'] != row['revision'] or
+                                connection_revision(item['config']) != payload['connection_revision']):
+                            raise Conflict('设置已经变化，请重新打开归档存储')
+                        with self.db() as db:
+                            if db.execute('SELECT 1 FROM bot_jobs WHERE id=?', ('card:' + event_id,)).fetchone():
+                                return {'toast': {'type': 'info', 'content': '操作已提交，请等待原回执'}}
+                        store = Store(self.directory)
+                        try:
+                            _stopped(store, item)
+                        finally:
+                            store.close()
+                        candidate(item['config'], {k: v for k, v in parsed.items() if k != 'mode'}, self.settings.path.parent)
+                        if password:
+                            from .credentials import stage
+                            parsed['credential_id'] = stage(self.settings.path.parent, change_id, password)
                     payload.update(archive_draft={k: v for k, v in parsed.items() if k != 'mode'},
-                                   mode=parsed['mode'], change_id=uuid.uuid4().hex)
+                                   mode=parsed['mode'], change_id=change_id)
                 else:
                     payload['changes'] = parsed
             except ConfigError as exc:
                 return {'toast': {'type': 'error', 'content': str(exc)}}
+            except OSError:
+                return {'toast': {'type': 'error', 'content': '本机配置目录不可写，设置未保存，请检查磁盘'}}
         context_id = event.get('context', {}).get('open_message_id')
         if isinstance(context_id, str) and re.fullmatch(r'om_[A-Za-z0-9_-]{1,128}', context_id):
             payload['response_message_id'] = context_id
@@ -341,7 +384,7 @@ class Bot:
                         db.execute("UPDATE bot_jobs SET state='done' WHERE id=?", (job['id'],))
                     return True
             if not self.supported(payload):
-                response = self.panel(notice={'title': '此操作已停用', 'detail': '请通过菜单重新打开卡片；其他设置在本机配置文件中修改。', 'level': 'info'})
+                response = self.panel(notice={'title': '此操作已停用', 'detail': '请通过「设置」重新打开卡片。', 'level': 'info'})
                 payload = {'panel': 'status'}
                 job = dict(job, state='applied', response=json.dumps(response, ensure_ascii=False))
                 with self.db() as db:
@@ -354,13 +397,20 @@ class Bot:
                 revision = payload['applied_revision']
                 stopping = any(c['state'] == 'pausing' for c in view['controls'].values())
                 item = self.settings.read()
-                obsolete = bool(item.get('error') or item['revision'] != revision)
-                ready = view['running'] and not view['configuration'].get('pending') and view['configuration'].get('applied_revision') == revision and not stopping
-                if not ready and not obsolete:
+                # Completing a drain saves enabled=False, which naturally changes
+                # the revision. Acknowledge the actual stopped state once applied.
+                drained = (changes == {'backup': {'stop_after_current': True}} and
+                           not item.get('error') and not item['config']['backup']['enabled'])
+                expected = item['revision'] if drained else revision
+                obsolete = bool(item.get('error') or (not drained and item['revision'] != revision))
+                ready = view['running'] and not view['configuration'].get('pending') and view['configuration'].get('applied_revision') == expected and not stopping
+                draining = changes == {'backup': {'stop_after_current': True}} and not drained
+                if (not ready or draining) and not obsolete:
                     with self.db() as db:
                         db.execute('UPDATE bot_jobs SET retry_at=? WHERE id=?', (time.time() + 1, job['id']))
                     return False
-                notice = {'title': '设置已变更', 'detail': '本次回执已失效，请查看当前状态。', 'level': 'info'} if obsolete else settings_result(changes, True, False)
+                notice = {'title': '设置已变更', 'detail': '本次回执已失效，请查看当前状态。', 'level': 'info'} if obsolete else settings_result(
+                    {'backup': {'enabled': False}} if drained else changes, True, False)
                 response = self.panel(payload.get('page', payload.get('form', 'status')), notice)
                 payload['wait_for_apply'] = False
                 with self.db() as db:
@@ -419,7 +469,7 @@ class Bot:
                                 break
                             time.sleep(.2)
                         notice = settings_result(changes, applied, stopping)
-                        waiting = not applied or stopping
+                        waiting = not applied or stopping or changes == {'backup': {'stop_after_current': True}}
                         payload.update(changes_applied=changes, applied_revision=item['revision'], wait_for_apply=waiting)
                         if applied and changes.get('backup', {}).get('enabled') is True and item['config']['notifications']['enabled']:
                             # The notification worker owns the single live progress card.
@@ -483,6 +533,13 @@ def serve(settings, directory):
     import lark_oapi as lark
     from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTriggerResponse
     bot = Bot(settings, directory)
+    from .credentials import prune
+    item = settings.read()
+    if not item['error']:
+        try:
+            prune(settings.path.parent, item['config'].get('archive', {}).get('credential_id'))
+        except (ConfigError, OSError):
+            logging.warning('过期凭据草稿暂未清理，当前配置保持不变')
     def message(event):
         bot.receive_message(json.loads(lark.JSON.marshal(event)))
     def callback(event):

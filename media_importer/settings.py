@@ -51,7 +51,7 @@ class Settings:
         text = self.path.read_text(encoding="utf-8")
         result = {"document": text, "revision": revision(text), "config": None, "error": None}
         try:
-            result["config"] = Config.from_dict(json.loads(text, object_pairs_hook=_unique_object)).values
+            result["config"] = Config.from_dict(json.loads(text, object_pairs_hook=_unique_object), self.path.parent).values
             result['source_hint'] = dict(result['config']['source'])
             from .source_connection import selected
             result['config']['source'] = selected(self.directory, result['config']['source'])
@@ -68,14 +68,16 @@ class Settings:
         return self.update_preferences({"backup": {"enabled": enabled}})
 
     def update_preferences(self, changes, expected=None):
-        allowed = {"backup": {"enabled", "delete_source_after_import", "stop_after_current", "media_scope", "source_transport", "archive_previews"},
+        allowed = {"backup": {"enabled", "delete_source_after_import", "stop_after_current", "media_scope", "source_transport", "archive_previews",
+                              "poll_seconds", "retry_seconds", "stability_seconds"},
                    "limits": {"upload_mib_per_second", "min_free_disk_gib", "max_cache_gib"},
-                   "notifications": {"enabled", "connection_events", "progress_interval_seconds", "keyword"}}
+                   "notifications": {"enabled", "connection_events", "progress_interval_seconds", "keyword"},
+                   "source_options": {"url", "serial", "timeout_seconds", "request_attempts"}}
         if not isinstance(changes, dict) or not changes:
             raise ConfigError("未提供要保存的设置")
         for group, updates in changes.items():
             if group not in allowed or not isinstance(updates, dict) or set(updates) - allowed[group]:
-                raise ConfigError("此入口只能修改日常设置；连接与凭据请编辑 .env")
+                raise ConfigError("此入口不支持该参数，请通过对应设置卡片操作")
         with self.lock():
             item = self.read()
             if item["error"]:
@@ -83,6 +85,19 @@ class Settings:
             if expected is not None and item["revision"] != expected:
                 raise Conflict("设置已经变化，请获取新的设置卡片后再操作")
             values = preferences(item["config"])
+            if changes.get("backup", {}).get("stop_after_current") and not values["backup"]["enabled"]:
+                raise ConfigError("同步已经停止，无需等待当前文件")
+            if "source_options" in changes:
+                from .archive_settings import _stopped
+                from .store import Store
+                if not (self.directory / 'state.sqlite3').is_file():
+                    raise ConfigError("本机任务目录不可访问，请恢复原磁盘后再修改相机连接")
+                store = Store(self.directory)
+                try:
+                    _stopped(store, item)
+                finally:
+                    store.close()
+                values.setdefault("source_options", {key: item['source_hint'][key] for key in allowed["source_options"]})
             previous_transport = values["backup"]["source_transport"]
             for group, updates in changes.items():
                 values[group].update(updates)
@@ -91,6 +106,7 @@ class Settings:
             if "enabled" in changes.get("backup", {}) or not values["backup"]["enabled"]:
                 values["backup"]["stop_after_current"] = False
             checked = runtime_config(values)
+            Config.from_dict(checked, self.path.parent)  # Validate adapter fields before saving.
             atomic_write(self.path, json.dumps(checked, ensure_ascii=False, indent=2) + "\n")
             return self.read()
 

@@ -1,4 +1,4 @@
-"""Runtime preferences and optional archive overrides; credentials stay in the environment."""
+"""Runtime preferences and checked connection overrides; passwords stay in local files."""
 import json
 import math
 from dataclasses import dataclass
@@ -55,18 +55,30 @@ DEFAULTS = {
 def runtime_config(raw):
     if not isinstance(raw, dict) or type(raw.get("version")) is not int or raw["version"] != 4:
         raise ConfigError("settings.json 必须使用 version: 4；请先停止服务并运行一次性迁移")
-    values = _merge({k: v for k, v in raw.items() if k != "archive"}, DEFAULTS)
+    values = _merge({k: v for k, v in raw.items() if k not in ("archive", "source_options")}, DEFAULTS)
+    if "source_options" in raw:
+        options = _merge(raw["source_options"],
+                         {"url": "", "serial": "", "timeout_seconds": 20, "request_attempts": 3},
+                         "source_options.")
+        values["source_options"] = options
     if "archive" in raw:
         archive = raw["archive"]
-        if not isinstance(archive, dict) or set(archive) != {"host", "port", "share", "directory", "id", "change_id"}:
+        required = {"host", "port", "share", "directory", "id", "change_id"}
+        optional = {"name": "", "username": "", "domain": "", "credential_id": ""}
+        if (not isinstance(archive, dict) or not required.issubset(archive)
+                or set(archive) - required - set(optional)):
             raise ConfigError("archive 格式无效，请通过飞书重新配置归档位置")
-        archive = _merge(archive, {"host": "", "port": 445, "share": "", "directory": "", "id": "", "change_id": ""}, "archive.")
+        archive = _merge(archive, {"host": "", "port": 445, "share": "", "directory": "", "id": "", "change_id": "",
+                                  **{key: default for key, default in optional.items() if key in archive}}, "archive.")
         if len(archive["change_id"]) != 32 or any(c not in "0123456789abcdef" for c in archive["change_id"]):
             raise ConfigError("archive.change_id 无效")
         if not (archive["id"] and len(archive["id"]) <= 2048):
             raise ConfigError("archive.id 无效，请通过飞书重新配置归档位置")
         if any(ord(c) < 32 for value in archive.values() if isinstance(value, str) for c in value):
             raise ConfigError("归档位置不能包含控制字符")
+        if "credential_id" in archive:
+            from .credentials import credential_path
+            credential_path(".", archive["credential_id"])
         values["archive"] = archive
     if values["backup"]["media_scope"] not in MEDIA_SCOPES:
         raise ConfigError("backup.media_scope 必须为 all、video 或 photo")
@@ -85,7 +97,7 @@ def runtime_config(raw):
 
 
 def preferences(values):
-    return {key: values[key] for key in (*DEFAULTS, "archive") if key in values}
+    return {key: values[key] for key in (*DEFAULTS, "archive", "source_options") if key in values}
 
 
 @dataclass(frozen=True)
@@ -98,17 +110,28 @@ class Config:
             raw = json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
         except (OSError, ValueError) as exc:
             raise ConfigError(f"无法读取 JSON 配置: {exc}") from exc
-        return cls.from_dict(raw)
+        return cls.from_dict(raw, Path(path).parent)
 
     @classmethod
-    def from_dict(cls, raw):
+    def from_dict(cls, raw, config_directory=None):
         from .deployment import connections
         data = {**runtime_config(raw), **connections()}
         if "archive" in data:
-            data["destination"].update({k: data["archive"][k] for k in ("host", "port", "share", "directory")})
+            data["destination"].update({k: data["archive"][k] for k in
+                                       ("host", "port", "share", "directory", "name", "username", "domain")
+                                       if k in data["archive"]})
             data["destination"]["archive_id"] = data["archive"]["id"]
+            if "credential_id" in data["archive"]:
+                from .credentials import credential_path
+                if config_directory is None:
+                    import os
+                    config_directory = Path(os.environ.get("MEDIA_IMPORTER_CONFIG", "/config/settings.json")).parent
+                data["destination"]["credential_file"] = str(credential_path(config_directory, data["archive"]["credential_id"]))
+        if "source_options" in data:
+            data["source"].update(data["source_options"])
         # Existing installations retain their .env source choice until the first
-        # saved preference. Source connection and credentials remain in .env.
+        # saved preference. Initial connection values remain in .env;
+        # checked overrides and credential references live in settings.
         data["source"]["transport"] = raw.get("backup", {}).get("source_transport", data["source"]["transport"])
         return cls.from_values(data)
 

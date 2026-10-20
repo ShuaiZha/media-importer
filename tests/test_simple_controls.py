@@ -129,7 +129,7 @@ class SimpleControlsTests(unittest.TestCase):
         self.bot.receive_message(self.message('private example value'))
         self.bot.process_one()
         response = json.dumps(self.sender.call_args.args[1],ensure_ascii=False)
-        self.assertIn('配置文件',response)
+        self.assertIn('设置中可修改',response)
         self.assertIn('设置',response)
         self.assertNotIn('private example value',response)
 

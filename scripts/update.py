@@ -265,6 +265,12 @@ def perform(root, manifest):
         for source, name in ((paths['/run/media-importer.env'], 'connection.env'), (settings, 'settings.json'),
                              (root / 'compose.yaml', 'compose.yaml')):
             shutil.copyfile(source, backup / name); os.chmod(backup / name, 0o600)
+        # Configuration may reference passwords saved by Feishu. Snapshot them
+        # inside Linux with the target image, alongside the read-only settings.
+        if (paths['/config'] / 'credentials').is_dir():
+            image_python(root, manifest['image'],
+                         "from media_importer.credentials import copy_credentials; copy_credentials('/config', '/output')",
+                         [(paths['/config'], '/config', True), (backup, '/output', False)])
         if override.exists():
             shutil.copyfile(override, backup / 'compose.override.yaml')
         git('archive', '--format=tar', '--output=' + str(backup / 'source.tar'), 'HEAD')

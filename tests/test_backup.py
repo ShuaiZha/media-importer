@@ -85,6 +85,26 @@ class BackupTests(unittest.TestCase):
             export(self.store.directory, self.settings, self.credentials, self.bundle)
         self.assertFalse((self.bundle / 'manifest.json').exists())
 
+    def test_remote_credentials_are_in_portable_manifest_and_resolve_after_moving(self):
+        from media_importer.credentials import stage, copy_credentials
+        from media_importer.deployment import destination_password
+        from media_importer.config import Config
+        identifier = 'c' * 32
+        stage(self.settings.parent, identifier, 'backup-fixture-secret')
+        values = json.loads(self.settings.read_text())
+        values['archive'] = {**{k: self.config.destination[k] for k in ('host', 'port', 'share', 'directory')},
+                             'id': self.config.destination_id, 'change_id': 'd' * 32, 'credential_id': identifier}
+        self.settings.write_text(json.dumps(values))
+        self.make_bundle()
+        manifest = verify(self.bundle)
+        self.assertIn('credentials/' + identifier + '.json', [entry['path'] for entry in manifest['entries']])
+        target = self.root / 'new-computer'; target.mkdir()
+        shutil.copy2(self.bundle / 'settings.json', target / 'settings.json')
+        copy_credentials(self.bundle, target)
+        loaded = Config.load(target / 'settings.json')
+        self.assertEqual('backup-fixture-secret', destination_password(loaded.destination))
+        self.assertTrue(loaded.destination['credential_file'].startswith(str(target)))
+
     def test_live_worker_lock_blocks_export(self):
         with worker_lock(self.store.directory) as acquired:
             self.assertTrue(acquired)

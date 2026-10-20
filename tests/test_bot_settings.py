@@ -27,19 +27,26 @@ class SettingsFormsTests(TestCase):
     def submit(self, page, fields, event='form'):
         panel = self.bot.panel(page)
         form = next(e for e in panel['elements'] if e['tag'] == 'form')
+        if page in ('transfer_settings', 'advanced_settings'):
+            fields = {**{f['name']: f['default_value'] for f in form['elements'] if f['tag'] == 'input'}, **fields}
+        if page == 'destination_settings':
+            target = self.settings.read()['config']['destination']
+            fields = {**{key: target[key] for key in ('name', 'username', 'domain')}, 'password': '', **fields}
         return self.bot.receive_card(self.callback(form['elements'][-1]['value'], event_id=event, fields=fields))
 
     def process(self):
         with patch('media_importer.bot.time.monotonic', side_effect=[1, 6]):
             return self.bot.process_one()
 
-    def test_settings_entry_exposes_four_sections_without_secrets(self):
+    def test_settings_entry_exposes_sections_without_secrets(self):
         self.bot.receive_message(self.message('设置'))
         self.process()
         result = json.dumps(self.sender.call_args.args[1], ensure_ascii=False)
-        for title in ('素材与清理', '传输与缓存', '消息通知', '归档位置'):
+        for title in ('素材与清理', '传输与缓存', '消息通知', '归档存储', '相机连接', '本机目录'):
             self.assertIn(title, result)
-        for page in ('transfer_settings', 'notification_settings', 'destination_settings'):
+        self.assertNotIn('"tag": "button"', result)
+        self.assertIn('底部菜单', result)
+        for page in ('transfer_settings', 'notification_settings', 'destination_settings', 'source_settings', 'advanced_settings', 'local_storage'):
             result += json.dumps(self.bot.panel(page), ensure_ascii=False)
         for secret in (test_bot.ENV['DESTINATION_PASSWORD'], test_bot.ENV['FEISHU_APP_SECRET']):
             self.assertNotIn(secret, result)
@@ -49,22 +56,31 @@ class SettingsFormsTests(TestCase):
         row = self.store.files()[0]
         path = self.store.cached_path(row); path.write_bytes(b'complete-test-cache')
         before = self.store.files()
-        fields = {'upload_mib_per_second': '0.5', 'max_cache_gib': '20', 'min_free_disk_gib': '5'}
+        fields = {'upload_mib_per_second': '0.5', 'max_cache_gib': '20', 'min_free_disk_gib': '5',
+                  'poll_seconds': '15', 'retry_seconds': '45', 'stability_seconds': '3'}
         self.assertEqual('info', self.submit('transfer_settings', fields)['toast']['type'])
         self.process()
         values = self.settings.read()['config']
         self.assertEqual({'upload_mib_per_second': .5, 'max_cache_gib': 20, 'min_free_disk_gib': 5}, values['limits'])
         self.assertFalse(values['backup']['enabled'])
         self.assertFalse(values['backup']['delete_source_after_import'])
+        self.assertEqual(45, values['backup']['retry_seconds'])
+        self.assertEqual(15, values['backup']['poll_seconds'])
+        self.assertEqual(3, values['backup']['stability_seconds'])
         self.assertEqual(before, self.store.files())
         self.assertEqual(b'complete-test-cache', path.read_bytes())
         self.assertIn('等待生效', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         control = Control(self.settings, threading.Event()); control.adopt()
         self.assertEqual(self.settings.read()['revision'], control.state()['applied_revision'])
+        result = settings_result({'limits': values['limits'], 'backup': {
+            key: values['backup'][key] for key in ('poll_seconds', 'retry_seconds', 'stability_seconds')}}, True, False)
+        self.assertEqual('传输与缓存已生效', result['title'])
+        self.assertIn('0.5 MiB/s', result['detail'])
+        self.assertIn('45 秒', result['detail'])
 
     def test_all_settings_inputs_fit_feishu_card_limits(self):
         # Feishu rejects the entire card when any input exceeds its 1–1000 limit.
-        for page in ('transfer_settings', 'notification_settings', 'destination_settings'):
+        for page in ('transfer_settings', 'notification_settings', 'destination_settings', 'source_settings', 'advanced_settings'):
             panel = self.bot.panel(page)
             fields = next(e for e in panel['elements'] if e['tag'] == 'form')['elements']
             for field in fields:
@@ -73,12 +89,26 @@ class SettingsFormsTests(TestCase):
                         self.assertGreaterEqual(field['max_length'], 1)
                         self.assertLessEqual(field['max_length'], 1000)
 
+    def test_forms_use_client_rendered_elements(self):
+        # An accepted API payload can still render without its entire form.
+        # Keep descriptive text outside forms; use the controls verified in the client.
+        for page in ('transfer_settings', 'notification_settings', 'destination_settings', 'source_settings'):
+            with self.subTest(page=page):
+                fields = next(e for e in self.bot.panel(page)['elements'] if e['tag'] == 'form')['elements']
+                self.assertTrue(all(e['tag'] in ('input', 'select_static', 'button') for e in fields))
+                self.assertEqual('form_submit', fields[-1]['action_type'])
+        fields = next(e for e in self.bot.panel('transfer_settings')['elements'] if e['tag'] == 'form')['elements']
+        from media_importer.bot_settings import LIMIT_FIELDS, INTERVAL_FIELDS
+        self.assertEqual(LIMIT_FIELDS | INTERVAL_FIELDS, {e['name'] for e in fields if e['tag'] == 'input'})
+
     def test_invalid_or_unknown_fields_are_rejected_before_persistence(self):
         before = self.path.read_bytes()
         fields = {'upload_mib_per_second': '1', 'max_cache_gib': '50', 'min_free_disk_gib': '10'}
         for bad in ('nan', '-1', 'inf', '', 'not-a-number'):
             self.assertEqual('error', self.submit('transfer_settings', {**fields, 'max_cache_gib': bad}, bad)['toast']['type'])
         self.assertEqual('error', self.submit('transfer_settings', {**fields, 'password': 'never-store-this'})['toast']['type'])
+        for key, value in (('poll_seconds', '0'), ('retry_seconds', 'nan'), ('stability_seconds', '61')):
+            self.assertEqual('error', self.submit('transfer_settings', {**fields, key: value}, key)['toast']['type'])
         self.assertEqual(before, self.path.read_bytes())
         with self.bot.db() as db:
             self.assertFalse(db.execute('SELECT 1 FROM bot_jobs').fetchone())
@@ -99,7 +129,8 @@ class SettingsFormsTests(TestCase):
     def test_old_form_cannot_overwrite_new_settings_and_duplicate_delivery_applies_once(self):
         panel = self.bot.panel('transfer_settings')
         token = next(e for e in panel['elements'] if e['tag'] == 'form')['elements'][-1]['value']
-        fields = {'upload_mib_per_second': '1', 'max_cache_gib': '40', 'min_free_disk_gib': '5'}
+        fields = {'upload_mib_per_second': '1', 'max_cache_gib': '40', 'min_free_disk_gib': '5',
+                  'poll_seconds': '10', 'retry_seconds': '30', 'stability_seconds': '2'}
         self.settings.update_preferences({'limits': {'max_cache_gib': 60}})
         self.bot.receive_card(self.callback(token, fields=fields)); self.process()
         self.assertEqual(60, self.settings.read()['config']['limits']['max_cache_gib'])
@@ -110,6 +141,47 @@ class SettingsFormsTests(TestCase):
         self.submit('transfer_settings', fields, 'new')  # duplicate event id
         self.assertFalse(self.process())
         self.assertEqual(70, self.settings.read()['config']['limits']['max_cache_gib'])
+
+    def test_previous_forms_remain_scoped_and_new_form_cannot_change_safety_switches(self):
+        before = copy.deepcopy(self.settings.read()['config']['backup'])
+        token = self.bot.action({'settings_form': 'transfer_settings', 'settings_version': 2},
+                                self.settings.read()['revision'])
+        fields = {'upload_mib_per_second': '1', 'max_cache_gib': '40', 'min_free_disk_gib': '5'}
+        self.assertEqual('info', self.bot.receive_card(self.callback(token, fields=fields))['toast']['type'])
+        self.process()
+        self.assertEqual(before, self.settings.read()['config']['backup'])
+        token = self.bot.action({'settings_form': 'advanced_settings', 'settings_version': 2},
+                                self.settings.read()['revision'])
+        self.bot.receive_card(self.callback(token, event_id='old-intervals', fields={
+            'poll_seconds': '20', 'retry_seconds': '40', 'stability_seconds': '3'}))
+        self.process()
+        self.assertEqual(40, self.settings.read()['config']['backup']['retry_seconds'])
+        from media_importer.bot import Bot
+        from media_importer.bot_settings import LIMIT_FIELDS, INTERVAL_FIELDS
+        changes = {'limits': {k: 1 for k in LIMIT_FIELDS}, 'backup': {k: 1 for k in INTERVAL_FIELDS}}
+        self.assertTrue(Bot.supported({'settings_version': 3, 'changes': changes}))
+        changes['backup']['delete_source_after_import'] = True
+        self.assertFalse(Bot.supported({'settings_version': 3, 'changes': changes}))
+        self.assertEqual('error', self.submit('transfer_settings', {**fields, 'enabled': 'true'}, 'unsafe')['toast']['type'])
+
+    def test_bottom_menu_commands_cover_all_entries_without_navigation_side_effects(self):
+        entries = {'运行状态': 'status', '本机目录': 'local_storage', '素材与清理': 'media_settings',
+                   '传输与缓存': 'transfer_settings', '消息通知': 'notification_settings',
+                   '相机连接': 'source_settings', '归档存储': 'destination_settings'}
+        before = self.path.read_bytes()
+        for command, page in entries.items():
+            self.assertTrue(self.bot.receive_message(self.message(command, event_id=command)))
+            with self.bot.db() as db:
+                payload = json.loads(db.execute('SELECT payload FROM bot_jobs WHERE id=?', ('message:' + command,)).fetchone()[0])
+            self.assertEqual(page, payload['panel'])
+            self.assertNotIn('changes', payload)
+        self.assertEqual(before, self.path.read_bytes())
+        for command, changes in (('开启同步', {'enabled': True}), ('立即停止', {'enabled': False}),
+                                 ('当前文件完成后停止', {'stop_after_current': True})):
+            self.assertTrue(self.bot.receive_message(self.message(command, event_id=command)))
+            with self.bot.db() as db:
+                payload = json.loads(db.execute('SELECT payload FROM bot_jobs WHERE id=?', ('message:' + command,)).fetchone()[0])
+            self.assertEqual(changes, payload['changes']['backup'])
 
 
 class ArchiveSettingsTests(SettingsFormsTests):

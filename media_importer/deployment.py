@@ -70,7 +70,10 @@ def connections():
     }
 
 
-def destination_password():
+def destination_password(destination=None):
+    if destination and destination.get("credential_file"):
+        from .credentials import read
+        return read(destination["credential_file"])
     return text(environment(), "DESTINATION_PASSWORD", required=True)
 
 
