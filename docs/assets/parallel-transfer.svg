@@ -1,62 +1,60 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="320" viewBox="0 0 960 320" role="img" aria-labelledby="title description">
-  <title id="title">第一个文件导入完成即可上传</title>
-  <desc id="description">来源设备通过 USB 导入本地缓存，完整文件上传 SMB。下方时间轴中，导入 A 完成后开始上传 A，同时导入 B、C。两路各处理一个文件，示意宽度不代表实际速度。</desc>
-  <style>
-    :root { color-scheme: light dark; }
-    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; }
-    .bg { fill: #f6f8fa; }
-    .node { fill: #ffffff; stroke: #d0d7de; }
-    .title { fill: #1f2328; font-size: 18px; font-weight: 600; }
-    .note { fill: #59636e; font-size: 14px; }
-    .line { stroke: #8c959f; fill: none; stroke-width: 1.5; }
-    .arrow { fill: #8c959f; }
-    .import { fill: #ddf4ff; stroke: #54aeff; }
-    .upload { fill: #dafbe1; stroke: #4ac26b; }
-    .importText { fill: #0550ae; font-size: 17px; font-weight: 600; }
-    .uploadText { fill: #116329; font-size: 17px; font-weight: 600; }
-    @media (prefers-color-scheme: dark) {
-      .bg { fill: #161b22; }
-      .node { fill: #212830; stroke: #3d444d; }
-      .title { fill: #f0f6fc; }
-      .note { fill: #b1bac4; }
-      .import { fill: #122c46; stroke: #388bfd; }
-      .upload { fill: #122d20; stroke: #3fb950; }
-      .importText { fill: #79c0ff; }
-      .uploadText { fill: #7ee787; }
-    }
-  </style>
-  <rect class="bg" width="960" height="320" rx="12"/>
-  <rect class="node" x="32" y="24" width="236" height="68" rx="8"/>
-  <text class="title" x="150" y="53" text-anchor="middle">来源设备</text>
-  <text class="note" x="150" y="77" text-anchor="middle">当前适配 GoPro USB</text>
-  <path class="line" d="M282 58H346"/><path class="arrow" d="m346 54 8 4-8 4z"/>
-  <rect class="node" x="362" y="24" width="236" height="68" rx="8"/>
-  <text class="title" x="480" y="53" text-anchor="middle">本地缓存</text>
-  <text class="note" x="480" y="77" text-anchor="middle">内置磁盘 / 外接 SSD</text>
-  <path class="line" d="M612 58H676"/><path class="arrow" d="m676 54 8 4-8 4z"/>
-  <rect class="node" x="692" y="24" width="236" height="68" rx="8"/>
-  <text class="title" x="810" y="53" text-anchor="middle">SMB 归档</text>
-  <text class="note" x="810" y="77" text-anchor="middle">NAS / 电脑共享</text>
-  <text class="note" x="218" y="127">时间</text>
-  <path class="line" d="M256 122H920"/><path class="arrow" d="m920 118 8 4-8 4z"/>
-  <text class="title" x="32" y="174">导入队列</text>
-  <text class="note" x="32" y="196">来源 → 本地</text>
-  <rect class="import" x="218" y="151" width="162" height="48" rx="6"/>
-  <rect class="import" x="388" y="151" width="162" height="48" rx="6"/>
-  <rect class="import" x="558" y="151" width="162" height="48" rx="6"/>
-  <text class="importText" x="299" y="181" text-anchor="middle">导入 A</text>
-  <text class="importText" x="469" y="181" text-anchor="middle">导入 B</text>
-  <text class="importText" x="639" y="181" text-anchor="middle">导入 C</text>
-  <text class="title" x="32" y="246">上传队列</text>
-  <text class="note" x="32" y="268">完整缓存 → SMB</text>
-  <path class="line" d="M384 141V278" stroke-dasharray="4 4"/>
-  <rect class="upload" x="388" y="223" width="244" height="48" rx="6"/>
-  <rect class="upload" x="640" y="223" width="162" height="48" rx="6"/>
-  <rect class="upload" x="810" y="223" width="118" height="48" rx="6"/>
-  <text class="uploadText" x="510" y="253" text-anchor="middle">上传 A</text>
-  <text class="uploadText" x="721" y="253" text-anchor="middle">上传 B</text>
-  <text class="uploadText" x="869" y="253" text-anchor="middle">上传 C</text>
-  <text class="note" x="398" y="216">A 完整后，上传与后续导入同时进行</text>
-  <text class="note" x="32" y="301">每路各处理一个文件，无需等待整批导入。</text>
-  <text class="note" x="928" y="301" text-anchor="end">示意时序，不代表实际耗时</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="334" viewBox="0 0 880 334" role="img" aria-labelledby="title description">
+<title id="title">导入与上传并行进行</title>
+<desc id="description">导入队列依次将相机文件 A、B、C 写入本地缓存；A 完整导入后立即进入上传队列，与 B、C 的导入并行。每路各处理一个文件，示意宽度不代表实际耗时。</desc>
+<style>
+/* Font: LXGW WenKai, SIL OFL 1.1; see LXGW-WenKai-OFL.txt.
+   After changing labels, run scripts/embed_diagram_fonts.py. */
+/* embedded-font:start */
+@font-face { font-family: 'Media Importer Sketch'; src: url(data:font/woff2;base64,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) format('woff2'); }
+/* embedded-font:end */
+:root{color-scheme:light dark}
+text{font-family:'Media Importer Sketch','Kaiti SC','STKaiti',cursive;fill:#252c36}
+.paper{fill:#fff}.blue{fill:#e7efff}.green{fill:#e5f4e9}.gold{fill:#fff2c8}
+.heading{font-size:29px;font-weight:600}.label{font-size:22px}.body{font-size:19px}.note{font-size:17px;fill:#5f6876}
+.outline,.line,.echo{stroke:#38404c;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
+.line,.echo{fill:none}.echo{opacity:.32;stroke-width:.9}.guide{stroke:#8895a8;fill:none;stroke-width:1.25;stroke-dasharray:4 7}
+.marker{stroke:#f6e5a6;stroke-width:11;opacity:.8;fill:none;stroke-linecap:round}.accent{fill:#345c9a}
+@media(prefers-color-scheme:dark){
+.paper{fill:#0d1117}.blue{fill:#182e4c}.green{fill:#17392a}.gold{fill:#3a321b}
+text{fill:#e7eaf0}.note{fill:#aab4c3}.outline,.line,.echo{stroke:#c5cedb}.guide{stroke:#8390a3}
+.marker{stroke:#705f26;opacity:.7}.accent{fill:#9bbdf3}
+}
+</style>
+<rect class="paper" width="880" height="334"/>
+<path class="marker" d="M28.0 49.0C58.0 48.0 88.0 48.6 118.0 50.0C153.7 49.0 189.3 49.2 225.0 48.0"/>
+<text class="heading" x="28" y="42">边导入，边上传</text>
+<text class="body" x="28" y="76">首个文件完整导入后，上传随即开始</text>
+<text class="label" x="28" y="155">导入</text>
+<text class="note" x="28" y="181">相机 → 本地缓存</text>
+<text class="label" x="28" y="243">上传</text>
+<text class="note" x="28" y="269">完整缓存 → SMB</text>
+<path class="blue outline" d="M221 129.1C253.0 129.1 305.0 130.9 337 129.5Q344 130 343.5 137C343.1 149.6 344.9 172.0 344.4 180Q344 186 337 186.4C299.8 185.1 256.9 186.9 221 185.5Q214 186 213.5 179C213.1 167.0 214.9 148.5 214.4 137Q214 130 221 129.1Z"/>
+<path class="echo" d="M221 129.2C253.0 130.6 305.0 130.8 337 130.3Q344 130 344.3 137C344.6 149.6 344.8 172.0 343.4 180Q344 186 337 185.4C299.8 185.2 256.9 185.4 221 186.3Q214 186 214.3 179C213.2 167.0 213.4 148.5 213.4 137Q214 130 221 129.2Z"/>
+<text class="label" x="279.0" y="165.0" text-anchor="middle">文件 A</text>
+<path class="blue outline" d="M363 130.1C395.0 129.9 447.0 129.9 479 129.8Q486 130 485.8 137C485.9 149.6 485.9 172.0 486.8 180Q486 186 479 186.8C441.8 186.1 398.9 186.1 363 185.8Q356 186 355.8 179C356.1 167.0 356.1 148.5 356.8 137Q356 130 363 130.1Z"/>
+<path class="echo" d="M363 129.0C395.0 128.8 447.0 131.0 479 130.8Q486 130 486.8 137C484.8 149.6 487.0 172.0 485.8 180Q486 186 479 185.8C441.8 185.0 398.9 187.2 363 186.8Q356 186 356.8 179C355.0 167.0 357.2 148.5 355.8 137Q356 130 363 129.0Z"/>
+<text class="label" x="421.0" y="165.0" text-anchor="middle">文件 B</text>
+<path class="blue outline" d="M505 129.3C537.0 129.6 589.0 130.7 621 129.8Q628 130 627.8 137C627.6 149.6 628.7 172.0 628.7 180Q628 186 621 186.7C583.8 185.3 540.9 186.4 505 185.8Q498 186 497.8 179C497.3 167.0 498.4 148.5 498.7 137Q498 130 505 129.3Z"/>
+<path class="echo" d="M505 129.3C537.0 129.3 589.0 130.7 621 130.2Q628 130 628.2 137C627.3 149.6 628.7 172.0 628.1 180Q628 186 621 186.1C583.8 185.3 540.9 186.7 505 186.2Q498 186 498.2 179C497.3 167.0 498.7 148.5 498.1 137Q498 130 505 129.3Z"/>
+<text class="label" x="563.0" y="165.0" text-anchor="middle">文件 C</text>
+<text class="body" x="742" y="163" text-anchor="middle">后续文件…</text>
+<path class="line" stroke-dasharray="5 6" d="M651.0 158.0C659.7 159.3 668.3 158.9 677.0 158.0"/>
+<path class="line" d="M669.0 162.1C671.5 160.4 673.9 158.6 677.0 158.0C674.8 155.8 672.3 154.1 669.0 153.9"/>
+<path class="green outline" d="M363 216.9C402.8 218.6 465.2 219.1 505 218.7Q512 218 512.7 225C512.6 237.6 513.1 260.0 512.2 268Q512 274 505 274.2C459.0 272.9 407.5 273.4 363 274.7Q356 274 356.7 267C354.9 255.0 355.4 236.5 356.2 225Q356 218 363 216.9Z"/>
+<path class="echo" d="M363 217.3C402.8 218.7 465.2 218.7 505 218.4Q512 218 512.4 225C512.7 237.6 512.7 260.0 511.5 268Q512 274 505 273.5C459.0 273.3 407.5 273.3 363 274.4Q356 274 356.4 267C355.3 255.0 355.3 236.5 355.5 225Q356 218 363 217.3Z"/>
+<text class="label" x="434.0" y="253.0" text-anchor="middle">文件 A</text>
+<path class="green outline" d="M533 218.3C572.8 217.3 635.2 217.7 675 217.2Q682 218 681.2 225C681.3 237.6 681.7 260.0 681.7 268Q682 274 675 273.7C629.0 274.3 577.5 274.7 533 273.2Q526 274 525.2 267C526.3 255.0 526.7 236.5 525.7 225Q526 218 533 218.3Z"/>
+<path class="echo" d="M533 217.6C572.8 217.8 635.2 218.4 675 218.3Q682 218 682.3 225C681.8 237.6 682.4 260.0 682.5 268Q682 274 675 274.5C629.0 273.6 577.5 274.2 533 274.3Q526 274 526.3 267C525.6 255.0 526.2 236.5 526.5 225Q526 218 533 217.6Z"/>
+<text class="label" x="604.0" y="253.0" text-anchor="middle">文件 B</text>
+<path class="green outline" d="M703 219.1C742.8 219.1 805.2 216.9 845 218.9Q852 218 852.9 225C853.1 237.6 850.9 260.0 852.5 268Q852 274 845 274.5C799.0 275.1 747.5 272.9 703 274.9Q696 274 696.9 267C697.1 255.0 694.9 236.5 696.5 225Q696 218 703 219.1Z"/>
+<path class="echo" d="M703 217.5C742.8 217.2 805.2 218.5 845 218.2Q852 218 852.2 225C851.2 237.6 852.5 260.0 852.1 268Q852 274 845 274.1C799.0 273.5 747.5 274.8 703 274.2Q696 274 696.2 267C695.5 255.0 696.8 236.5 696.1 225Q696 218 703 217.5Z"/>
+<text class="label" x="774.0" y="253.0" text-anchor="middle">文件 C</text>
+<text class="note" x="279" y="251" text-anchor="middle">等待 A 完整</text>
+<path class="guide" d="M349.0 113.0C348.8 138.7 350.8 164.3 350.0 190.0C350.5 221.3 348.2 252.7 349.0 284.0"/>
+<text class="note" x="361" y="109">A 完整</text>
+<text class="body" x="356" y="310">上传 A 的同时，继续导入 B、C</text>
+<text class="note" x="852" y="310" text-anchor="end">时长仅为示意</text>
+<text class="note" x="801" y="106" text-anchor="end">时间</text>
+<path class="line" d="M812.0 101.0C825.0 101.6 838.0 102.2 851.0 102.0"/>
+<path class="line" d="M842.9 105.9C845.1 103.6 848.2 103.0 851.0 102.0C848.9 99.6 845.9 98.8 843.1 97.7"/>
 </svg>

@@ -14,33 +14,37 @@
 - **自动整理**：按设备平铺归档，保留原文件名，重名加后缀；归档成功后清理缓存。
 - **飞书控制**：确认设备、启停同步、接收进度与结果，可选完整导入后删除原片。
 
-![导入与上传并行：A 完整缓存后开始上传，B、C 同时继续导入](docs/assets/parallel-transfer.svg)
+![并行传输：文件 A 完整导入本地后开始上传，同时继续导入文件 B、C](docs/assets/parallel-transfer.svg)
 
 目前接入 **GoPro USB、SMB、飞书单聊**。HERO9 Black 已完成实机验证，其他机型与平台的验证范围见[兼容性表](docs/compatibility.md)。每个实例处理一台来源设备和一个目的地。
 
 ## 快速开始
 
-准备 USB 数据线、可读写的 SMB 共享和[飞书应用凭据](docs/feishu.md#1-准备应用与凭据)，选择一种部署方式。
+准备 USB 数据线、可读写的 SMB 共享和[飞书应用凭据](docs/feishu.md#1-准备应用与凭据)。**以下两种部署方式任选其一，功能相同。**
 
-### 原生 CLI
+### 部署方式一：原生 CLI
 
-macOS / Linux，无需 Docker 或系统 Python：
+适合直接在电脑上运行，无需 Docker 或另装 Python。
+
+**macOS / Linux**
 
 ```sh
 curl -fsSL https://github.com/ShuaiZha/media-importer/releases/latest/download/install-native.sh | sh
 ```
 
-Windows PowerShell：
+**Windows · PowerShell**
 
 ```powershell
 & ([scriptblock]::Create((Invoke-RestMethod 'https://github.com/ShuaiZha/media-importer/releases/latest/download/install-native.ps1')))
 ```
 
-命令会下载对应平台的正式安装包并启动配置向导。更新使用 `media-importer update`，卸载使用 `media-importer uninstall`。[完整说明 →](docs/native.md)
+安装命令会下载对应平台的正式包，并引导填写缓存、SMB 和飞书配置。完成后用 `media-importer status` 检查后台；若找不到命令，按安装输出设置 PATH。
 
-### Docker Compose
+更新：`media-importer update` · 卸载：`media-importer uninstall` · [完整说明 →](docs/native.md)
 
-需要 Git、Python 3.9+ 和运行中的 Docker Compose：
+### 部署方式二：Docker Compose
+
+适合已有 Docker 环境的用户。需要 Git、Python 3.9+ 和运行中的 Docker Compose。
 
 ```sh
 git clone https://github.com/ShuaiZha/media-importer.git
@@ -51,11 +55,11 @@ docker compose up -d --no-build
 
 更新使用 `python3 scripts/manage.py update`；Windows 将 `python3` 换成 `py -3`。[完整说明 →](docs/deployment.md)
 
-### 第一次备份
+## 首次备份
 
 1. 按[飞书指南](docs/feishu.md#3-订阅与菜单)完成事件、菜单和应用发布。
 2. 连接已开机的相机，在确认卡中核对身份，点击「确认并备份」。
-3. 查看两路进度与归档结果。传输期间保持电脑唤醒、缓存盘可用。
+3. 在飞书查看两路进度与归档结果；需要自动提醒时，开启「自动通知」。传输期间保持电脑唤醒、缓存盘可用。
 
 新安装默认**关闭同步、删除原片和自动通知**。首次使用建议保留原片，用少量素材验证。开启删除后，原片在整组完整导入本地后清理，远端归档前缓存可能是唯一副本。
 
