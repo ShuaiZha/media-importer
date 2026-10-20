@@ -100,7 +100,7 @@ def _stopped(view, name):
     control = view.get('controls', {}).get(name, {})
     return bool(not view.get('running') or control.get('requested_stop') or
                 control.get('state') in ('paused', 'pausing') or
-                not view.get('configuration', {}).get('sync_enabled', True))
+                not view.get('transfer_enabled', view.get('configuration', {}).get('sync_enabled', True)))
 
 
 def _stage_label(view, name):
@@ -147,11 +147,27 @@ def _title(view):
     if not view.get('running'):
         return '服务未响应', 'red'
     if any(c.get('state') == 'pausing' for c in view.get('controls', {}).values()):
-        return '正在停止同步', 'orange'
+        return ('正在停止选定素材传输' if view.get('selected_import') else '正在停止同步'), 'orange'
     if configuration.get('pending'):
         return '设置等待生效', 'orange'
     if view.get('attention', {}).get('required'):
         return '任务需要处理', 'orange'
+    selection = view.get('selected_import', {})
+    if selection:
+        if selection.get('state') == 'paused':
+            return '选定素材传输已停止', 'grey'
+        if selection.get('state') == 'done' or round_complete(view):
+            return ('选定素材归档完成 · 缓存待清理', 'orange') if _cleanup_pending(view.get('cleanup', {})) else ('选定素材归档完成', 'green')
+        stages = view.get('stages', {})
+        importing = stages.get('import', {}).get('phase') == 'downloading'
+        uploading = stages.get('upload', {}).get('phase') in ('uploading', 'publishing')
+        if importing and uploading:
+            return '选定素材导入与归档进行中', 'blue'
+        if uploading:
+            return '选定素材归档进行中', 'blue'
+        if importing:
+            return '选定素材导入进行中', 'blue'
+        return ('选定素材等待重试', 'orange') if selection.get('state') == 'waiting' else ('选定素材等待传输', 'blue')
     if view.get('source_connection', {}).get('state') in ('pending', 'declined'):
         uploading = view.get('stages', {}).get('upload', {}).get('phase') in ('uploading', 'publishing')
         return ('远端归档进行中 · 相机待确认' if uploading else '相机待确认'), 'blue'
@@ -193,13 +209,13 @@ def headline_elements(view):
              and unplug.get('ready') and unplug.get('can_disconnect', True))
     # Access guidance is secondary to the transfer result, never the card title.
     if ready and batch.get('total_files'):
-        text = '本轮导入已完成，可断开相机连接。'
+        text = ('本次选定素材' if view.get('selected_import') else '本轮') + '导入已完成，可断开相机连接。'
         if _pending_archive(view):
             text += '远端归档完成前，请保持电脑与缓存盘可用。'
         return [paragraph(text)]
     if ready:
         return []
-    if view.get('running') and unplug.get('can_disconnect') and not view.get('configuration', {}).get('sync_enabled', True) and batch.get('total_files'):
+    if view.get('running') and unplug.get('can_disconnect') and _stopped(view, 'import') and batch.get('total_files'):
         return [paragraph('相机读取已停止，可断开连接；本轮导入尚未完成。')]
     if view.get('running') and (view.get('status', {}).get('source_work') or
             not _stopped(view, 'import') and view.get('stages', {}).get('import', {}).get('phase') in ('downloading', 'scanning', 'verifying')):
@@ -242,6 +258,12 @@ def attention_elements(view):
     attention = view.get('attention', {})
     if attention.get('required'):
         return [markdown('**需要处理**'), paragraph(attention.get('message', '').removeprefix('需要处理：'))]
+    selected = view.get('selected_import', {})
+    if selected.get('archive_verification_pending'):
+        errors = selected.get('archive_errors', [])
+        detail = ('\n' + str(errors[0].get('file', '')) + '\n' + str(errors[0].get('reason', ''))[:180]
+                  if errors else '\n正在核对目的地文件，核验通过后计入完成。')
+        return [paragraph(f"{selected['archive_verification_pending']} 个已有归档待核验" + detail)]
     # One waiting reason per message. Per-file errors do not hide working queues.
     for stage in view.get('stages', {}).values():
         if stage.get('phase', '').startswith('waiting') and stage.get('issue'):
@@ -302,6 +324,11 @@ def _result_elements(result):
 
 def _selection_notes(view):
     selection, batch = view.get('selection', {}), view.get('batch', {})
+    if view.get('selected_import'):
+        parts = ['仅处理本次选定素材；其他任务保留', '本次保留相机原片']
+        if batch.get('excluded_preview_files') and not round_complete(view):
+            parts.append(f"预览文件未归档 {batch['excluded_preview_files']} 个")
+        return [note('；'.join(parts))]
     parts = []
     if selection.get('scope', 'all') != 'all':
         parts.append('素材范围：' + MEDIA_SCOPES.get(selection['scope'], '所选类别'))
@@ -340,7 +367,7 @@ def progress_card(view, interval, keyword='', updated_at=None, *, notifications_
     elements = ([note(keyword)] if keyword else []) + _overview(view)
     if not notifications_enabled:
         elements.append(note('自动进度更新已关闭；同步按当前设置运行。'))
-    elif not view.get('configuration', {}).get('sync_enabled', True):
+    elif not view.get('transfer_enabled', view.get('configuration', {}).get('sync_enabled', True)):
         elements.append(note('自动进度更新已停止。'))
     elements.append(note('更新于 ' + format_time(updated_at or view.get('observed_at'))))
     return card(title, elements, color, shared=True)

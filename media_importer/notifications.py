@@ -84,6 +84,10 @@ def initialize(db):
 
 def freeze_completion(db, config, run, rows, *, create):
     """Detach a bounded result from file details in the retirement transaction."""
+    if run['selection'].startswith('selected:'):
+        # Explicit selected imports update their own operation card, including
+        # completion. They do not inherit the full-sync notification policy.
+        return
     from .paths import archive_location
     from pathlib import PurePosixPath
     scope = _digest([config.destination_id, run['source_type'], run['serial']])

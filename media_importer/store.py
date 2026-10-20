@@ -29,6 +29,10 @@ class Store:
         if version not in (0, 5):
             self.db.close()
             raise BackupError("数据库格式不受支持；请先离线迁移到版本 5")
+        from .camera_operations import initialize as initialize_camera_operations
+        initialize_camera_operations(self.db)
+        from .selected_imports import initialize as initialize_selected_imports
+        initialize_selected_imports(self.db)
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS files (
@@ -137,7 +141,7 @@ class Store:
             self.db.execute("INSERT OR REPLACE INTO meta VALUES ('status', ?)",
                             (json.dumps(status, ensure_ascii=False),))
 
-    def batch(self, destination, assets, media_scope='all', *, preview_ids=(), archive_previews=True):
+    def batch(self, destination, assets, media_scope='all', *, preview_ids=(), archive_previews=True, reporting=True):
         fingerprint = destination + ":" + ",".join(sorted(a.identity for a in assets))
         batch_id = uuid.uuid5(uuid.NAMESPACE_URL, fingerprint).hex
         with self.db:
@@ -150,10 +154,11 @@ class Store:
                                 (file_id, destination, asset.identity, json.dumps(asset.to_dict()), now(), now(),
                                  'preview' if preview else 'original', 'excluded' if preview and not archive_previews else 'pending'))
                 self.db.execute("INSERT OR IGNORE INTO batch_files VALUES (?, ?)", (batch_id, file_id))
-            if assets:
+            if assets and reporting:
                 from .runs import reconcile
                 reconcile(self.db, destination, assets[0].source_type, assets[0].serial, media_scope, batch_id, archive_previews)
-        self.set_meta("last_batch", batch_id)
+        if reporting:
+            self.set_meta("last_batch", batch_id)
         return batch_id
 
     def files(self, destination=None, batch_id=None, *, work=False):

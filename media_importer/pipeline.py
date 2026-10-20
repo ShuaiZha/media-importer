@@ -35,7 +35,7 @@ def transfer(service):
         db = Store(service.store.directory)
         remote = service.destination.fork(stop=attempt_stop) if hasattr(service.destination, "fork") else service.destination
         source = service.source.fork(stop=attempt_stop) if stage == 'import' and hasattr(service.source, 'fork') else service.source
-        task = Service(service.config, db, source, remote, service.stop, service.control, stage=stage)
+        task = service.transfer_task(db, source, remote, stage)
         task.pipeline_stop = finished
         task.cache_guard = service.cache_guard
         task.activity = activity
@@ -55,6 +55,17 @@ def transfer(service):
                 changed = False
                 try:
                     activity.begin(stage)
+                    if stage == 'import' and task.control and task.process_camera_operations:
+                        from .camera_operations import process_one
+                        if process_one(task, task.control.settings):
+                            inventory, verified = None, False
+                            changed = True
+                            continue
+                        from .selected_imports import process_one as process_selected
+                        if process_selected(task, task.control.settings, browsing_only=True):
+                            inventory, verified = None, False
+                            changed = True
+                            continue
                     task.boundary()
                     if task.control and task.control.draining():
                         with condition:
@@ -81,7 +92,8 @@ def transfer(service):
                         pass
                     elif stage == "import":
                         observed_inventory = db.get_meta("status", {}).get("inventory", {})
-                        if verified and not observed_inventory.get("verified") and observed_inventory.get("invalidated_reason"):
+                        if (task.tracks_source_inventory and verified and
+                                not observed_inventory.get("verified") and observed_inventory.get("invalidated_reason")):
                             # A reconnect or a recording-state change starts the next fixed batch,
                             # even while the previous batch is still uploading remotely.
                             inventory, verified = None, False
@@ -112,7 +124,8 @@ def transfer(service):
                         work = task.rows(work=True)
                         for saved in work:
                             if saved["state"] == "uploaded" and saved["id"] not in cleaned:
-                                task.clean_cache(saved)
+                                if task.verify_archived(saved):
+                                    task.clean_cache(saved)
                                 cleaned.add(saved["id"])
                         row = next((r for r in work if r["state"] in ("cached", "staged", "publishing")
                                     and r["id"] not in failed and r.get('retry_at', 0) <= time.time()), None)

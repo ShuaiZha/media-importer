@@ -56,6 +56,7 @@ class FakeSource:
     deletion_effects = staticmethod(GoProSource.deletion_effects)
     keep_alive_interval_seconds = GoProSource.keep_alive_interval_seconds
     groups = staticmethod(GoProSource.groups)
+    selection_groups = staticmethod(GoProSource.selection_groups)
     reconcile = staticmethod(GoProSource.reconcile)
     idle_reason = staticmethod(GoProSource.idle_reason)
     def __init__(self, assets):

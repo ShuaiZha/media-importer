@@ -34,8 +34,8 @@ def panel(bot, page, item):
         page = 'transfer_settings'  # Existing cards open the consolidated form.
     if page == 'settings':
         return card('菜单使用说明', [
-            markdown('**状态**：运行状态、本机目录\n'
-                     '**同步**：开启同步、立即停止、当前文件完成后停止\n'
+            markdown('**状态**：运行状态、相机状态、本机目录\n'
+                     '**同步**：开启同步、立即停止、当前文件完成后停止、选择素材、清理原片\n'
                      '**设置**：素材与清理、传输与缓存、消息通知、相机连接、归档存储'),
             note('从底部菜单打开功能，卡片中填写参数并保存。扫描与重试间隔位于「传输与缓存」。')], shared=True)
     if page == 'media_settings':

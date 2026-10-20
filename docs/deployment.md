@@ -28,6 +28,8 @@ Windows 将 `python3` 替换为 `py -3`。向导生成 `.env`、JSON 和目录�
 
 检查完成后，继续[配置飞书订阅、菜单并发布](feishu.md#3-订阅与菜单)。首次同步前核对身份，保留原片，用少量素材验证。
 
+「相机状态」「选择素材」「清理原片」属于 [v0.10.26](releases/v0.10.26.md)，当前尚未发布镜像；上面的 v0.10.25 镜像不包含这三项。需要提前使用时按源码构建说明构建并启动，再补齐飞书菜单，无需新增飞书权限或更换凭据。
+
 ### 手动配置
 
 不使用向导时，复制 [`.env.example`](../.env.example) 为 `.env`、[`config/settings.example.json`](../config/settings.example.json) 为 `config/settings.json`。按[配置参考](configuration.md)填写真实值，提前创建三个挂载目录并授权 Docker 访问。默认目录为 `config/`、`data/`、`data/cache/`。

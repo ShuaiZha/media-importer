@@ -182,6 +182,10 @@ def settle(service):
 def prune_transient(db):
     """No chat history; bounded IDs keep delayed callbacks from executing twice."""
     stamp = time.time()
+    from .camera_operations import prune
+    prune(db)
+    from .selected_imports import prune as prune_selected
+    prune_selected(db)
     tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if 'bot_actions' in tables:
         db.execute('DELETE FROM bot_actions WHERE created<?', (stamp - 86400,))

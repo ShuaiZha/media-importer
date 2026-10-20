@@ -165,7 +165,13 @@ def prepare_restore(directory, settings_path, bundle=None):
             if 'bot_actions' in tables:
                 store.db.execute('DELETE FROM bot_actions')
             if 'bot_jobs' in tables:
-                store.db.execute("UPDATE bot_jobs SET state='error',error='迁移后旧请求已失效' WHERE state IN ('queued','applied')")
+                store.db.execute("UPDATE bot_jobs SET state='error',error='迁移后旧请求已失效' WHERE state IN ('queued','applied','waiting')")
+            if 'camera_operations' in tables:
+                from .camera_operations import cancel
+                cancel(store.db)
+            if 'selected_imports' in tables:
+                from .selected_imports import cancel as cancel_selected
+                cancel_selected(store.db)
             if 'notification_events' in tables:
                 store.db.execute("UPDATE notification_events SET state='cancelled' WHERE state='pending'")
             if 'maintenance_requests' in tables:

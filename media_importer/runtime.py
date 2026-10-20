@@ -121,6 +121,10 @@ def daemon(config_path, directory, stop):
                     updates['worker_heartbeat_at'] = now()
                     heartbeat_at = time.monotonic()
                 db.status(**updates)
+                from .camera_operations import pending
+                from .selected_imports import pending as selection_pending
+                if pending(db.db) or selection_pending(db.db):
+                    control.changed.set()
                 stop.wait(1)
         finally:
             control.transfer_stop.set()
@@ -168,10 +172,18 @@ def daemon(config_path, directory, stop):
                         control.adopt()
                         try:
                             with control.work_guard:
-                                service.clean_temporaries()
-                                result = service.safe_cycle()
+                                from .camera_operations import process_one
+                                process_one(service, control.settings)
+                                from .selected_imports import process_one as process_selected, active
+                                selected = process_selected(service, control.settings)
+                                if selected or active(store.db):
+                                    result = {"complete": False, "reason": "selected_import"}
+                                else:
+                                    service.clean_temporaries()
+                                    result = service.safe_cycle()
                                 try:
-                                    service.settle()
+                                    if not selected and not active(store.db):
+                                        service.settle()
                                 except (BackupError, OSError, sqlite3.Error):
                                     logging.warning('任务收尾暂未完成，原任务记录保留')
                         except Cancelled:

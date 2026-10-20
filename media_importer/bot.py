@@ -35,6 +35,10 @@ class Bot:
         self._source_event = None
         self.directory.mkdir(parents=True, exist_ok=True)
         with self.db() as db:
+            from .camera_operations import initialize
+            initialize(db)
+            from .selected_imports import initialize as initialize_selected
+            initialize_selected(db)
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS bot_actions (
                     token TEXT PRIMARY KEY, scope TEXT NOT NULL, payload TEXT NOT NULL,
@@ -79,6 +83,12 @@ class Bot:
         """Accept only the explicitly supported, versioned settings controls."""
         if payload.get('form') or payload.get('operation'):
             return False
+        if 'camera' in payload:
+            from .camera_cards import supported
+            return supported(payload['camera']) and not payload.get('changes')
+        if 'selected_import' in payload:
+            from .selected_cards import supported
+            return supported(payload['selected_import']) and not payload.get('changes')
         from .bot_settings import FORMS, PAGES, LIMIT_FIELDS, INTERVAL_FIELDS
         modern = payload.get('settings_version') in (1, 2)
         if 'settings_form' in payload:
@@ -271,6 +281,9 @@ class Bot:
         # Keep no arbitrary chat text, media, or credentials in the task database.
         commands = {"状态": {"panel": "status"}, "进度": {"panel": "status"}, "查看状态": {"panel": "status"},
                     "运行状态": {"panel": "status"},
+                    "相机状态": {"camera": {"version": 1, "action": "inspect"}},
+                    "清理原片": {"camera": {"version": 1, "action": "select", "mode": "archived"}},
+                    "选择素材": {"selected_import": {"version": 1, "action": "browse"}},
                     "设置": {"panel": "settings"}, "参数设置": {"panel": "settings"},
                     "素材与清理": {"panel": "media_settings"}, "传输与缓存": {"panel": "transfer_settings"},
                     "消息通知": {"panel": "notification_settings"}, "归档位置": {"panel": "destination_settings"},
@@ -317,6 +330,13 @@ class Bot:
         if not self.supported(payload):
             return {"toast": {"type": "error", "content": "此操作已停用，请通过菜单重新打开卡片"}}
         payload["revision"] = row["revision"]
+        if payload.get('selected_import', {}).get('action') == 'choose':
+            from .selected_cards import parse_choices
+            try:
+                payload['selected_indices'] = parse_choices(
+                    event.get('action', {}).get('form_value'), payload['selected_import']['page'])
+            except ConfigError as exc:
+                return {'toast': {'type': 'error', 'content': str(exc)}}
         if payload.get('settings_form'):
             from .bot_settings import parse
             try:
@@ -375,6 +395,27 @@ class Bot:
             return False
         try:
             payload = json.loads(job['payload'])
+            # The existing stop menu also applies to the independent one-shot task.
+            changes = payload.get('changes')
+            if job['state'] == 'queued' and changes in (
+                    {'backup': {'enabled': False}}, {'backup': {'stop_after_current': True}}):
+                from .selected_imports import active
+                with self.db() as db:
+                    selected = active(db, self.scope)
+                    if (selected and selected['state'] in ('queued_transfer', 'running', 'waiting')
+                            and not self.settings.read()['config']['backup']['enabled']):
+                        from .camera_operations import cancel
+                        cancel(db, owner=self.scope)
+                        payload = {'selected_import': {'version': 1, 'id': selected['id'],
+                            'action': 'drain' if changes['backup'].get('stop_after_current') else 'cancel'}}
+                        db.execute('UPDATE bot_jobs SET payload=? WHERE id=?',
+                                   (json.dumps(payload), job['id']))
+            if 'selected_import' in payload and self.supported(payload):
+                from .selected_cards import process_job
+                return process_job(self, job, payload)
+            if 'camera' in payload and self.supported(payload):
+                from .camera_cards import process_job
+                return process_job(self, job, payload)
             if payload.get('panel') in ('source_confirmation', 'source_offline') and payload.get('session_id'):
                 from .source_connection import read
                 connection = read(self.directory)
@@ -395,7 +436,7 @@ class Bot:
                 view = snapshot(self.directory, self.settings)
                 changes = payload['changes_applied']
                 revision = payload['applied_revision']
-                stopping = any(c['state'] == 'pausing' for c in view['controls'].values())
+                stopping = any(c['state'] == 'pausing' for c in view['controls'].values()) or view.get('source_operation_running', False)
                 item = self.settings.read()
                 # Completing a drain saves enabled=False, which naturally changes
                 # the revision. Acknowledge the actual stopped state once applied.
@@ -420,6 +461,12 @@ class Bot:
                 custom_response = None
                 try:
                     changes = payload.get("changes")
+                    if changes in ({'backup': {'enabled': False}}, {'backup': {'stop_after_current': True}}):
+                        from .camera_operations import cancel
+                        from .selected_imports import cancel as cancel_selected
+                        with self.db() as db:
+                            cancel(db, owner=self.scope)
+                            cancel_selected(db, owner=self.scope)
                     archive_change = payload.get('archive_change')
                     if payload.get('archive_draft') or archive_change:
                         from .archive_settings import check
@@ -465,7 +512,7 @@ class Bot:
                             view = snapshot(self.directory, self.settings)
                             if view["running"] and view["configuration"].get("applied_revision") == item["revision"] and not view["configuration"].get("pending"):
                                 applied = True
-                                stopping = any(c["state"] == "pausing" for c in view["controls"].values())
+                                stopping = any(c["state"] == "pausing" for c in view["controls"].values()) or view.get('source_operation_running', False)
                                 break
                             time.sleep(.2)
                         notice = settings_result(changes, applied, stopping)
@@ -492,21 +539,7 @@ class Bot:
             elif job['state'] != 'waiting':
                 response = json.loads(job["response"])
                 waiting = payload.get('wait_for_apply', False)
-            receipt_key = 'bot_reply:' + self.scope + ':' + job['id']
-            with self.db() as db:
-                saved = db.execute('SELECT value FROM meta WHERE key=?', (receipt_key,)).fetchone()
-            receipt = json.loads(saved[0]) if saved else {}
-            message_id = receipt.get('id') or payload.get('message_id') or payload.get('response_message_id')
-            if message_id:
-                self.updater(self.credentials, message_id, response)
-            else:
-                message_id = self.sender(self.credentials, response, event_id="control:" + self.scope + ":" + job["id"])
-            with self.db() as db:
-                if isinstance(message_id, str):
-                    db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', (receipt_key, json.dumps({'id': message_id})))
-                db.execute("UPDATE bot_jobs SET state=?,error=NULL,retry_at=? WHERE id=?",
-                           ('waiting' if waiting and isinstance(message_id, str) else 'done', time.time() + 1, job['id']))
-            return True
+            return self.reply(job, payload, response, waiting)
         except Exception:
             # Never log raw event bodies, credentials, URLs, or SDK exceptions.
             with self.db() as db:
@@ -514,6 +547,23 @@ class Bot:
                            (time.time() + min(300, 5 * 2 ** min(job["attempts"], 6)), "控制回复暂时失败，等待重试", job["id"]))
             logging.warning("飞书控制回复暂时失败，已保留请求等待重试")
             return False
+
+    def reply(self, job, payload, response, waiting=False):
+        receipt_key = 'bot_reply:' + self.scope + ':' + job['id']
+        with self.db() as db:
+            saved = db.execute('SELECT value FROM meta WHERE key=?', (receipt_key,)).fetchone()
+        receipt = json.loads(saved[0]) if saved else {}
+        message_id = receipt.get('id') or payload.get('message_id') or payload.get('response_message_id')
+        if message_id:
+            self.updater(self.credentials, message_id, response)
+        else:
+            message_id = self.sender(self.credentials, response, event_id="control:" + self.scope + ":" + job["id"])
+        with self.db() as db:
+            if isinstance(message_id, str):
+                db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', (receipt_key, json.dumps({'id': message_id})))
+            db.execute("UPDATE bot_jobs SET state=?,error=NULL,retry_at=? WHERE id=?",
+                       ('waiting' if waiting and isinstance(message_id, str) else 'done', time.time() + 1, job['id']))
+        return True
 
 
 def healthy(directory):

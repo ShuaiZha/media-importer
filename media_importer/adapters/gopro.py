@@ -132,8 +132,8 @@ class GoProSource:
         return result
 
     @staticmethod
-    def groups(assets):
-        """Deletion boundary: a primary and its unambiguously associated sidecars."""
+    def _file_groups(assets):
+        """One primary file and its unambiguously associated sidecars."""
         primary = [a for a in assets if a.metadata.get("primary")]
         result = []
         assigned = set()
@@ -158,6 +158,30 @@ class GoProSource:
             if asset.identity not in assigned:
                 result.append({"id": asset.identity, "members": [asset], "safe": False,
                                "reason": "无法确认附属文件归属，已导入但不自动删除"})
+        return result
+
+    @staticmethod
+    def _mark_previews(groups):
+        for group in groups:
+            # RAW, audio and unknown companions remain required.
+            parents = {a.metadata.get('gumi') for a in group['members'] if a.metadata.get('primary')}
+            group['preview_ids'] = [a.identity for a in group['members']
+                                    if group['safe'] and not a.metadata.get('primary')
+                                    and a.metadata.get('parent_gumi') in parents
+                                    and PurePosixPath(a.path).suffix.lower() in ('.lrv', '.thm')]
+
+    @staticmethod
+    def selection_groups(assets):
+        """One independent primary-file choice with its direct companions."""
+        assets = list(assets)
+        choices = GoProSource._file_groups(assets)
+        GoProSource._mark_previews(choices)
+        return sorted(choices, key=lambda choice: choice['members'][0].path.casefold())
+
+    @staticmethod
+    def groups(assets):
+        """Deletion boundary: all chapters and their associated sidecars."""
+        result = GoProSource._file_groups(list(assets))
         # HERO9's later chapters can lose /media/info after the first chapter
         # is deleted. Import the complete recording before removing any part,
         # and remove the highest chapter first so the first stays available.
@@ -182,14 +206,7 @@ class GoProSource:
             combined.append({"id": chapters[-1][1]["id"],
                              "members": [a for _, g in chapters for a in g["members"]], "safe": safe,
                              "reason": None if safe else "视频分段或附属关系不明确，保留相机文件"})
-        for group in combined:
-            # Only this adapter identifies expendable previews. RAW, audio and
-            # unknown companions remain required, even when not primary media.
-            parents = {a.metadata.get('gumi') for a in group['members'] if a.metadata.get('primary')}
-            group['preview_ids'] = [a.identity for a in group['members']
-                                    if group['safe'] and not a.metadata.get('primary')
-                                    and a.metadata.get('parent_gumi') in parents
-                                    and PurePosixPath(a.path).suffix.lower() in ('.lrv', '.thm')]
+        GoProSource._mark_previews(combined)
         return combined
 
     @staticmethod

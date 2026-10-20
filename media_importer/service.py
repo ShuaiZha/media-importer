@@ -29,6 +29,9 @@ class CacheFull(BackupError):
 
 
 class Service:
+    process_camera_operations = True
+    tracks_source_inventory = True
+
     def __init__(self, config, store, source: MediaSource, destination: ArchiveDestination, stop, control=None, stage=None):
         from .destination_binding import bind
         config = bind(store, config)
@@ -43,6 +46,10 @@ class Service:
         self.pipeline_stop = None
         self.cache_guard = threading.RLock()
         self.activity = None
+
+    def transfer_task(self, store, source, destination, stage):
+        """Create one lane using the same transfer policy as its coordinator."""
+        return Service(self.config, store, source, destination, self.stop, self.control, stage=stage)
 
     def checkpoint(self, row):
         from .recovery import checkpoint
@@ -136,7 +143,10 @@ class Service:
                         # Discovery owns identity-only observations until approved.
                         finished.wait(min(5, self.config.backup['poll_seconds']))
                         continue
-                    keep_awake = self.allowed() and bool(store.get_meta("status", {}).get("source_work"))
+                    state = store.get_meta("status", {})
+                    keep_awake = bool(state.get("source_work")) and (
+                        self.allowed() or state.get("maintenance_running") or
+                        state.get("selected_import", {}).get("state") == "running")
                     try:
                         identity = source.identify()
                         result = {"online": True, "checked_at": now(), **identity,
@@ -166,7 +176,9 @@ class Service:
             try:
                 while not finished.is_set() and not self.stop.is_set():
                     started = time.monotonic()
-                    if self.allowed() and db.get_meta("status", {}).get("source_work"):
+                    state = db.get_meta("status", {})
+                    if state.get("source_work") and (self.allowed() or state.get("maintenance_running") or
+                                                    state.get("selected_import", {}).get("state") == "running"):
                         try:
                             source.keep_alive()
                             db.status(source_keep_alive={"ok": True})
@@ -381,10 +393,16 @@ class Service:
                 self.store.update(row["id"], cache_cleanup_error=str(exc))
                 LOG.warning("已归档，缓存待清理: %s", self.store.asset(row).path)
 
-    def clean_temporaries(self, kind=None):
+    def verify_archived(self, row):
+        """Optional per-operation metadata check before handling old archives."""
+        return True
+
+    def clean_temporaries(self, kind=None, *, file_ids=None):
         remote = self.destination.fork(stop=self.stop) if hasattr(self.destination, "fork") else self.destination
         try:
             for item in self.store.temporary_items(self.destination_id):
+                if file_ids is not None and item["file_id"] not in file_ids:
+                    continue
                 if self.stop.is_set():
                     return
                 if item["state"] == "blocked" or kind and item["kind"] != kind:
@@ -678,21 +696,25 @@ class Service:
         from .lifecycle import settle
         return settle(self)
 
-    def cleanup_groups(self, attempted):
+    def cleanup_groups(self, attempted, *, groups=None, copy_policy='imported', before_delete=None):
+        """Shared safety checks; explicit groups are frozen one-shot cleanup plans."""
+        if copy_policy not in ('archived', 'imported'):
+            raise ValueError('Unknown cleanup copy policy')
         if not self.allowed("delete_source_after_import"):
             return
-        for group in self.store.groups(self.destination_id):
+        explicit = groups is not None
+        for group in groups if explicit else self.store.groups(self.destination_id):
             if group["id"] in attempted:
                 continue
             rows = [self.store.get(key) for key in json.loads(group["members"])]
-            if not rows or any(not r or r["group_id"] != group["id"] or
+            if not rows or any(not r or (not explicit and r["group_id"] != group["id"]) or
                                r["state"] not in ("cached", "staged", "publishing", "uploaded", "excluded") for r in rows):
                 continue
             if not any(r['state'] != 'excluded' for r in rows):
                 continue
             members = [self.store.asset(r) for r in rows]
             if (any(a.serial != self.config.source["serial"] or a.source_type != self.config.source["type"] for a in members)
-                    or not select_groups([{"members": members}], self.config.backup["media_scope"])):
+                    or (not explicit and not select_groups([{"members": members}], self.config.backup["media_scope"]))):
                 continue
             if all(r["cleanup"] in ("deleted", "absent") for r in rows):
                 continue
@@ -729,7 +751,7 @@ class Service:
                             if row['role'] != 'preview' or (actual and asset.identity not in previews):
                                 raise SourceError('预览文件关联已变化，保留相机素材并重新核对')
                             continue
-                        if not self.cache_valid(row):
+                        if copy_policy == 'archived' or not self.cache_valid(row):
                             if row["state"] != "uploaded" or not row["remote_identity"] or not self.confirmed_final(row, self.destination.stat(row["remote_path"])):
                                 raise CacheUnavailable("素材组缺少可确认的完整副本，保留相机原片")
                         else:
@@ -761,6 +783,9 @@ class Service:
                             raise SourceError('设备声明的删除范围超出已核验素材组，未执行删除')
                         present_ids = [r['id'] for r, member in zip(rows, members)
                                        if member.path in current and member.identity in effects]
+                        if before_delete:
+                            before_delete({member.identity for member in members
+                                           if member.path in current and member.identity in effects})
                         with self.store.db:
                             self.store.db.executemany("""UPDATE files SET cleanup='deleting',source_cleanup_error=NULL,
                                 updated_at=? WHERE id=? AND cleanup NOT IN ('deleted','absent')""",

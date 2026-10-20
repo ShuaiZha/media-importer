@@ -26,6 +26,8 @@
 | [service](../media_importer/service.py) | 导入、归档与原片清理条件 |
 | [contracts](../media_importer/contracts.py) / [adapters](../media_importer/adapters/) | 通用接口与 GoPro、SMB、飞书差异 |
 | [source_connection](../media_importer/source_connection.py) | 身份观测、本次确认与旧卡失效 |
+| [camera_operations](../media_importer/camera_operations.py) / [camera_cards](../media_importer/camera_cards.py) | 一次性相机查询、清理预览与确认回执；复用来源适配器和清理核验 |
+| [selected_imports](../media_importer/selected_imports.py) / [selected_transfer](../media_importer/selected_transfer.py) / [selected_cards](../media_importer/selected_cards.py) | 固定所选素材范围，复用两路传输、停止恢复与同卡进度 |
 | [store](../media_importer/store.py) / [storage](../media_importer/storage.py) | 任务、锁、缓存盘与副本核验 |
 | [lifecycle](../media_importer/lifecycle.py) | 完成后收尾，保留必要去重与待发结果 |
 | [bot](../media_importer/bot.py) / [notifications](../media_importer/notifications.py) | 本人交互、发送队列与失败重试 |
@@ -40,7 +42,13 @@
 | `source_index` | 保留原片时去重；完整扫描确认原片不存在后移除 |
 | `destination_anchor` | 连接地址变化后核验逻辑目的地 |
 | `.receipts/` | 数据库损坏时重建完整缓存任务 |
+| `camera_operations` | 短期清理清单、确认与删除意图；结果不确定时保留待复查依据 |
+| `selected_imports` | 本次选择、确认版本与短期结果；未完成的选定任务保留恢复范围 |
 
 两路停止后，`settle` 在同一事务中冻结待发结果、保留去重与归档依据，再删除已完成明细。有完整缓存、待清理临时文件、清理错误或删除结果未知时不收尾。通知失败独立重试，不重新上传。
 
 同一份数据仅一个传输实例。初始凭据在 `.env`，飞书更新的 SMB 密码存入本机配置目录的 `credentials/`；JSON 和控制队列只保存随机引用，连接检查通过后才原子切换。更新快照、备份与迁移包含凭据文件。素材身份决定去重，归档禁止覆盖，源清理、归档和缓存清理分别记录，不能相互替代。
+
+手动相机操作使用现有导入线程的文件边界；同步关闭时由空闲后台执行，不新增常驻线程。预览只读核验并固定清单，确认绑定本人、连接会话和配置版本，执行时再次核验。服务中断后仅复查已发出的删除结果，未执行部分需要重新确认；与自动清理共用组缓存锁。
+
+选定导入必须在全量同步停止后执行，独立记录本次范围但共用传输核心。每个主文件独立选择，直接附属文件按归档设置处理；清理边界仍由适配器的完整素材组决定。选定任务固定保留原片，停止和继续不扩大范围、不改变全量同步开关。完成后只收尾本次文件，未选任务与缓存保持原状；升级前已确认的分组任务仍按原清单恢复。

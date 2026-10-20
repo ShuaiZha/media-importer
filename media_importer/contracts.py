@@ -17,6 +17,12 @@ Optional keep_alive requires a positive keep_alive_interval_seconds; telemetry
 requires idle_reason(state). Optional deletion_effects(asset, members) returns
 the verified member identities that a delete may affect; omission means only the
 requested file. An adapter must not claim unsafe or unverified capabilities.
+
+Optional selection_groups(assets) returns one primary per choice with its direct
+companions and preview_ids. It must not
+combine multiple primary videos. Without it, each file is a separate choice.
+groups(assets) remains the full integrity boundary used for source deletion;
+selection groups must never replace these persisted deletion boundaries.
 """
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Protocol, Set

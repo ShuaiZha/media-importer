@@ -56,5 +56,15 @@ def source_media_category(asset):
     return classify(asset) if classify else None
 
 
+def source_selection_groups(source, assets):
+    """Optional, file-level selection; never fall back to deletion boundaries."""
+    choose = getattr(source, 'selection_groups', None)
+    if choose:
+        return choose(assets)
+    return [{'id': asset.identity, 'members': [asset], 'preview_ids': [],
+             'safe': False, 'reason': '未提供文件关联信息'}
+            for asset in assets]
+
+
 def notification_adapter(kind):
     return _module(NOTIFICATIONS, kind, "通知")
