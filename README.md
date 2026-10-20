@@ -22,7 +22,7 @@
 
 准备 USB 数据线、可读写的 SMB 共享和[飞书应用凭据](docs/feishu.md#1-准备应用与凭据)。**以下两种部署方式任选其一，功能相同。**
 
-安装命令获取最新正式版本。基本飞书表单需要 **v0.10.24+**；完整参数设置与新版菜单需要 **v0.10.25**，正式发布前可[从源码构建](CONTRIBUTING.md#构建与发布)。
+安装命令获取最新正式版本。完整参数设置与新版菜单需要 **v0.10.25+**；已有用户升级程序后，还需按[飞书指南](docs/feishu.md#3-订阅与菜单)更新并发布菜单。
 
 ### 部署方式一：原生 CLI
 
@@ -49,7 +49,7 @@ curl -fsSL https://github.com/ShuaiZha/media-importer/releases/latest/download/i
 适合已有 Docker 环境的用户。需要 Git、Python 3.9+ 和运行中的 Docker Compose。
 
 ```sh
-git clone --branch v0.10.24 https://github.com/ShuaiZha/media-importer.git
+git clone --branch v0.10.25 https://github.com/ShuaiZha/media-importer.git
 cd media-importer
 python3 scripts/setup.py
 docker compose up -d --no-build
