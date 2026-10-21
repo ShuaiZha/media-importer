@@ -76,6 +76,9 @@ def transfer(service):
                             changed = True
                             continue
                         from .camera_coordinator import source_wait_reason
+                        from .camera_library import process_one as process_library
+                        with activity.waiting(stage):
+                            process_library(task)
                         reason = source_wait_reason(db)
                         if reason:
                             raise SourceBlocked(reason)

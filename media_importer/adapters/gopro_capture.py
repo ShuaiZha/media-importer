@@ -19,7 +19,28 @@ PARAMETERS = {
     'lapse_duration': (157, '延时拍摄时长', {'timelapse'}),
     'video_interval': (5, '延时视频间隔', {'timelapse'}),
     'photo_interval': (30, '延时照片间隔', {'timelapse'}),
+    'white_balance': (115, '白平衡', {'video', 'photo', 'timelapse'}),
+    'color': (116, '色彩', {'video', 'photo', 'timelapse'}),
+    'sharpness': (117, '锐度', {'video', 'photo', 'timelapse'}),
+    'ev': (118, '曝光补偿', {'video', 'photo', 'timelapse'}),
+    'iso_min': (102, 'ISO 下限', {'video'}),
+    'iso_max': (13, 'ISO 上限', {'video'}),
+    'photo_iso_min': (75, 'ISO 下限', {'photo'}),
+    'photo_iso_max': (24, 'ISO 上限', {'photo'}),
+    'shutter': (145, '快门', {'video'}),
+    'photo_shutter': (146, '快门', {'photo'}),
+    'bitrate': (124, '码率', {'video'}),
+    'photo_output': (125, '照片输出', {'photo'}),
 }
+# These legacy IDs aren't in the public Open GoPro setting subset. Only expose
+# them when the connected camera's own /gp/gpControl vocabulary agrees, AND
+# its BLE capabilities advertise a currently available option.
+LEGACY = {115: 'White Balance', 116: 'Color', 117: 'Sharpness', 118: 'EV Comp',
+          102: 'ISO Min', 13: 'ISO Max', 75: 'ISO Min', 24: 'ISO Max',
+          145: 'Shutter', 146: 'Shutter', 124: 'Bit Rate'}
+TRANSLATIONS = {'Auto': '自动', 'Native': '原生', 'Flat': '平坦', 'GoPro': 'GoPro 色彩',
+                'Natural': '自然', 'Vibrant': '鲜艳', 'High': '高', 'Medium': '中',
+                'Low': '低', 'Standard': '标准', 'ON': '开启', 'OFF': '关闭'}
 OPTIONS = {
     2: {1: '4K', 4: '2.7K', 6: '2.7K 4:3', 7: '1440p', 9: '1080p', 12: '720p',
         18: '4K 4:3', 24: '5K', 25: '5K 4:3', 26: '5.3K 8:7', 27: '5.3K 4:3',
@@ -40,6 +61,7 @@ OPTIONS = {
          104: '1 分钟', 105: '30 秒', 106: '10 秒', 107: '5 秒', 108: '2 秒', 109: '1 秒', 110: '0.5 秒'},
 }
 OPTIONS[157] = {0: '关闭', **OPTIONS[156]}
+OPTIONS[125] = {0: '标准', 1: 'RAW', 2: 'HDR', 3: 'SuperPhoto'}
 FLAT_MODES = {12: 'video', 16: 'photo', 17: 'photo', 13: 'timelapse', 20: 'timelapse',
               21: 'timelapse', 24: 'timelapse', 26: 'timelapse'}
 MODE_NAMES = {'FLAT_MODE_VIDEO': 12, 'FLAT_MODE_PHOTO_SINGLE': 16, 'FLAT_MODE_PHOTO': 17,
@@ -105,10 +127,24 @@ async def catalog(camera):
     available = presets(await asyncio.to_thread(http, '/gopro/camera/presets/get'))
     state = await camera.state()
     raw = await asyncio.to_thread(http, '/gopro/camera/state')
+    vocabulary = {}
+    if any(str(i) in raw.get('settings', {}) for i in LEGACY):
+        try:
+            definitions = await asyncio.to_thread(http, '/gp/gpControl')
+            for item in definitions.get('settings', []):
+                identifier = item.get('id')
+                if identifier in LEGACY and item.get('display_name') == LEGACY[identifier]:
+                    vocabulary[identifier] = {o['id']: TRANSLATIONS.get(o['display_name'], o['display_name'])[:60]
+                        for o in item.get('options', []) if type(o.get('id')) is int and 0 <= o['id'] <= 255
+                        and isinstance(o.get('display_name'), str)}
+        except (OSError, ValueError, SourceConnectionError):
+            pass  # Optional legacy controls must not hide supported standard controls.
     current = next((p for p in available if p['id'] == state['preset']), None)
     parameters = []
     for key, (identifier, label, modes) in PARAMETERS.items():
         if not current or current['mode'] not in modes or str(identifier) not in raw.get('settings', {}):
+            continue
+        if identifier in LEGACY and identifier not in vocabulary:
             continue
         flat = current['flat_mode']
         if (key == 'video_interval' and flat != 13 or key == 'photo_interval' and flat != 20 or
@@ -117,11 +153,14 @@ async def catalog(camera):
         # Camera capabilities, not the preset's abbreviated UI captions, decide
         # availability (HERO9 omits duration and stabilization from settingArray).
         options = await choices(camera, identifier)
+        if identifier in LEGACY:
+            options = [v for v in options if v in vocabulary[identifier]]
         if not options: continue
         value = raw.get('settings', {}).get(str(identifier))
+        label_for = lambda v: vocabulary.get(identifier, {}).get(v, option_label(identifier, v))
         parameters.append({'key': key, 'label': label, 'value': value,
-                           'value_label': option_label(identifier, value),
-                           'options': [{'value': v, 'label': option_label(identifier, v)} for v in options]})
+                           'value_label': label_for(value),
+                           'options': [{'value': v, 'label': label_for(v)} for v in options]})
     return {**state, 'presets': available, 'parameters': parameters,
             'preset_label': current['label'] if current else '未知',
             'specification': current['specification'] if current else '', 'observed_at': now()}
@@ -184,6 +223,7 @@ async def set_parameter(camera, parameters):
         state = await camera.state()
         if state['preset'] != parameters['expected_preset']: break
         if actual == value:
-            return {**state, 'parameter_label': offered['label'], 'value_label': option_label(identifier, actual), 'ack_lost': lost}
+            return {**state, 'parameter_label': offered['label'],
+                    'value_label': next(o['label'] for o in offered['options'] if o['value'] == actual), 'ack_lost': lost}
         await asyncio.sleep(.25)
     return {**state, 'uncertain': True, 'reason': '设置结果待核验，未重复发送命令'}

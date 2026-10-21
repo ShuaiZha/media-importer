@@ -40,6 +40,7 @@ Mac 无线工作放入可终止的子进程。凭据只在该进程中读取；�
 | [radio](../media_importer/radio.py) / [capture](../media_importer/capture.py) | 有超时限制的原生无线进程、拍摄意图与实际结果 |
 | [gopro_capture](../media_importer/adapters/gopro_capture.py) / [capture_forms](../media_importer/capture_forms.py) | 适配器读取预设和可用值；通用表单展示能力，不硬编码相机参数组合 |
 | [capture_sessions](../media_importer/capture_sessions.py) | 仅保留最近一次拍摄前后清单，新增文件复用选择导入；不另建传输引擎 |
+| [camera_web](../media_importer/camera_web.py) / [camera_page](../media_importer/camera_page.py) / [camera_library](../media_importer/camera_library.py) | 本人控制页面、复用拍摄队列；有界素材读取在来源 IO 边界执行，不另建归档记录 |
 | [camera_operations](../media_importer/camera_operations.py) / [camera_cards](../media_importer/camera_cards.py) | 一次性相机查询、清理预览与确认回执；复用来源适配器和清理核验 |
 | [selected_imports](../media_importer/selected_imports.py) / [selected_transfer](../media_importer/selected_transfer.py) / [selected_cards](../media_importer/selected_cards.py) | 固定所选素材范围，复用两路传输、停止恢复与同卡进度 |
 | [live_preview](../media_importer/live_preview.py) / [preview_worker](../media_importer/preview_worker.py) / [preview_cards](../media_importer/preview_cards.py) | 按需预览会话、子进程回收与飞书入口；Mac 包内置 go2rtc |
@@ -71,7 +72,9 @@ Mac 无线工作放入可终止的子进程。凭据只在该进程中读取；�
 
 ### 相机与播放边界
 
-`camera_coordinator` 负责来源占用和预览线程生命周期，`host_network` 负责宿主机联网和只读 Serve 检查；适配器负责具体相机协议。`preview_access` 只代理当前会话的页面、受限的接收型 WebRTC / MSE 协商和媒体字节，不接受发布视频、麦克风、数据通道、任意流地址、管理 API 或拍摄命令。`preview_rtc` 选择私有监听地址并限制协商格式，`preview_player` 负责播放与兼容回退。停止后立即撤销会话链接，回收媒体进程以关闭视频通道。
+`camera_coordinator` 负责来源占用和预览线程生命周期，`host_network` 负责宿主机联网和只读 Serve 检查；适配器负责具体相机协议。`preview_access` 的 `/view/` 仍只接收 WebRTC / MSE 协商和媒体字节，不接受任意流地址、管理 API 或拍摄命令。`preview_rtc` 选择私有监听地址并限制协商格式，`preview_player` 负责播放与兼容回退。停止后立即撤销会话链接，回收媒体进程以关闭视频通道。
+
+同一网关的 `/camera/` 使用独立的本人控制令牌，绑定已确认设备、1 小时有效期和同源 WebSocket；旧观看令牌不能控制相机。拍摄仍写入现有 `capture_requests` 队列，预览仍交给 `live_preview`。素材读取用有界内存队列交给导入线程，在相机 IO 边界执行；每段最多 1 MiB，缩略图最多 2 MiB，复核主文件身份和附属关系。浏览占用通过短期续约阻止导入、原片清理，不阻止上传，关闭页面或续约失效即释放；不增加磁盘视频缓存或传输记录。
 
 `bot_routes` 将稳定菜单事件和文字命令映射到既有应用入口。读取拍摄状态使用带时间的快照，不取消正在导入的文件；新的停止录像意图取消尚未执行的旧拍摄意图，并让出普通蓝牙连接任务。预览转录像必须等待预览停止确认；发送后的未知结果只复查，不重放快门命令。
 

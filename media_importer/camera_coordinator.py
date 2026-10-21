@@ -17,6 +17,9 @@ def source_wait_reason(store):
         return '相机预览停止结果待核验；完整缓存可继续归档'
     if preview_active(store):
         return '实时预览进行中，本地导入与原片清理等待；完整缓存可继续归档'
+    from .camera_library import active
+    if active(store):
+        return '正在浏览或回放相机素材，本地导入与原片清理等待；完整缓存可继续归档'
     return None
 
 

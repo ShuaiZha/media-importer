@@ -11,7 +11,7 @@ from .source_connection import read, fresh
 
 class SourceSession:
     IO = {'identify', 'info', 'telemetry', 'snapshot', 'paths', 'download', 'delete',
-          'keep_alive', 'read_range', 'media_info', 'verify_primary'}
+          'keep_alive', 'read_range', 'media_info', 'verify_primary', 'thumbnail', 'read_media'}
 
     def __init__(self, config, directory, stop=None, purpose='transfer'):
         self.config, self.directory, self.stop, self.purpose = config, directory, stop, purpose

@@ -71,25 +71,28 @@ def media_request(message, *, webrtc=False):
     return json.dumps(value)
 
 class Gateway:
-    def __init__(self, directory, config, settings=None):
+    def __init__(self, directory, config, settings=None, control=None):
         from .preview_hls import HLS
         self.directory, self.config, self.settings = directory, config, settings
         self.clients = set()
         self.scripts = {}
         self.hls = HLS()
+        from .camera_web import Workspace
+        self.workspace = Workspace(directory, settings, control) if control else None
 
     def state(self):
         return read(self.directory, 'live_preview')
 
     @staticmethod
-    def response(status, body, content_type='text/plain; charset=utf-8'):
+    def response(status, body, content_type='text/plain; charset=utf-8', *, extra=None, frame=False):
         from websockets.http11 import Response
         from websockets.datastructures import Headers
         data = body.encode() if isinstance(body, str) else body
         headers = Headers({'Content-Type': content_type, 'Content-Length': str(len(data)),
                            'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
-                           'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
-                           'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'"})
+                           'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN' if frame else 'DENY',
+                           'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; img-src 'self' blob:; connect-src 'self'; frame-ancestors " + ("'self'" if frame else "'none'")})
+        for key, value in (extra or {}).items(): headers[key] = value
         return Response(status, HTTPStatus(status).phrase, headers, data)
 
     async def request(self, connection, request):
@@ -99,6 +102,36 @@ class Gateway:
             return self.response(403, '访问地址未授权')
         if request.path == '/health':
             return self.response(200, 'media-importer-preview')
+        camera = re.fullmatch(r'/camera/([0-9a-f]{64})/(|control|thumbnail/[0-9a-f]{32}|media/[0-9a-f]{32})', request.path)
+        if camera and self.workspace:
+            from .camera_web import authorize
+            from .model import BackupError
+            from .store import Store
+            token, resource = camera.groups()
+            db = Store(self.directory)
+            try:
+                authorize(db, token)
+            except ConfigError:
+                return self.response(410, '控制入口已失效，请从飞书重新打开相机页面')
+            finally: db.close()
+            if resource == 'control':
+                # Unlike a receive-only player, controls require a same-origin
+                # browser handshake, even for loopback connections.
+                if request.headers.get('Origin') not in {self.config['local'], self.config['public']}:
+                    return self.response(403, '控制来源未授权')
+                connection.camera_token = token
+                return None
+            if not resource:
+                from .camera_page import PAGE as CAMERA_PAGE
+                return self.response(200, CAMERA_PAGE, 'text/html; charset=utf-8')
+            try:
+                kind, identifier = resource.split('/')
+                body, content_type, headers = await self.workspace.media(token, kind, identifier, request.headers.get('Range'))
+                return self.response(206 if kind == 'media' else 200, body, content_type, extra=headers)
+            except ConfigError as exc:
+                return self.response(409, str(exc))
+            except (BackupError, OSError):
+                return self.response(503, '素材读取失败，请刷新相机连接后重试')
         match = re.fullmatch(r'/view/([0-9a-f]{64})/(|player\.js|status|socket|hls/master\.m3u8|hls/[A-Za-z0-9]{8}/(?:playlist\.m3u8|segment\.ts)(?:\?n=[0-9]{1,12})?)', request.path)
         if not match:
             return self.response(404, '页面不存在')
@@ -113,7 +146,7 @@ class Gateway:
             connection.preview_token = token
             return None
         if not resource:
-            return self.response(200, PAGE, 'text/html; charset=utf-8')
+            return self.response(200, PAGE, 'text/html; charset=utf-8', frame=True)
         if resource == 'status':
             return self.response(200, json.dumps({'state': 'ready', 'webrtc': bool(state.get('webrtc'))}), 'application/json')
         base = upstream_base(state)
@@ -139,6 +172,9 @@ class Gateway:
         return self.response(200, self.scripts[base], 'text/javascript; charset=utf-8')
 
     async def stream(self, client):
+        if self.workspace and getattr(client, 'camera_token', None):
+            await self.workspace.stream(client)
+            return
         from websockets.asyncio.client import connect
         from websockets.exceptions import ConnectionClosed
         token = client.preview_token
@@ -232,11 +268,11 @@ class Gateway:
                 db.close()
 
 
-def serve(directory, stop):
+def serve(directory, stop, control=None):
     import os
     import sys
     if sys.platform != 'darwin' or os.environ.get('MEDIA_IMPORTER_RUNTIME') != 'native':
         stop.wait(); return
     from .settings import Settings
     settings = Settings(os.environ.get('MEDIA_IMPORTER_CONFIG', '/config/settings.json'), directory)
-    asyncio.run(Gateway(directory, configuration(settings.read()['config']), settings).run(stop))
+    asyncio.run(Gateway(directory, configuration(settings.read()['config']), settings, control).run(stop))

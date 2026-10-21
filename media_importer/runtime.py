@@ -25,6 +25,8 @@ class Control:
         self.transfer_stop = threading.Event()
         self.source_interrupt = threading.Event()
         self.changed = threading.Event()
+        from .camera_library import Library
+        self.library = Library(self.changed.set)
         self.lock = threading.RLock()
         self.work_guard = threading.Lock()
         from .camera_coordinator import CameraCoordinator
@@ -154,7 +156,7 @@ def daemon(config_path, directory, stop):
     from .operations import serve as maintenance
     maintainer = workers.start('maintenance', lambda: maintenance(directory, stop), critical=False)
     from .preview_access import serve as preview_gateway
-    gateway = workers.start('preview-access', lambda: preview_gateway(directory, stop), critical=False)
+    gateway = workers.start('preview-access', lambda: preview_gateway(directory, stop, control), critical=False)
     try:
         from .preflight import run as startup_check
         checked = startup_check(control.settings, store, stop)
@@ -195,6 +197,8 @@ def daemon(config_path, directory, stop):
                                 process_preview(service, control.settings)
                                 from .capture import process_one as process_capture
                                 process_capture(service, control.settings)
+                                from .camera_library import process_one as process_library
+                                process_library(service)
                                 from .camera_operations import process_one
                                 process_one(service, control.settings)
                                 from .selected_imports import process_one as process_selected, active

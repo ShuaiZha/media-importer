@@ -90,6 +90,9 @@ def panel(bot, store, receipt=None, *, waiting=False):
         if link.get('reason'):
             elements.append(paragraph('连接：' + link['reason']))
     if not waiting:
+        from .camera_web import button as workspace_button
+        workspace = workspace_button(bot, store)
+        if workspace: elements.append(bot.buttons(workspace))
         if commands:
             from .camera_coordinator import preview_active
             previewing = preview_active(store)

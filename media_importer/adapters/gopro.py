@@ -651,6 +651,38 @@ class GoProSource:
         except (OSError, HTTPException) as exc:
             raise SourceError("相机缓存核验读取失败") from exc
 
+    def thumbnail(self, asset):
+        """A bounded JPEG supplied by the camera, never an imported file."""
+        self.verify_primary(asset)
+        # HERO9 rejects an escaped directory separator on this endpoint.
+        body, code, _ = self._read('/gopro/media/thumbnail?path=' + quote(asset.path, safe='/'), 2 * 1024 * 1024 + 1)
+        if code != 200 or len(body) > 2 * 1024 * 1024 or not body.startswith(b'\xff\xd8\xff'):
+            raise SourceError('相机缩略图暂不可用')
+        return body
+
+    def read_media(self, primary, asset, offset, length):
+        """Playback reads use a separate bounded contract, never cache recovery."""
+        self.verify_primary(primary)
+        if asset.identity != primary.identity and not (
+                asset.serial == primary.serial and not asset.metadata.get('primary') and
+                asset.metadata.get('parent_gumi') == primary.metadata.get('gumi') and
+                PurePosixPath(asset.path).parent == PurePosixPath(primary.path).parent and
+                PurePosixPath(asset.path).suffix.lower() == '.lrv'):
+            raise SourceError('无法确认回放文件的关联关系')
+        if offset < 0 or not 0 < length <= 1024 * 1024 or offset + length > asset.size:
+            raise SourceError('回放读取范围无效')
+        if self.file_stat(asset.path) != (asset.size, asset.modified):
+            raise SourceError('相机文件已变化，请刷新素材')
+        end = offset + length - 1
+        with self._open('/videos/DCIM/' + quote(asset.path, safe='/'),
+                        {'Range': f'bytes={offset}-{end}'}) as response:
+            if response.status != 206 or response.headers.get('Content-Range') != f'bytes {offset}-{end}/{asset.size}':
+                raise SourceError('相机不支持准确范围回放')
+            body = response.read(length + 1)
+            if len(body) != length:
+                raise SourceError('回放片段不完整，请重新播放')
+            return body
+
     def download(self, asset, partial_path, progress):
         self.identify()
         self.ensure_idle()
