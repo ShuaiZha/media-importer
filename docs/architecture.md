@@ -10,6 +10,14 @@
 
 实线为文件传输，虚线为记录与控制。两路各一次处理一个文件，以完整缓存和持久化任务交接。SMB 离线不阻止额度内导入，来源断开不阻止完整缓存上传。
 
+## 设备、连接与拍摄
+
+稳定身份为「适配器类型 + 完整序列号」，与地址和链路无关。连接会话包含实际端点、固件与可访问性，变化时使旧卡片失效。USB 与 Wi-Fi 使用相同媒体导入核心；蓝牙仅用于身份、热点与拍摄控制，SMB 不依赖相机会话。
+
+Mac 无线工作放入可终止的子进程。凭据只在该进程中读取；连接检查有上限，失败按既有间隔重试。拍摄请求先持久化，导入线程取消当前临时下载后执行；上传线程继续。快门不自动重发，崩溃后只查询实际状态。控制结果短期保留，不新增历史查询体系。
+
+这不是多设备调度框架：每个实例仍只有一台相机、一个目的地。拍摄控制按适配器能力显示；其他系统与实时预览未实现时明确禁用。
+
 ## 一个文件的完成边界
 
 ![文件完成边界：完整导入后可按策略清理原片，远端归档记录后再清理缓存](assets/file-lifecycle.svg)
@@ -25,7 +33,9 @@
 | [runtime](../media_importer/runtime.py) / [pipeline](../media_importer/pipeline.py) | 后台生命周期、两路调度与故障恢复 |
 | [service](../media_importer/service.py) | 导入、归档与原片清理条件 |
 | [contracts](../media_importer/contracts.py) / [adapters](../media_importer/adapters/) | 通用接口与 GoPro、SMB、飞书差异 |
-| [source_connection](../media_importer/source_connection.py) | 身份观测、本次确认与旧卡失效 |
+| [connections](../media_importer/connections.py) / [source_connection](../media_importer/source_connection.py) | 连接策略、稳定身份、设备信任与旧会话失效 |
+| [source_session](../media_importer/source_session.py) | 每次来源 IO 绑定当前 USB / Wi-Fi 会话，不重建 SMB 上传线程 |
+| [radio](../media_importer/radio.py) / [capture](../media_importer/capture.py) | 有超时限制的原生无线进程、拍摄意图与实际结果 |
 | [camera_operations](../media_importer/camera_operations.py) / [camera_cards](../media_importer/camera_cards.py) | 一次性相机查询、清理预览与确认回执；复用来源适配器和清理核验 |
 | [selected_imports](../media_importer/selected_imports.py) / [selected_transfer](../media_importer/selected_transfer.py) / [selected_cards](../media_importer/selected_cards.py) | 固定所选素材范围，复用两路传输、停止恢复与同卡进度 |
 | [store](../media_importer/store.py) / [storage](../media_importer/storage.py) | 任务、锁、缓存盘与副本核验 |
@@ -43,6 +53,7 @@
 | `destination_anchor` | 连接地址变化后核验逻辑目的地 |
 | `.receipts/` | 数据库损坏时重建完整缓存任务 |
 | `camera_operations` | 短期清理清单、确认与删除意图；结果不确定时保留待复查依据 |
+| `capture_requests` | 短期拍摄意图、幂等标识与结果；已发命令不重放 |
 | `selected_imports` | 本次选择、确认版本与短期结果；未完成的选定任务保留恢复范围 |
 
 两路停止后，`settle` 在同一事务中冻结待发结果、保留去重与归档依据，再删除已完成明细。有完整缓存、待清理临时文件、清理错误或删除结果未知时不收尾。通知失败独立重试，不重新上传。

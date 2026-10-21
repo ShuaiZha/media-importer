@@ -23,6 +23,7 @@ class Control:
     def __init__(self, settings, stop):
         self.settings, self.stop = settings, stop
         self.transfer_stop = threading.Event()
+        self.source_interrupt = threading.Event()
         self.changed = threading.Event()
         self.lock = threading.RLock()
         self.work_guard = threading.Lock()
@@ -113,6 +114,7 @@ def daemon(config_path, directory, stop):
     def observe():
         db = Store(directory)
         heartbeat_at = 0
+        source_session_id = None
         try:
             while not stop.is_set():
                 control.refresh()
@@ -121,6 +123,13 @@ def daemon(config_path, directory, stop):
                     updates['worker_heartbeat_at'] = now()
                     heartbeat_at = time.monotonic()
                 db.status(**updates)
+                from .capture import pending as capture_pending
+                connection = db.get_meta('source_connection', {})
+                session_id = connection.get('id')
+                if capture_pending(db.db) or (source_session_id and session_id != source_session_id):
+                    control.source_interrupt.set()
+                    control.changed.set()
+                source_session_id = session_id
                 from .camera_operations import pending
                 from .selected_imports import pending as selection_pending
                 if pending(db.db) or selection_pending(db.db):
@@ -131,7 +140,7 @@ def daemon(config_path, directory, stop):
             control.changed.set()
             db.close()
     watcher = workers.start('settings-and-heartbeat', observe)
-    discoverer = workers.start('usb-discovery', lambda: discover_sources(directory, control.settings, stop))
+    discoverer = workers.start('source-connections', lambda: discover_sources(directory, control.settings, stop))
     def notify():
         from .notifications import NotificationWorker
         NotificationWorker(directory, control.settings, stop).run()
@@ -149,7 +158,9 @@ def daemon(config_path, directory, stop):
                 store.status(phase="invalid_config", message="配置无效，已停止同步与清理", configuration=control.state())
                 stop.wait(1)
                 continue
-            source, destination = create_source(config, control.transfer_stop), create_destination(config, control.transfer_stop)
+            from .source_session import SourceSession
+            source = SourceSession(config, directory, control.transfer_stop)
+            destination = create_destination(config, control.transfer_stop)
             try:
                 service = Service(config, store, source, destination, stop, control=control)
                 if store.get_meta("status", {}).get("active_transport", config.source["transport"]) != config.source["transport"]:
@@ -172,6 +183,8 @@ def daemon(config_path, directory, stop):
                         control.adopt()
                         try:
                             with control.work_guard:
+                                from .capture import process_one as process_capture
+                                process_capture(service, control.settings)
                                 from .camera_operations import process_one
                                 process_one(service, control.settings)
                                 from .selected_imports import process_one as process_selected, active

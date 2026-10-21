@@ -13,7 +13,7 @@ def describe(exc, stage=None):
     elif isinstance(exc, CacheUnavailable) or isinstance(exc, OSError) and not isinstance(exc, DestinationError):
         code, action, scope = "cache_unavailable", "连接原缓存盘，检查挂载与读写权限后重试。", "cache"
     elif isinstance(exc, SourceConnectionError):
-        code, action, scope = "source_network", "检查相机电源、USB 线与 USB 网络；程序会重试，完整缓存继续上传。", "source"
+        code, action, scope = "source_network", "检查相机电源与当前连接链路；程序会重试，完整缓存继续上传。", "source"
     elif isinstance(exc, SourceBlocked):
         code, action, scope = "source_state", "等待相机结束录像、恢复就绪或解除温度告警，已有完整缓存继续上传。", "source"
     elif isinstance(exc, DestinationError):

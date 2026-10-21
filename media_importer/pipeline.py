@@ -34,7 +34,9 @@ def transfer(service):
         activity.begin(stage, 'starting')
         db = Store(service.store.directory)
         remote = service.destination.fork(stop=attempt_stop) if hasattr(service.destination, "fork") else service.destination
-        source = service.source.fork(stop=attempt_stop) if stage == 'import' and hasattr(service.source, 'fork') else service.source
+        source_interrupt = getattr(service.control, 'source_interrupt', None)
+        source_stop = CombinedStop(attempt_stop, source_interrupt)
+        source = service.source.fork(stop=source_stop) if stage == 'import' and hasattr(service.source, 'fork') else service.source
         task = service.transfer_task(db, source, remote, stage)
         task.pipeline_stop = finished
         task.cache_guard = service.cache_guard
@@ -55,6 +57,17 @@ def transfer(service):
                 changed = False
                 try:
                     activity.begin(stage)
+                    if stage == 'import' and task.control and hasattr(task.control, 'settings'):
+                        if source_interrupt and source_interrupt.is_set():
+                            source_interrupt.clear()
+                            inventory, verified = None, False
+                        from .capture import process_one as process_capture
+                        if process_capture(task, task.control.settings):
+                            if source_interrupt:
+                                source_interrupt.clear()
+                            inventory, verified = None, False
+                            changed = True
+                            continue
                     if stage == 'import' and task.control and task.process_camera_operations:
                         from .camera_operations import process_one
                         if process_one(task, task.control.settings):
@@ -144,6 +157,12 @@ def transfer(service):
                             task.report("idle", "可用缓存已处理，等待新素材", current_file=None,
                                         current_file_id=None, current_bytes=0, current_total_bytes=0, issue=None)
                 except Cancelled:
+                    if stage == 'import' and source_interrupt and source_interrupt.is_set() and not attempt_stop.is_set():
+                        source_interrupt.clear()
+                        inventory, verified = None, False
+                        task.report('waiting_source', '相机操作或连接变化，未完成导入已清理，上传继续',
+                                    current_file=None, current_file_id=None, current_bytes=0, speed_bytes_per_second=0)
+                        continue
                     raise
                 except ConfirmationRequired as exc:
                     inventory, verified = None, False

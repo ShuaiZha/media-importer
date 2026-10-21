@@ -223,7 +223,7 @@ def start(home, record):
         except (OSError, ValueError):
             pass
         time.sleep(.5)
-    raise RuntimeError('后台服务仍在启动或重试；请查看 status 与 logs。Mac 若出现可移动卷访问提示，请允许本程序访问素材盘。配置和数据已保留')
+    raise RuntimeError('后台服务仍在启动或重试；请查看 status 与 logs。Mac 若出现文件夹或磁盘访问提示，请允许本程序访问已配置目录。配置和数据已保留')
 
 
 def install(home, source, project, bin_dir, *, no_start=False):

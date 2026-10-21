@@ -19,6 +19,25 @@ CREDENTIALS = {"app_id": "cli_test12345678", "app_secret": "only-test-secret",
 
 
 class WorkerTests(unittest.TestCase):
+    def test_auto_connect_failure_warns_once_and_recovers_on_the_same_notice(self):
+        self.view['stages'] = {'import': {'phase': 'idle'}, 'upload': {'phase': 'idle'}}
+        self.view['queues'] = {}
+        self.view['health']['source'] = {'online': False}
+        self.view['source_link'] = {'phase': 'waiting_retry', 'failure': 'fixture offline'}
+        self.tick(); self.tick(119)
+        self.sender.assert_not_called()
+        self.view['source_link']['phase'] = 'connecting'
+        self.tick(1)
+        self.assertEqual(1, self.sender.call_count)
+        self.assertIn('相机连接暂时不可用', str(self.sender.call_args))
+        self.view['source_link']['phase'] = 'waiting_retry'
+        self.tick(180)
+        self.assertEqual(1, self.sender.call_count)
+        self.view['source_link'] = {'phase': 'connected'}
+        self.view['health']['source'] = {'online': True}
+        self.tick(1)
+        self.assertTrue(any('相机连接已恢复' in str(c) for c in self.updater.call_args_list))
+
     def test_source_network_failure_is_delayed_and_recovers_as_a_connection_issue(self):
         from media_importer.issues import describe
         from media_importer.model import SourceConnectionError

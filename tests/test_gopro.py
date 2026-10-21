@@ -153,6 +153,59 @@ class GoProTests(unittest.TestCase):
                             self.source.media_info(path)
                         fallback.assert_not_called()
 
+    def test_stale_photo_size_uses_bounded_video_metadata_and_keeps_identity(self):
+        body, expected = self.mp4_fixture()
+        path = '100GOPRO/GH010002.MP4'
+        reads = []
+        def read(url, limit, headers):
+            start, end = map(int, headers['Range'][6:].split('-'))
+            reads.append((start, end))
+            return body[start:end + 1], 206, {'Content-Range': f'bytes {start}-{end}/{len(body)}'}
+        with patch.object(self.source, 'identify'), patch.object(self.source, 'ensure_idle'), \
+             patch.object(self.source, 'paths', return_value={path}), \
+             patch.object(self.source, 'media_list', return_value={path: expected}), \
+             patch.object(self.source, 'file_stat', return_value=(len(body), 'stable')), \
+             patch.object(self.source, '_read', side_effect=read), \
+             patch.object(self.source, 'media_info', side_effect=[{**expected, 's': '42'}, expected]):
+            recovered = self.source.inventory()[0]
+            normal = self.source.inventory()[0]
+        self.assertEqual(recovered.identity, normal.identity)
+        self.assertEqual(len(body), recovered.size)
+        self.assertLess(sum(end - start + 1 for start, end in reads), 128)
+
+    def test_stale_size_cannot_hide_changed_identity_or_file(self):
+        body, expected = self.mp4_fixture()
+        path = '100GOPRO/GH010002.MP4'
+        cases = [({**expected, 'cre': '1'}, (len(body), 'stable')),
+                 ({**expected, 'gumi': 'f' * 32}, (len(body), 'stable')),
+                 (expected, (len(body), 'changed')),
+                 ({**expected, 's': str(len(body) + 1)}, (len(body), 'stable'))]
+        for verified, after in cases:
+            with self.subTest(verified=verified, after=after), \
+                 patch.object(self.source, 'identify'), patch.object(self.source, 'ensure_idle'), \
+                 patch.object(self.source, 'paths', return_value={path}), \
+                 patch.object(self.source, 'media_list', return_value={path: expected}), \
+                 patch.object(self.source, 'file_stat', side_effect=[(len(body), 'stable'), after]), \
+                 patch.object(self.source, 'media_info', return_value={**expected, 's': '42'}), \
+                 patch.object(self.source, '_mp4_media_info', return_value=verified):
+                with self.assertRaises(SourceError): self.source.inventory()
+
+    def test_stale_size_requires_supported_video_and_agreeing_media_list(self):
+        body, expected = self.mp4_fixture()
+        for path, list_size, supported in [('100GOPRO/GOPR0001.JPG', len(body), True),
+                                           ('100GOPRO/GH010002.MP4', 42, True),
+                                           ('100GOPRO/GH010002.MP4', len(body), False)]:
+            with self.subTest(path=path, list_size=list_size, supported=supported), \
+                 patch.object(self.source, 'identify'), patch.object(self.source, 'ensure_idle'), \
+                 patch.dict(self.source.compatibility, chapter_metadata_fallback=supported), \
+                 patch.object(self.source, 'paths', return_value={path}), \
+                 patch.object(self.source, 'media_list', return_value={path: {**expected, 's': str(list_size)}}), \
+                 patch.object(self.source, 'file_stat', return_value=(len(body), 'stable')), \
+                 patch.object(self.source, 'media_info', return_value={**expected, 's': '42'}), \
+                 patch.object(self.source, '_mp4_media_info') as fallback:
+                with self.assertRaises(SourceError): self.source.inventory()
+                fallback.assert_not_called()
+
     def test_mp4_fallback_rejects_missing_identity_and_changed_source(self):
         for missing, changed in ((True, False), (False, True)):
             body, _ = self.mp4_fixture(with_gumi=not missing)

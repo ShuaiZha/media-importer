@@ -175,9 +175,9 @@ class ConnectionTests(unittest.TestCase):
         observe(self.store, None, later + 10)
         self.assertEqual('offline', observe(self.store, None, later + 21)['state'])
         again = observe(self.store, device())
-        self.assertEqual('pending', again['state'])
+        self.assertEqual('approved', again['state'])
         self.assertNotEqual(restored['id'], again['id'])
-        self.confirmed()
+        self.assertFalse(decide(self.store, self.settings, again['id'], True))
         self.assertEqual('searching', restore(self.store, {**self.config().source, 'serial': 'C0000000000999'})['state'])
 
     def test_approval_is_not_reused_after_disconnect_identity_or_firmware_change(self):
@@ -402,9 +402,11 @@ class ConnectionTests(unittest.TestCase):
         self.bot.process_one()
         self.sender.assert_not_called()
 
-    def test_start_menu_returns_confirmation_instead_of_enabling(self):
+    def test_start_menu_arms_sync_but_unconfirmed_camera_still_needs_consent(self):
         observe(self.store, device())
         self.bot.enqueue('start', {'changes': {'backup': {'enabled': True}}})
         self.assertTrue(self.bot.process_one())
-        self.assertFalse(self.config().backup['enabled'])
-        self.assertEqual('相机待确认', self.sender.call_args.args[1]['header']['title']['content'])
+        self.assertTrue(self.config().backup['enabled'])
+        with self.assertRaises(ConfirmationRequired):
+            require(self.store, self.config())
+        self.assertIn('确认相机', json.dumps(self.bot.panel(), ensure_ascii=False))

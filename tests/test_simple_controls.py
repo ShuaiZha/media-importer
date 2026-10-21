@@ -20,13 +20,13 @@ class SimpleControlsTests(unittest.TestCase):
     callback = test_bot.BotTests.callback
     message = test_bot.BotTests.message
 
-    def test_usb_only_preserves_connection_identity_and_rejects_wifi_without_saving(self):
+    def test_connection_preference_preserves_destination_and_complete_cache(self):
         before = self.path.read_bytes()
         config = Config.load(self.path)
         self.assertEqual(config.source['url'], GoProSource(config).base)
-        with self.assertRaises(ConfigError):
-            self.settings.update_preferences({'backup': {'source_transport': 'wifi'}})
-        self.assertEqual(before, self.path.read_bytes())
+        self.settings.update_preferences({'backup': {'source_transport': 'wifi'}})
+        self.assertEqual('wifi', Config.load(self.path).source['transport'])
+        self.assertEqual(config.source['url'], Config.load(self.path).source['url'])
         self.assertEqual(config.destination_id, Config.load(self.path).destination_id)
         self.assertFalse(any((Path('media_importer') / name).exists() for name in ('wireless_control.py','wireless_host.py')))
 
@@ -37,7 +37,7 @@ class SimpleControlsTests(unittest.TestCase):
             {'changes': {'limits': {'min_free_disk_gib': 0}}},
             {'changes': {'notifications': {'progress_interval_seconds': 60}}},
             {'changes': {'backup': {'media_scope': 'other'}}},
-            {'changes': {'backup': {'source_transport': 'wifi'}}},
+            {'changes': {'backup': {'source_transport': 'bluetooth'}}},
             {'changes': {'backup': {'stop_after_current': True}}},
             {'changes': {'backup': {'enabled': 'true'}}}]
         for payload in payloads:

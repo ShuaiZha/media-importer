@@ -31,6 +31,7 @@ class ConnectionNotificationTests(unittest.TestCase):
     def setUp(self):
         notification_tests.WorkerTests.setUp(self)
         self.values['backup']['enabled'] = False
+        self.values['source']['transport'] = 'usb'
         self.values['notifications'].update(enabled=False, connection_events=True)
         self.view['stages'] = {name: {'phase': 'paused'} for name in ('import', 'upload')}
         self.view['controls'] = {name: {'requested_stop': True} for name in ('import', 'upload')}
@@ -50,7 +51,7 @@ class ConnectionNotificationTests(unittest.TestCase):
         text = json.dumps(self.sender.call_args.args[1], ensure_ascii=False)
         self.assertIn('相机连接已建立', text)
         self.assertIn('同步已停止', text)
-        self.assertIn('USB 直连', text)
+        self.assertIn('USB 已就绪', text)
         self.observe(True)
         self.worker = self.make_worker()
         self.observe(True)
@@ -72,7 +73,7 @@ class ConnectionNotificationTests(unittest.TestCase):
         self.assertEqual(1, self.sender.call_count)
         text = json.dumps(self.sender.call_args.args[1], ensure_ascii=False)
         self.assertIn('相机连接不可用', text)
-        self.assertIn('暂时无法通过 USB 网络访问相机', text)
+        self.assertIn('暂时无法访问相机', text)
         self.assertNotIn('USB 已拔出', text)
         self.observe(False)
         self.assertEqual(1, self.sender.call_count)

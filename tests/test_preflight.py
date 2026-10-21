@@ -71,3 +71,13 @@ class PreflightTests(unittest.TestCase):
         result = run(self.settings, self.store)
         self.assertEqual('error', result['checks']['configuration']['state'])
         self.source.identify.assert_not_called()
+
+    def test_current_session_is_used_instead_of_saved_usb_endpoint(self):
+        import time
+        self.store.set_meta('source_connection', {'state': 'approved', 'online': True,
+                            'last_seen': time.time(), 'device': {'transport': 'wifi'}})
+        with patch('media_importer.source_session.SourceSession', return_value=self.source) as session:
+            result = run(self.settings, self.store)
+        self.assertEqual('ok', result['checks']['source']['state'])
+        self.assertEqual(self.store.directory, session.call_args.args[1])
+        self.patches[0].target.create_source.assert_not_called()

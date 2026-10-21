@@ -83,6 +83,9 @@ class Bot:
         """Accept only the explicitly supported, versioned settings controls."""
         if payload.get('form') or payload.get('operation'):
             return False
+        if 'capture' in payload:
+            from .capture_cards import supported
+            return supported(payload['capture']) and not payload.get('changes')
         if 'camera' in payload:
             from .camera_cards import supported
             return supported(payload['camera']) and not payload.get('changes')
@@ -96,7 +99,7 @@ class Bot:
                     (payload.get('settings_version') == 3 and payload['settings_form'] == 'transfer_settings'))
         if 'archive_change' in payload or 'archive_draft' in payload:
             return modern and payload.get('mode') in ('connection', 'new')
-        if payload.get('panel', 'status') not in ('status', 'cleanup', 'confirm_delete', 'source_confirmation', 'source_offline',
+        if payload.get('panel', 'status') not in ('status', 'cleanup', 'confirm_delete', 'source_confirmation', 'source_offline', 'source_online',
                                                   'notifications', 'previews', 'confirm_previews', 'scope', *PAGES):
             return False
         if 'source_decision' in payload:
@@ -133,6 +136,8 @@ class Bot:
         key, value = next(iter(updates.items()))
         if group == 'backup' and key in ('enabled', 'delete_source_after_import', 'archive_previews'):
             return type(value) is bool
+        if group == 'backup' and key == 'source_transport':
+            return value in ('auto', 'usb', 'wifi')
         if group == 'backup' and key == 'media_scope':
             return value in ('all', 'video', 'photo')
         return group == 'notifications' and key == 'enabled' and type(value) is bool
@@ -156,7 +161,7 @@ class Bot:
         from .bot_settings import PAGES, panel as settings_panel
         if page in PAGES:
             return settings_panel(self, page, item)
-        if page in ('source_confirmation', 'source_offline'):
+        if page in ('source_confirmation', 'source_offline', 'source_online'):
             return self.source_panel(values, page)
         if page == 'confirm_delete':
             return card('启用自动删除原片', [
@@ -204,7 +209,7 @@ class Bot:
             enabled = values['backup']['delete_source_after_import']
             from .source_connection import read, deletion_enabled
             from .config import Config
-            effective = deletion_enabled(Config.from_values(values), read(self.directory, 'source_selection'))
+            effective = deletion_enabled(Config.from_values(values), read(self.directory).get('device') or read(self.directory, 'source_selection'))
             action = {'changes': {'backup': {'delete_source_after_import': False}}, 'page': 'cleanup'} if enabled else {'panel': 'confirm_delete'}
             return card('原片处理', [
                 markdown('**自动删除：' + ('已启用' if enabled else '已停用') + '**'),
@@ -226,10 +231,15 @@ class Bot:
         state = read(self.directory)
         device = state.get('device', {})
         if page == 'source_offline':
-            return card('相机连接不可用', [paragraph('USB 相机暂时无法访问。完整缓存按当前同步设置继续归档；重新连接后需要再次确认。'),
+            return card('相机连接不可用', [paragraph('相机暂时无法访问。完整缓存按当前同步设置继续归档；已确认相机恢复连接后自动继续。'),
                                          note(format_time(now()))], 'grey')
         if not fresh(state):
-            return card('等待相机连接', [paragraph('请连接并开启 USB 相机。识别成功后将发送确认卡，确认前不导入或删除素材。')], 'blue')
+            return card('等待相机连接', [paragraph('请连接并开启相机。新相机需要确认；已确认相机按当前同步设置继续。')], 'blue')
+        if page == 'source_online':
+            transport = {'usb': 'USB', 'wifi': 'Wi-Fi'}.get(device.get('transport'), '未知')
+            return card('相机已连接', [paragraph(device['model_name'] + ' · ' + transport),
+                paragraph('已识别受信任相机，按设置继续导入。' if values['backup']['enabled'] else '同步已关闭，尚未开始传输。'),
+                note(format_time(now()))], 'green')
         support = device['compatibility']
         elements = [paragraph(device['model_name'] + '\n序列号：' + device['serial_number'] +
                               '\n固件：' + (device.get('firmware_version') or '未知')),
@@ -241,18 +251,20 @@ class Bot:
                        self.button('确认并备份', {'source_decision': True, 'session_id': state['id']})]
             buttons[-1]['type'] = 'primary'
             elements.append(self.buttons(*buttons))
-        elements.append(note('本次确认卡在断开、换相机或服务重启后失效。同一台已确认相机在重启后继续同步，不必再点一次。'))
+        elements.append(note('确认卡仅适用于当前连接。此后同一台相机重连或切换 USB／无线时，按同步开关自动继续。'))
         return card('相机已确认' if state.get('state') == 'approved' else
                     '相机待确认' if support['import_supported'] else '相机尚未适配', elements, 'blue', shared=True)
 
     def announce_source(self):
         from .source_connection import read, fresh
         state = read(self.directory)
-        event = (state.get('id'), state.get('state'))
+        event = (state.get('id'), state.get('state'), state.get('device', {}).get('http_ready', True))
         if not state.get('id') or event == self._source_event:
             return
         if state.get('state') == 'pending' and fresh(state):
             self.enqueue('source:confirm:' + state['id'], {'panel': 'source_confirmation', 'session_id': state['id']})
+        elif state.get('state') == 'approved' and fresh(state) and state.get('device', {}).get('http_ready', True) and (self.settings.read().get('config') or {}).get('notifications', {}).get('connection_events'):
+            self.enqueue('source:online:' + state['id'], {'panel': 'source_online', 'session_id': state['id']})
         elif state.get('state') == 'offline' and (self.settings.read().get('config') or {}).get('notifications', {}).get('connection_events'):
             self.enqueue('source:offline:' + state['id'], {'panel': 'source_offline', 'session_id': state['id']})
         self._source_event = event
@@ -281,6 +293,7 @@ class Bot:
         # Keep no arbitrary chat text, media, or credentials in the task database.
         commands = {"状态": {"panel": "status"}, "进度": {"panel": "status"}, "查看状态": {"panel": "status"},
                     "运行状态": {"panel": "status"},
+                    "相机控制": {"capture": {"version": 1, "action": "panel"}},
                     "相机状态": {"camera": {"version": 1, "action": "inspect"}},
                     "清理原片": {"camera": {"version": 1, "action": "select", "mode": "archived"}},
                     "选择素材": {"selected_import": {"version": 1, "action": "browse"}},
@@ -413,14 +426,19 @@ class Bot:
             if 'selected_import' in payload and self.supported(payload):
                 from .selected_cards import process_job
                 return process_job(self, job, payload)
+            if 'capture' in payload and self.supported(payload):
+                from .capture_cards import process_job
+                return process_job(self, job, payload)
             if 'camera' in payload and self.supported(payload):
                 from .camera_cards import process_job
                 return process_job(self, job, payload)
-            if payload.get('panel') in ('source_confirmation', 'source_offline') and payload.get('session_id'):
-                from .source_connection import read
+            if payload.get('panel') in ('source_confirmation', 'source_offline', 'source_online') and payload.get('session_id'):
+                from .source_connection import read, fresh
                 connection = read(self.directory)
-                expected = 'pending' if payload['panel'] == 'source_confirmation' else 'offline'
-                if connection.get('id') != payload['session_id'] or connection.get('state') != expected:
+                expected = {'source_confirmation': 'pending', 'source_offline': 'offline', 'source_online': 'approved'}[payload['panel']]
+                if (connection.get('id') != payload['session_id'] or connection.get('state') != expected or
+                        expected != 'offline' and not fresh(connection) or
+                        expected == 'approved' and not connection.get('device', {}).get('http_ready', True)):
                     with self.db() as db:
                         db.execute("UPDATE bot_jobs SET state='done' WHERE id=?", (job['id'],))
                     return True
@@ -495,11 +513,9 @@ class Bot:
                                   'detail': '同步已开启，等待服务核对当前设备后开始导入。' if payload['source_decision'] and changed else
                                             '本次连接已确认；同步仍按当前开关设置运行。' if payload['source_decision'] else
                                             '相机素材保留，可通过状态菜单重新确认。', 'level': 'success' if payload['source_decision'] else 'info'}
-                    if changes == {'backup': {'enabled': True}}:
-                        from .source_connection import read, fresh
-                        connection = read(self.directory)
-                        if connection and (connection.get('state') != 'approved' or not fresh(connection)):
-                            page, changes = 'source_confirmation', None
+                    # Enabling arms discovery even before the camera is reachable.
+                    # Source IO still requires a fresh, approved identity; a new
+                    # camera receives its own confirmation without blocking SMB.
                     stop_request = changes == {"backup": {"enabled": False}}
                     if changes and not stop_request and time.time() - job["created"] > 300:
                         raise ConfigError("控制请求已经过期，未执行；请重新操作")

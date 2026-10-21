@@ -72,14 +72,14 @@ def attention(live, enabled, configuration, health, files, stages):
     if configuration.get('error'):
         return {'required': True, 'message': '需要处理：配置无效，请检查 .env 和 settings.json。'}
     if not live:
-        return {'required': True, 'message': '需要处理：传输服务未响应，请在本机检查 Docker。'}
+        return {'required': True, 'message': '需要处理：传输服务未响应，请在本机检查后台服务。'}
     uncertain = [f for f in files if f['cache_state'] == 'unverified' and f['state'] != 'uploaded']
     if uncertain:
         return {'required': True, 'message': f'需要处理：{len(uncertain)} 个完整缓存待核验，其他正常文件继续上传。请检查原缓存或备份；停止同步后按维护文档在本机核验缓存。'}
     if any(f['cache_state'] == 'unverified' and f['state'] == 'uploaded' for f in files):
         return {'required': True, 'message': '需要处理：已归档文件的残留缓存身份不符，已保留待核验；归档完成数量不受影响。'}
     if not health['cache']['available']:
-        return {'required': True, 'message': '需要处理：请连接原缓存盘并检查 Docker 挂载；两路传输等待缓存恢复。'}
+        return {'required': True, 'message': '需要处理：请检查原缓存盘、目录权限及部署挂载；两路传输等待缓存恢复。'}
     missing = [f for f in files if f['state'] in ('cached', 'staged', 'publishing') and f['cache_state'] == 'missing']
     if missing:
         return {'required': True, 'message': f'需要处理：{len(missing)} 个已记录的缓存文件缺失，请检查原缓存盘；尚未归档的原片请保留。'}
@@ -302,14 +302,22 @@ def snapshot(directory, settings):
         if observation['stale']:
             observation['online'] = None
         if name == 'source':
+            if connection and approved and live:
+                device = connection.get('device', {})
+                observation.update({key: device[key] for key in ('model_name', 'serial_number', 'transport') if key in device})
+                # Discovery proves the media endpoint, not battery/temperature.
+                # BLE-only identity must never appear as a ready media connection.
+                observation.update(online=bool(device.get('http_ready', True)), stale=False)
             if connection and not approved:
                 device = connection.get('device', {})
-                observation = {**device, 'online': fresh(connection) if live else None, 'stale': not fresh(connection) or not live,
+                observation = {**device, 'online': bool(fresh(connection) and device.get('http_ready', True)) if live else None, 'stale': not fresh(connection) or not live,
                                'confirmation': connection.get('state'), 'telemetry': {}}
-            transport = config.source.get('transport', 'usb') if config else 'unknown'
-            if observation.get('transport', 'usb') != transport:
+            preference = config.source.get('transport', 'usb') if config else 'unknown'
+            transport = connection.get('device', {}).get('transport', observation.get('transport', 'usb'))
+            if preference != 'auto' and transport != preference:
                 observation.update(online=None, stale=True)
             observation['transport'] = transport
+            observation['connection_preference'] = preference
             telemetry = dict(observation.get('telemetry', {}))
             telemetry['stale'] = age(telemetry.get('observed_at')) > interval or observation['stale']
             telemetry['available'] = bool(telemetry.get('available') and not telemetry['stale'] and observation.get('online'))
@@ -327,7 +335,7 @@ def snapshot(directory, settings):
     inventory = state.get('inventory', {})
     scope_current = bool(selected_import) or inventory.get('media_scope', 'all') == media_scope
     all_imported = all(f['imported'] for f in files if f['selected'])
-    reading = (state.get('source_work') or state.get('maintenance_running') or state.get('phase') in ('scanning', 'checking_cleanup', 'cleaning_source')
+    reading = (state.get('capture_work') or state.get('source_work') or state.get('maintenance_running') or state.get('phase') in ('scanning', 'checking_cleanup', 'cleaning_source')
                or stages['import'].get('phase') in ('downloading', 'scanning', 'verifying'))
     ready = bool(live and approved and state.get('source', {}).get('online')
                  and inventory.get('verified') and inventory.get('scanned') and scope_current
@@ -348,7 +356,7 @@ def snapshot(directory, settings):
         if ignored:
             unplug_message += f' 已按设置忽略 {len(ignored)} 个预览文件。'
     elif not live:
-        unplug_message = '服务未响应，暂不能确认是否仍在读写相机；请先检查 Docker。'
+        unplug_message = '服务未响应，暂不能确认是否仍在读写相机；请先检查本机后台。'
     elif reading:
         unplug_message = '正在访问相机，请保持连接。'
     elif not transfer_enabled:
@@ -394,7 +402,7 @@ def snapshot(directory, settings):
     active_files = [f for f in files if f['selected'] or f['imported'] or f['state'] in ('cached', 'staged', 'publishing')
                     or f['state'] == 'excluded' and f['cleanup_selected'] and f['source_cleanup_error']]
     from .source_connection import deletion_enabled
-    delete_source = deletion_enabled(config, meta.get('source_selection', {})) if config and not selected_import else False
+    delete_source = deletion_enabled(config, connection.get('device') or meta.get('source_selection', {})) if config and not selected_import else False
     all_cleanup = cleanup_summary(files, delete_source)
     view = {'running': live, 'observed_at': now(), 'status': state, 'stages': stages, 'preflight': meta.get('preflight'), 'backlog': backlog,
             'metadata_backup': meta.get('metadata_backup'),
@@ -409,7 +417,8 @@ def snapshot(directory, settings):
                           'excluded_source_files': inventory.get('excluded_files') if scope_current and inventory.get('scanned') else None,
                           'deferred_files': sum(not f['selected'] and not f['imported'] and f['state'] != 'excluded' for f in files)},
             'configuration': configuration, 'controls': controls, 'health': health, 'queues': queues, 'storage': storage,
-            'source_connection': connection,
+            'source_connection': connection, 'source_link': meta.get('source_link', {}),
+            'camera_control': meta.get('camera_control', {}),
             'source_operation_running': bool(state.get('maintenance_running')),
             'unplug': {'ready': ready, 'can_disconnect': can_disconnect, 'message': unplug_message},
             'attention': attention(live, transfer_enabled, configuration, health, active_files, stages),

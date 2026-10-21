@@ -44,12 +44,14 @@ def settings_result(changes, applied, stopping):
         return {'title': '设置已保存 · 等待生效', 'detail': '传输服务应用后，此消息将自动更新。', 'level': 'warning'}
     if 'enabled' in backup:
         if backup['enabled']:
-            return {'title': '同步已开启', 'detail': '将自动检测并处理符合设置的素材。', 'level': 'success'}
+            return {'title': '同步已开启', 'detail': '将自动连接已确认相机并备份新素材；连接中断后自动重试。', 'level': 'success'}
         if stopping:
             return {'title': '正在停止同步', 'detail': '正在结束当前操作，任务与完整缓存保留。', 'level': 'warning'}
         return {'title': '同步已停止', 'detail': '导入、上传及原片删除均已停止，任务与完整缓存保留。', 'level': 'success'}
     if 'stop_after_current' in backup:
         return {'title': '将在当前文件完成后停止', 'detail': '两路不再启动新文件；当前操作结束后关闭同步。', 'level': 'success'}
+    if 'source_transport' in changes.get('backup', {}):
+        return {'title': '连接策略已保存', 'detail': '已保存连接方式，后台将重新核验相机；任务和完整缓存保留。', 'level': 'success'}
     if 'source_options' in changes:
         return {'title': '相机连接设置已生效', 'detail': '后台按新提示重新发现相机；识别到其他设备仍需确认。同步与原片处理开关保持不变。', 'level': 'success'}
     intervals = (f"扫描间隔：{backup['poll_seconds']:g} 秒\n重试基础间隔：{backup['retry_seconds']:g} 秒\n"
@@ -94,6 +96,31 @@ def _connection(state, local=False):
         return '待确认'
     available = state.get('available') if local else state.get('online')
     return ('可用' if local else '在线') if available else ('不可用' if local else '未连接')
+
+
+def connection_elements(view):
+    health = view.get('health', {})
+    source = health.get('source', {})
+    state, link = view.get('source_connection', {}), view.get('source_link', {})
+    label = _connection(source)
+    pending = state.get('state') in ('pending', 'declined') and not source.get('stale')
+    enabled = view.get('configuration', {}).get('sync_enabled')
+    if pending:
+        label = '已发现 · 等待确认'
+    elif source.get('online') is True and not source.get('stale'):
+        mode = {'usb': 'USB', 'wifi': 'Wi-Fi'}.get(source.get('transport'))
+        label = '在线' + (' · ' + mode if mode else '')
+        telemetry = source.get('telemetry', {})
+        if telemetry.get('available') and not telemetry.get('stale') and telemetry.get('battery_percent') is not None:
+            label += ' · 电量 ' + str(telemetry['battery_percent']) + '%'
+    elif view.get('running') and enabled:
+        label = {'connecting': '正在连接 Wi-Fi', 'waiting_retry': '等待自动重连',
+                 'unsupported': '连接方式不可用', 'waiting_source': '等待连接'}.get(link.get('phase'), label)
+    elements = [paragraph('相机：' + label + '\n本地缓存：' + _connection(health.get('cache', {}), True) +
+                          ' · SMB：' + _connection(health.get('destination', {})))]
+    if view.get('running') and enabled and link.get('reason') and link.get('phase') in ('waiting_retry', 'unsupported', 'invalid_config'):
+        elements.append(paragraph(link['reason']))
+    return elements
 
 
 def _stopped(view, name):
@@ -191,6 +218,12 @@ def _title(view):
         return '正在核验素材', 'blue'
     if any(s.get('phase') == 'failed' for s in stages.values()) or view.get('issues'):
         return '部分文件等待重试', 'orange'
+    link = view.get('source_link', {})
+    if link.get('phase') in ('connecting', 'waiting_retry', 'unsupported', 'waiting_source'):
+        return {'connecting': ('正在连接相机', 'blue'),
+                'waiting_retry': ('等待相机自动重连', 'blue'),
+                'unsupported': ('连接方式需要调整', 'orange'),
+                'waiting_source': ('等待相机连接', 'blue')}[link['phase']]
     if total or view.get('work', {}).get('pending_files'):
         if not view.get('health', {}).get('cache', {}).get('available', True):
             return '等待缓存盘恢复', 'orange'
@@ -266,6 +299,9 @@ def attention_elements(view):
         return [paragraph(f"{selected['archive_verification_pending']} 个已有归档待核验" + detail)]
     # One waiting reason per message. Per-file errors do not hide working queues.
     for stage in view.get('stages', {}).values():
+        if (stage.get('phase') in ('waiting_source', 'waiting_confirmation') and
+                view.get('source_link', {}).get('phase') in ('connecting', 'waiting_retry')):
+            continue  # The connection summary already explains automatic recovery.
         if stage.get('phase', '').startswith('waiting') and stage.get('issue'):
             return [paragraph(stage['issue'].get('action') or '连接恢复后自动重试。')]
     issues = view.get('issues', [])
@@ -342,14 +378,20 @@ def _selection_notes(view):
 
 
 def _overview(view):
-    result = attention_elements(view)
+    result = connection_elements(view) + attention_elements(view)
     result += progress_elements(view)
     if not view.get('batch', {}).get('total_files'):
         message = '当前无待处理任务。' if view.get('batch', {}).get('scanned') else '尚未完成素材扫描。'
         if view.get('work', {}).get('pending_files'):
             message = '已登记任务等待处理，尚未完成素材扫描。'
         if view.get('source_connection', {}).get('state') in ('pending', 'declined'):
-            message = '请确认当前相机后开始备份；确认前不导入或删除素材。'
+            message = '首次使用此相机，请确认身份；之后开启同步即可自动连接和备份。'
+        elif not view.get('configuration', {}).get('sync_enabled', True):
+            message = '开启同步后自动连接相机并检查新素材。'
+        elif view.get('source_link', {}).get('phase') in ('connecting', 'waiting_source', 'waiting_retry'):
+            message = '连接就绪后自动扫描并导入；已有完整缓存继续归档。'
+        elif view.get('batch', {}).get('scanned') and not view.get('work', {}).get('pending_files'):
+            message = '当前无待处理任务，保持自动检测。'
         result.append(paragraph(message))
     result += headline_elements(view)
     if round_complete(view):
@@ -381,10 +423,11 @@ def event_card(kind, title, text, view, *, keyword='', updated_at=None, location
     enabled = view.get('configuration', {}).get('sync_enabled', False)
     if kind in ('connected', 'disconnected'):
         title = '相机连接已建立' if kind == 'connected' else '相机连接不可用'
+        mode = {'usb': 'USB', 'wifi': 'Wi-Fi'}.get(view.get('health', {}).get('source', {}).get('transport'), '相机连接')
         if kind == 'connected':
-            elements.append(paragraph('USB 直连已就绪，绑定身份核对通过。' + ('同步已开启，将自动检测新素材。' if enabled else '同步已停止，需要导入时请开启同步。')))
+            elements.append(paragraph(mode + ' 已就绪，绑定身份核对通过。' + ('同步已开启，将自动检测新素材。' if enabled else '同步已停止，需要导入时请开启同步。')))
         else:
-            elements.append(paragraph('暂时无法通过 USB 网络访问相机。' + ('导入等待重连，完整缓存可继续上传。' if enabled else '同步已停止，任务与完整缓存保留。')))
+            elements.append(paragraph('暂时无法访问相机。' + ('导入等待重连，完整缓存可继续上传。' if enabled else '同步已停止，任务与完整缓存保留。')))
     elif kind == 'completed':
         pending = _cleanup_pending(result.get('cleanup', {})) if result else any(word in text for word in ('待处理', '待确认', '待清理', '待核验'))
         title, color = ('归档完成 · 清理待处理', 'orange') if pending else ('归档完成', 'green')
@@ -422,16 +465,7 @@ def status_content(view):
     title, color = _title(view)
     elements = _overview(view)
     health, disk = view.get('health', {}), view.get('disk', {})
-    source, target = health.get('source', {}), health.get('destination', {})
-    telemetry = source.get('telemetry', {})
-    battery = ''
-    if (source.get('online') and not source.get('stale') and telemetry.get('available')
-            and not telemetry.get('stale') and telemetry.get('battery_percent') is not None):
-        battery = ' · 电量 ' + str(telemetry['battery_percent']) + '%'
     elements.append({'tag': 'hr'})
-    source_label = '已发现 · 等待确认' if source.get('confirmation') in ('pending', 'declined') and not source.get('stale') else _connection(source)
-    elements.append(paragraph('相机：' + source_label + battery + '\n本地缓存：' +
-        _connection(health.get('cache', {}), True) + ' · SMB：' + _connection(target)))
     if disk.get('available'):
         elements.append(note('缓存占用 ' + _size(disk.get('cache_used_bytes')) + ' · 磁盘可用 ' + (_size(disk['free_bytes']) if disk.get('free_bytes') is not None else '未知')))
     archive = view.get('archive', {})

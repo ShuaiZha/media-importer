@@ -31,7 +31,8 @@ DELIVERY_ERRORS = {
 PROBLEMS = {
     'transfer_stalled': ('传输中断 · 自动重试', '传输长时间没有进展，程序正在重建连接。完整缓存和已归档文件保留。'),
     "network": ("存储连接暂时不可用", "上传等待连接恢复，完整缓存保留。请检查存储网络，程序将自动重试。"),
-    "source_network": ("相机连接暂时不可用", "检查相机是否开机、USB 线与 USB 网络是否可用。程序会自动重试，完整缓存继续上传。"),
+    "source_network": ("相机连接暂时不可用", "检查相机是否开机、当前连接链路是否可用。程序会自动重试，完整缓存继续上传。"),
+    "source_connection_mode": ("相机连接方式需要调整", "无线自动连接目前仅支持 Mac 原生版。请在「设置 → 相机连接」调整连接方式；其他环境使用 USB。"),
     "authentication": ("目的地认证失败", "检查目的地账号和密码，修改后测试连接；完整缓存保留。"),
     "permission": ("目的地权限不足", "检查共享目录的访问、写入和改名权限；完整缓存保留。"),
     "destination_path": ("目的地目录不可用", "检查共享名和目标目录，修改后测试连接。"),
@@ -316,7 +317,7 @@ class NotificationWorker:
             # If delivery was unavailable, send the latest confirmed state only.
             db.execute("UPDATE notification_events SET state='cancelled' WHERE kind IN ('connected','disconnected') AND state='pending'")
             kind = 'connected' if online else 'disconnected'
-            mode = 'USB 直连'
+            mode = {'usb': 'USB', 'wifi': 'Wi-Fi'}.get(transport, '相机连接')
             title = '素材导入助手 · 相机连接已建立' if online else '素材导入助手 · 相机连接不可用'
             text = mode + (' · 已核对相机身份' if online else ' · 暂时无法访问相机')
             key = 'connection:' + scope + ':' + state['episode'] + ':' + str(state['sequence'])
@@ -373,12 +374,13 @@ class NotificationWorker:
             credentials['receive_id_type'], credentials['receive_id']])
 
     def _card_signature(self, view, options):
+        from .bot_cards import connection_elements
         return _digest([self._progress(view)[0], view.get('running'),
                         view.get('configuration', {}).get('sync_enabled'), options['enabled'],
                         options['progress_interval_seconds'], options.get('keyword'),
                         view.get('unplug'), view.get('attention'),
                         [(name, stage.get('phase'), stage.get('message')) for name, stage in view.get('stages', {}).items()],
-                        view.get('controls'), view.get('cleanup')])
+                        view.get('controls'), view.get('cleanup'), connection_elements(view)])
 
     def _send_progress(self, db, scope, view, options, stamp, *, create=True):
         from .bot_cards import progress_card
@@ -543,6 +545,12 @@ class NotificationWorker:
                     add("cache_cleanup", "cache", "upload")
                 if not cleaning_source and item.get("cleanup") in ("blocked", "changed") and item.get('selected', True) and view.get("policy", {}).get("delete_source"):
                     add("source_cleanup", "source", "import")
+        link = view.get('source_link', {})
+        if link.get('failure') and link.get('phase') in ('connecting', 'waiting_retry'):
+            found.pop('source:import:source_state', None)
+            add('source_network', 'source', 'import')
+        elif link.get('phase') == 'unsupported':
+            add('source_connection_mode', 'source', 'import')
         return found
 
     def tick(self, view=None):

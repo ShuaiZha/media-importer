@@ -46,6 +46,7 @@ def deletion_enabled(config, selection):
     same = (selection.get('serial_number') == config.source['serial'] and
             selection.get('type') == config.source['type'])
     return bool(config.backup['delete_source_after_import'] and
+                config.source.get('transport') != 'wifi' and selection.get('transport') != 'wifi' and
                 (not same or selection.get('compatibility', {}).get('delete_verified', False)))
 
 
@@ -56,10 +57,11 @@ def reason(store, config, *, deleting=False):
     device = state.get('device', {})
     if (state.get('state') != 'approved' or not fresh(state) or
             device.get('type') != config.source['type'] or
-            device.get('serial_number') != config.source['serial'] or device.get('url') != config.source['url']):
-        return '等待飞书确认当前相机；已有完整缓存可继续上传'
-    if deleting and not device.get('compatibility', {}).get('delete_verified'):
-        return '此型号或固件尚未验证原片删除，当前保留原片'
+            device.get('serial_number') != config.source['serial'] or not device.get('http_ready', True)):
+        return ('等待飞书确认当前相机；已有完整缓存可继续上传' if state.get('state') in ('pending', 'declined')
+                else '等待相机连接；已有完整缓存可继续上传')
+    if deleting and (device.get('transport') != 'usb' or not device.get('compatibility', {}).get('delete_verified')):
+        return '此连接方式、型号或固件尚未验证原片删除，当前保留原片'
     return None
 
 
@@ -70,7 +72,11 @@ def require(store, config):
 
 
 def _identity(device):
-    return tuple(device.get(key) for key in ('type', 'serial_number', 'model_name', 'firmware_version', 'url'))
+    return tuple(device.get(key) for key in ('type', 'serial_number'))
+
+
+def _session(device):
+    return _identity(device) + tuple(device.get(key) for key in ('url', 'transport', 'firmware_version', 'http_ready'))
 
 
 def restore(store, source):
@@ -95,18 +101,21 @@ def observe(store, device, stamp=None):
         state = store.get_meta(KEY, {})
         old = state.get('device', {})
         if device:
-            same = _identity(old) == _identity(device)
+            same = _session(old) == _session(device)
+            binding = store.get_meta('source_selection', {})
+            trusted = bool(device.get('serial_number') and _identity(binding) == _identity(device))
             # A restart may mark the camera offline before it is seen again.
             # The same serial stays approved; a new session id already retired the old card.
             if state.get('restored') and same and old.get('serial_number'):
                 state.pop('restored', None)
                 state['state'] = 'approved'
             elif state.get('state') in ('searching', 'offline', None) or not same:
-                state = {'id': uuid.uuid4().hex, 'state': 'pending', 'device': device, 'created_at': now()}
+                state = {'id': uuid.uuid4().hex, 'state': 'approved' if trusted else 'pending',
+                         'device': device, 'created_at': now()}
                 status = store.get_meta('status', {})
                 if status:
                     status['inventory'] = {**status.get('inventory', {}), 'scanned': False, 'verified': False,
-                                           'invalidated_reason': '相机连接变化，确认后重新扫描'}
+                                           'invalidated_reason': '相机连接变化，需重新核验清单'}
                     store.db.execute("UPDATE meta SET value=? WHERE key='status'", (json.dumps(status),))
             else:
                 state.pop('restored', None)
@@ -188,28 +197,13 @@ def decide(store, settings, session_id, accept):
 
 
 def run(directory, settings, stop):
+    from .connections import ConnectionManager
     from .store import Store
-    from .adapters import discover_source
     store = Store(directory)
-    scan_at = 0
     try:
+        manager = ConnectionManager(store, settings, stop)
         while not stop.is_set():
-            item = settings.read()
-            if item.get('error'):
-                stop.wait(5)
-                continue
-            source = item['config']['source']
-            hint = item.get('source_hint', source)
-            state = store.get_meta(KEY, {})
-            hints = [hint, state.get('device', {}), source]
-            device = discover_source(source['type'], hints, stop)
-            state = observe(store, device)
-            # Publish loss before slower discovery, so old approval expires promptly.
-            if not device and state.get('state') in ('searching', 'offline') and time.monotonic() >= scan_at:
-                found = discover_source(source['type'], [], stop, scan=True)
-                scan_at = time.monotonic() + 60
-                if found:
-                    observe(store, found)
-            stop.wait(min(10, item['config']['backup']['poll_seconds']))
+            manager.tick()
+            stop.wait(5)
     finally:
         store.close()

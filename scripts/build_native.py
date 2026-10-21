@@ -29,6 +29,7 @@ def build(output):
         '--name', 'media-importer', '--distpath', str(work / 'dist'), '--workpath', str(work / 'work'),
         '--specpath', str(work), '--paths', str(ROOT), '--collect-submodules', 'media_importer',
         '--hidden-import', 'scripts.setup', '--collect-data', 'certifi',
+        *(['--collect-submodules', 'bleak'] if sys.platform == 'darwin' else []),
         '--exclude-module', 'tkinter', str(ROOT / 'scripts/native_entry.py')], cwd=ROOT, env=env, check=True)
     bundle = work / 'dist/media-importer'
     info = {'format': 1, 'version': __version__, 'platform': key, 'config_version': 4, 'database_version': 5}

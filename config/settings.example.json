@@ -5,7 +5,7 @@
     "delete_source_after_import": false,
     "stop_after_current": false,
     "media_scope": "all",
-    "source_transport": "usb",
+    "source_transport": "auto",
     "archive_previews": false,
     "poll_seconds": 10,
     "retry_seconds": 30,

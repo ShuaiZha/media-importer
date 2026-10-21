@@ -40,7 +40,7 @@ Windows 缓存示例：`D:/MediaImport/cache`。示例文件默认 `./data/cache
 
 地址和序列号可留空自动发现，不能代替飞书中的设备确认。机型能力及 USB 地址规则见[兼容性](compatibility.md#gopro)。
 
-飞书「相机连接」保存后，`source_options` 中的 `url`、`serial`、`timeout_seconds`、`request_attempts` 优先于 `.env`。修改前须停止同步，不更改既有设备归属或任务。
+飞书「相机连接」保存后，`source_options` 中的 `url`、`serial`、`timeout_seconds`、`request_attempts` 优先于 `.env`。修改前须停止同步，不更改既有设备归属或任务。连接策略也在此卡选择；USB 地址提示单独保留，不会被无线地址覆盖。已安装的显式 `usb` 配置升级后保持不变。
 
 ### SMB
 
@@ -96,11 +96,13 @@ Open ID 必须属于本人在**当前应用**中的身份，不是群 ID 或其�
 | `backup.delete_source_after_import` | `false` | 整组完整导入后删除原片，建议通过飞书确认开启 |
 | `backup.media_scope` | `"all"` | `all` 全部 / `video` 视频 / `photo` 照片与 RAW |
 | `backup.archive_previews` | `false` | 归档确认关联的 LRV、THM |
-| `backup.source_transport` | `"usb"` | 当前固定为 USB |
+| `backup.source_transport` | `"auto"` | `auto` USB 优先 / `usb` 仅 USB / `wifi` 无线；无线仅 Mac 原生版 |
 | `backup.stop_after_current` | `false` | 两路当前文件结束后停止，不开始新文件 |
 | `backup.poll_seconds` | `10` | 轮询间隔，秒 |
 | `backup.retry_seconds` | `30` | 重试基础间隔，秒 |
 | `backup.stability_seconds` | `2` | 清单稳定性复查间隔，秒 |
+
+自动与无线连接策略需要 v0.11.0 开发版；当前正式版 v0.10.26 仅使用 USB。升级保留已有显式 `usb` 设置。
 
 扫描、重试、清单复查间隔位于飞书底部「设置 → 传输与缓存」，与传输限制一起保存；扫描和重试允许 1–3600 秒，复查间隔允许 0–60 秒。相机请求超时在「设置 → 相机连接」中允许 1–300 秒，尝试次数允许 1–5 次。「同步 → 当前文件完成后停止」控制本次停止方式。
 
@@ -123,7 +125,7 @@ LRV 为低分辨率预览视频，THM 为缩略图。关闭预览归档只排除
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `notifications.enabled` | `false` | 自动进度、完成及异常提醒 |
-| `notifications.connection_events` | `true` | 连接断开提醒 |
+| `notifications.connection_events` | `true` | 连接与断开提醒 |
 | `notifications.progress_interval_seconds` | `300` | 进度更新间隔，60–86400 整数秒 |
 | `notifications.keyword` | `""` | 消息前缀，最多 100 字符 |
 

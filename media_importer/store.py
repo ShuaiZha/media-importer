@@ -31,6 +31,8 @@ class Store:
             raise BackupError("数据库格式不受支持；请先离线迁移到版本 5")
         from .camera_operations import initialize as initialize_camera_operations
         initialize_camera_operations(self.db)
+        from .capture import initialize as initialize_capture
+        initialize_capture(self.db)
         from .selected_imports import initialize as initialize_selected_imports
         initialize_selected_imports(self.db)
         self.db.executescript("""

@@ -34,7 +34,7 @@ def panel(bot, page, item):
         page = 'transfer_settings'  # Existing cards open the consolidated form.
     if page == 'settings':
         return card('菜单使用说明', [
-            markdown('**状态**：运行状态、相机状态、本机目录\n'
+            markdown('**状态**：运行状态、相机状态、相机控制、本机目录\n'
                      '**同步**：开启同步、立即停止、当前文件完成后停止、选择素材、清理原片\n'
                      '**设置**：素材与清理、传输与缓存、消息通知、相机连接、归档存储'),
             note('从底部菜单打开功能，卡片中填写参数并保存。扫描与重试间隔位于「传输与缓存」。')], shared=True)
@@ -96,14 +96,21 @@ def panel(bot, page, item):
     if page == 'source_settings':
         source = item.get('source_hint', values['source'])
         return card('相机连接', [
-            paragraph('当前适配器：' + source['type'] + ' · USB'),
+            paragraph('适配器：' + source['type'] + ' · 策略：' +
+                      {'auto': '自动，优先 USB', 'usb': '仅 USB', 'wifi': '无线'}[values['backup']['source_transport']]),
+            bot.buttons(*(bot.button(label, {'changes': {'backup': {'source_transport': mode}},
+                          'page': 'source_settings'}, revision) for mode, label in
+                          [('auto', '自动选择'), ('usb', '仅 USB'), ('wifi', '无线')])),
             form(bot, page, [
-                input_field('url', '优先探测地址（留空自动发现，含协议与端口）', source['url'], required=False, maximum=1000),
+                input_field('url', 'USB 探测地址（留空自动发现，含协议与端口）', source['url'], required=False, maximum=1000),
                 input_field('serial', '序列号提示（可留空）', source['serial'], required=False, maximum=100),
                 input_field('timeout_seconds', '相机请求超时（秒，1–300）', source['timeout_seconds']),
                 input_field('request_attempts', '请求尝试次数（1–5）', source['request_attempts']),
             ], revision),
-            note('先停止同步。地址与序列号是发现提示；识别到其他相机仍需确认，任务和缓存保留。')], shared=True)
+            note('先停止同步再修改。已确认相机可在 USB／无线间切换；其他相机仍需确认。'),
+            note('配置一次后，从「同步 → 开启同步」启动自动连接和备份；相机暂时离线也可以开启，重连后自动继续。'),
+            note('无线自动连接仅支持 Mac 原生版，需要相机开启无线连接及 Mac 有线上网；首次配对可能需在相机选择 Quik 配对入口。'),
+            bot.buttons(bot.button('打开相机控制', {'capture': {'version': 1, 'action': 'panel'}}))], shared=True)
     if page == 'local_storage':
         import os
         from .deployment import cache_path

@@ -10,7 +10,7 @@
 - [支持的 USB 设备](compatibility.md)、缓存目录、已存在且可读写的 SMB 共享与子目录。
 - [飞书 App ID、App Secret、本人 Open ID](feishu.md#1-准备应用与凭据)。
 
-USB 通过网络读取，无需设备直通。宿主机连通不等于容器连通，VPN / Tailscale 环境也需从容器检查。
+Docker 本轮仅支持 USB，不负责宿主机蓝牙与 Wi-Fi 切换；无线自动连接及拍摄控制使用 Mac 原生版。USB 通过网络读取，无需设备直通。宿主机连通不等于容器连通，VPN / Tailscale 环境也需从容器检查。
 
 ## 首次部署
 

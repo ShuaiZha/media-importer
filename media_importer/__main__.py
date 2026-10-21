@@ -30,6 +30,7 @@ def main(argv=None):
         sub = commands.add_parser(command)
         if command in ("check", "scan", "status"):
             sub.add_argument("--json", action="store_true")
+    commands.add_parser("radio")
     commands.add_parser("bot")
     commands.add_parser("bot-health")
     commands.add_parser("bot-panel")
@@ -41,6 +42,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
     try:
+        if args.command == 'radio':
+            from .radio import main as radio_main
+            return radio_main()
         if args.command in ('daemon', 'bot'):
             from .deployment import assert_runtime
             assert_runtime(args.data)
@@ -142,6 +146,10 @@ def main(argv=None):
             signal.signal(signum, lambda *_: stop.set())
         source = create_source(config, stop)
         if args.command == "scan":
+            from .source_connection import read
+            if read(args.data):
+                from .source_session import SourceSession
+                source = SourceSession(config, args.data, stop)
             assets = source.snapshot()
             emit({"files": len(assets), "bytes": sum(a.size for a in assets), "assets": [a.to_dict() for a in assets]})
             return 0

@@ -21,7 +21,7 @@ from . import lifecycle, platforms, releases
 def supervise(home):
     record = lifecycle.load(home)
     lifecycle.save(home / 'startup.json', {'phase': 'checking_paths', 'observed_at': time.time(),
-        'message': '正在访问配置和缓存盘；macOS 首次启动或更新后可能需要允许访问可移动卷'})
+        'message': '正在访问配置和缓存目录；macOS 首次启动或更新后可能需要允许访问对应文件夹或磁盘'})
     lifecycle.assert_paths(record); lifecycle.assert_no_docker(record)
     marker = Path(record['paths']['data']) / 'deployment.json'
     if not marker.exists() or json.loads(marker.read_text()) != {'mode': 'native', 'home': str(home)}:

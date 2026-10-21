@@ -44,7 +44,7 @@ def make_asset(serial, path, size, created, modified, gumi, primary, parent_gumi
 
 def defaults():
     return {"type": "gopro", "url": "", "serial": "", "timeout_seconds": 20,
-            "transport": "usb", "request_attempts": 3}
+            "transport": "auto", "request_attempts": 3}
 
 
 def discover(hints, stop, *, scan=False):
@@ -68,8 +68,8 @@ def validate(values):
     from ..config import ConfigError
     for key, value in defaults().items():
         values.setdefault(key, value)
-    if values["transport"] != "usb":
-        raise ConfigError("当前仅支持 USB；请将 SOURCE_TRANSPORT 设为 usb")
+    if values["transport"] not in ("auto", "usb", "wifi"):
+        raise ConfigError("SOURCE_TRANSPORT 必须为 auto、usb 或 wifi")
     for key in ("url",):
         if not values[key]:
             continue  # USB discovery supplies the address before confirmation.
@@ -274,7 +274,7 @@ class GoProSource:
 
     def identify(self):
         if not self.base or not self.serial:
-            raise SourceError('等待发现并确认 USB 相机')
+            raise SourceError('等待发现并确认相机')
         info = self.info()
         if info.get("serial_number") != self.serial:
             raise SourceError("相机序列号与配置不符，不处理这台设备")
@@ -532,9 +532,21 @@ class GoProSource:
         for path in sorted(paths):
             size, modified = self.file_stat(path)
             metadata = self.media_info(path) if path in primary else {}
-            if metadata.get("s") is not None and int(metadata["s"]) != size:
-                raise SourceError(f"素材大小正在变化: {path}")
             item = primary.get(path, {})
+            if metadata.get("s") is not None and int(metadata["s"]) != size:
+                # HERO9 can retain the previous photo's size after returning to
+                # video mode. Accept only a stale size, never a different identity:
+                # list + stable Range size + bounded MP4 metadata must agree.
+                if not (self.compatibility['chapter_metadata_fallback']
+                        and PurePosixPath(path).suffix.lower() == '.mp4'
+                        and item.get('s') is not None and int(item['s']) == size):
+                    raise SourceError(f"素材大小正在变化: {path}")
+                verified = self._mp4_media_info(path)
+                if (int(verified['s']) != size or self.file_stat(path) != (size, modified)
+                        or str(verified['cre']) != str(metadata.get('cre', ''))
+                        or self.gumi(verified['gumi']) != self.gumi(metadata.get('gumi'))):
+                    raise SourceError(f"素材元数据不一致，保留文件: {path}")
+                metadata = {**metadata, 's': verified['s']}
             asset = make_asset(self.serial, path, size, str(metadata.get("cre", item.get("cre", ""))),
                           modified, self.gumi(metadata.get("gumi")), path in primary, device_name=self.device_name)
             assets.append(asset)
@@ -642,7 +654,7 @@ class GoProSource:
 
     def delete(self, asset):
         self.verify_primary(asset)
-        if not self.compatibility['delete_verified']:
+        if self.transport == 'wifi' or not self.compatibility['delete_verified']:
             raise SourceError('此型号或固件尚未验证原片删除，保留相机文件')
         try:
             with self._open("/gopro/media/delete/file?" + urlencode({"path": asset.path}, safe="/")) as response:
@@ -659,3 +671,36 @@ def create(config, stop=None):
 
 def probe(url):
     return GoProSource.probe(url)
+
+
+def link(action, serial, stop=None):
+    if action == 'probe':
+        from .gopro_discovery import probe
+        found = probe('http://10.5.5.9:8080', stop, timeout=2)
+        if found:
+            found.update(transport='wifi', http_ready=True)
+            found['compatibility'] = {**found['compatibility'], 'delete_verified': False}
+        return found
+    from ..radio import request
+    return request('gopro', action, serial, stop)
+
+
+def radio_operation(action, serial, expires_at=None):
+    from .gopro_radio import run
+    return run(action, serial, expires_at)
+
+
+def controls(device):
+    from ..connections import wireless_supported
+    if not wireless_supported():
+        return {'commands': [], 'reason': '蓝牙拍摄控制目前仅支持 Mac 原生版'}
+    if device.get('transport') != 'wifi':
+        return {'commands': [], 'reason': '当前 USB 连接仅提供素材导入。拍摄控制请改用独立充电并连接相机 Wi-Fi'}
+    if not device.get('compatibility', {}).get('import_supported'):
+        return {'commands': [], 'reason': '当前机型尚未适配拍摄控制'}
+    if not device.get('http_ready', True):
+        return {'commands': ['state', 'stop_recording'], 'reason': '媒体链路未连接；可通过蓝牙读取状态或停止录像'}
+    commands = ['state', 'start_recording', 'stop_recording', 'mode_video']
+    if 'MINI' not in model_key(device.get('model_name', '')):
+        commands += ['photo', 'mode_photo']
+    return {'commands': commands, 'reason': None}

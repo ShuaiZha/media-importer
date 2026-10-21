@@ -78,6 +78,9 @@ class Service:
 
     def allowed(self, policy=None):
         if policy == 'delete_source_after_import':
+            from .capture import pending
+            if pending(self.store.db):
+                return False
             from .source_connection import reason
             if reason(self.store, self.config, deleting=True):
                 return False
@@ -106,7 +109,7 @@ class Service:
             return result
         except SourceError as exc:
             self.store.status(source={"online": False, "checked_at": now(), "reason": str(exc),
-                                     "transport": self.config.source.get("transport", "usb")})
+                                     "transport": getattr(source, "transport", self.config.source.get("transport", "usb"))})
             self.store.invalidate_inventory("相机连接或身份变化，需重新核对清单")
             raise
 
@@ -150,7 +153,7 @@ class Service:
                     try:
                         identity = source.identify()
                         result = {"online": True, "checked_at": now(), **identity,
-                                  "transport": self.config.source.get("transport", "usb")}
+                                  "transport": getattr(source, "transport", self.config.source.get("transport", "usb"))}
                         if hasattr(source, "telemetry"):
                             try:
                                 result["telemetry"] = source.telemetry()
@@ -163,7 +166,7 @@ class Service:
                                 store.invalidate_inventory("相机状态变化，需重新核对清单")
                     except SourceError as exc:
                         store.status(source={"online": False, "checked_at": now(), "reason": str(exc),
-                                             "transport": self.config.source.get("transport", "usb")})
+                                             "transport": getattr(source, "transport", self.config.source.get("transport", "usb"))})
                         store.invalidate_inventory("相机断开，连接后需重新核对清单")
                     except Cancelled:
                         break

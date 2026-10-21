@@ -68,3 +68,19 @@ def source_selection_groups(source, assets):
 
 def notification_adapter(kind):
     return _module(NOTIFICATIONS, kind, "通知")
+
+
+def source_link(kind, action, serial, stop=None):
+    module = _module(SOURCES, kind, "来源")
+    method = getattr(module, 'link', None)
+    if method is None:
+        from ..model import SourceConnectionError
+        raise SourceConnectionError('此适配器尚未提供无线连接')
+    return method(action, serial, stop)
+
+
+def source_controls(device):
+    if device.get('type') not in SOURCES:
+        return {'commands': [], 'reason': '尚未识别可控制的相机'}
+    method = getattr(_module(SOURCES, device['type'], '来源'), 'controls', None)
+    return method(device) if method else {'commands': [], 'reason': '此适配器尚未提供拍摄控制'}

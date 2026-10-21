@@ -205,6 +205,7 @@ class SelectionControl:
         self.path = parent.store.directory / 'state.sqlite3'
         self.browsing = browsing
         self.transfer_stop = threading.Event()
+        self.source_interrupt = getattr(parent.control, 'source_interrupt', None)
         self.lock = threading.RLock()
         self.checked_at = 0
         self.reason = None
