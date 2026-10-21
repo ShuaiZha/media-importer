@@ -11,16 +11,17 @@ from .model import Cancelled, SourceConnectionError
 
 _LOCK = threading.Lock()
 _PRIORITY = threading.Event()
-ACTIONS = {'discover', 'connect', 'state', 'start_recording', 'stop_recording', 'photo', 'mode_video', 'mode_photo'}
+ACTIONS = {'discover', 'connect', 'state', 'start_recording', 'stop_recording', 'photo', 'mode_video', 'mode_photo',
+           'catalog', 'load_preset', 'set_parameter', 'start_timelapse', 'hilight'}
 
 
-def request(adapter, action, serial, stop=None):
+def request(adapter, action, serial, stop=None, *, parameters=None):
     if sys.platform != 'darwin' or os.environ.get('MEDIA_IMPORTER_RUNTIME') != 'native':
         raise SourceConnectionError('无线自动连接和蓝牙控制仅支持 Mac 原生版')
     if action not in ACTIONS:
         raise ValueError('Unsupported radio operation')
     deadline = time.monotonic() + (140 if action == 'connect' else 65)
-    mutating = action not in ('discover', 'connect', 'state')
+    mutating = action not in ('discover', 'connect', 'state', 'catalog')
     priority = action == 'stop_recording'
     if priority: _PRIORITY.set()
     acquired = False
@@ -51,6 +52,7 @@ def request(adapter, action, serial, stop=None):
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, text=True, start_new_session=True)
         payload = json.dumps({'adapter': adapter, 'action': action, 'serial': serial,
+                              'parameters': parameters or {},
                               'expires_at': time.time() + 30 if mutating else None})
         while True:
             if not mutating and _PRIORITY.is_set():
@@ -90,7 +92,10 @@ def main():
             raise ValueError('Invalid operation')
         from .adapters import _module, SOURCES
         module = _module(SOURCES, value['adapter'], '来源')
-        result = module.radio_operation(value['action'], value.get('serial', ''), value.get('expires_at'))
+        parameters = value.get('parameters') or {}
+        if not isinstance(parameters, dict):
+            raise ValueError('Invalid parameters')
+        result = module.radio_operation(value['action'], value.get('serial', ''), value.get('expires_at'), parameters) if parameters else module.radio_operation(value['action'], value.get('serial', ''), value.get('expires_at'))
         print(json.dumps({'ok': True, 'result': result}, ensure_ascii=False), flush=True)
         return 0
     except BaseException as exc:

@@ -41,6 +41,7 @@ def panel(bot, state):
         buttons.append(button(bot, '开启预览', 'open'))
     buttons.append(bot.button('预览设置', {'panel': 'preview_settings'}))
     elements.append(bot.buttons(*buttons))
+    elements.append(bot.buttons(bot.button('拍摄控制', {'capture': {'version': 1, 'action': 'panel'}})))
     if phase in ACTIVE:
         if phase == 'ready':
             elements.append(paragraph((state.get('remote_reason') or '远程入口已配置 · 观看设备需连接 Tailscale') if state.get('remote_configured')

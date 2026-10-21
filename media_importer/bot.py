@@ -345,6 +345,12 @@ class Bot:
         if not self.supported(payload):
             return {"toast": {"type": "error", "content": "此操作已停用，请通过菜单重新打开卡片"}}
         payload["revision"] = row["revision"]
+        if payload.get('capture', {}).get('action') in ('apply_preset', 'apply_parameter'):
+            from .capture_forms import parse
+            try:
+                payload['capture_parameters'] = parse(payload['capture'], event.get('action', {}).get('form_value'))
+            except ConfigError as exc:
+                return {'toast': {'type': 'error', 'content': str(exc)}}
         if payload.get('selected_import', {}).get('action') == 'choose':
             from .selected_cards import parse_choices
             try:
@@ -575,7 +581,15 @@ class Bot:
             saved = db.execute('SELECT value FROM meta WHERE key=?', (receipt_key,)).fetchone()
         receipt = json.loads(saved[0]) if saved else {}
         message_id = receipt.get('id') or payload.get('message_id') or payload.get('response_message_id')
-        if message_id:
+        with self.db() as db:
+            newer = message_id and db.execute('''SELECT 1 FROM bot_jobs
+                WHERE scope=? AND created>? AND json_extract(payload,'$.response_message_id')=? LIMIT 1''',
+                (self.scope, job['created'], message_id)).fetchone()
+        if newer:
+            # Continue monitoring the underlying operation (including error
+            # alerts), but never overwrite a newer view of this shared card.
+            pass
+        elif message_id:
             self.updater(self.credentials, message_id, response)
         else:
             message_id = self.sender(self.credentials, response, event_id="control:" + self.scope + ":" + job["id"])

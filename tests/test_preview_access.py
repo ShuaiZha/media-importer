@@ -241,16 +241,16 @@ class ControlTests(unittest.TestCase):
     tearDown=test_bot.BotTests.tearDown
     bind=PreviewTests.bind
 
-    def test_status_refresh_is_done_without_pending_camera_io_even_during_preview(self):
+    def test_status_refresh_queues_read_only_without_interrupting_preview(self):
         connection=self.bind()
         self.store.set_meta('live_preview',{'state':'ready'})
         self.store.status(source={'serial_number':connection['device']['serial_number'],
                                  'telemetry':{'available':True,'recording':False,'observed_at':now()}})
         with patch('media_importer.connections.wireless_supported',return_value=True):
             op=capture.enqueue(self.store,'owner','query','state',connection['id'])
-        self.assertEqual('done',op['state'])
+        self.assertEqual('queued',op['state'])
         self.assertFalse(capture.mutating_pending(self.store.db))
-        self.assertFalse(json.loads(op['result'])['recording'])
+        self.assertEqual({},json.loads(op['result']))
 
     def test_stop_is_allowed_while_preview_is_pending_cleanup(self):
         connection=self.bind()

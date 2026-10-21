@@ -36,7 +36,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_already_recording_and_already_stopped_do_not_write_shutter(self):
         for action, recording in [('start_recording', True), ('stop_recording', False)]:
             camera = Camera('C0000000000123')
-            camera.state = AsyncMock(return_value={'recording': recording})
+            camera.state = AsyncMock(return_value={'recording': recording, 'mode': 'video'})
             camera.command = AsyncMock()
             self.assertTrue((await camera.execute(action))['already_satisfied'])
             camera.command.assert_not_called()

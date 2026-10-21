@@ -38,6 +38,8 @@ Mac 无线工作放入可终止的子进程。凭据只在该进程中读取；�
 | [connections](../media_importer/connections.py) / [source_connection](../media_importer/source_connection.py) | 连接策略、稳定身份、设备信任与旧会话失效 |
 | [source_session](../media_importer/source_session.py) | 每次来源 IO 绑定当前 USB / Wi-Fi 会话，不重建 SMB 上传线程 |
 | [radio](../media_importer/radio.py) / [capture](../media_importer/capture.py) | 有超时限制的原生无线进程、拍摄意图与实际结果 |
+| [gopro_capture](../media_importer/adapters/gopro_capture.py) / [capture_forms](../media_importer/capture_forms.py) | 适配器读取预设和可用值；通用表单展示能力，不硬编码相机参数组合 |
+| [capture_sessions](../media_importer/capture_sessions.py) | 仅保留最近一次拍摄前后清单，新增文件复用选择导入；不另建传输引擎 |
 | [camera_operations](../media_importer/camera_operations.py) / [camera_cards](../media_importer/camera_cards.py) | 一次性相机查询、清理预览与确认回执；复用来源适配器和清理核验 |
 | [selected_imports](../media_importer/selected_imports.py) / [selected_transfer](../media_importer/selected_transfer.py) / [selected_cards](../media_importer/selected_cards.py) | 固定所选素材范围，复用两路传输、停止恢复与同卡进度 |
 | [live_preview](../media_importer/live_preview.py) / [preview_worker](../media_importer/preview_worker.py) / [preview_cards](../media_importer/preview_cards.py) | 按需预览会话、子进程回收与飞书入口；Mac 包内置 go2rtc |

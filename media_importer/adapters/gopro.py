@@ -345,13 +345,22 @@ class GoProSource:
                   "storage_status": {0: "ready", 1: "full", 2: "missing", 3: "format_error", 4: "busy", 8: "error"}.get(storage, "unknown"),
                   "storage_remaining_bytes": integer(54) * 1024 if integer(54) is not None else None,
                   "temperature_c": None, "storage_capacity_bytes": None, "usb_connected": None}
+        values.update(recording_seconds=integer(13), remaining_video_seconds=integer(35),
+                      mode={1000: 'video', 1001: 'photo', 1002: 'timelapse'}.get(integer(96), 'other'),
+                      preset=integer(97))
         if values["battery_present"] is False:
             values.update(battery_percent=None, charging=None)
         return {**values, "observed_at": now(), "available": True,
                 "capabilities": {key: value is not None for key, value in values.items()}}
 
     def telemetry(self):
-        return self.decode_status(self._json("/gopro/camera/state").get("status"))
+        raw = self._json("/gopro/camera/state")
+        state = self.decode_status(raw.get("status"))
+        from .gopro_capture import option_label
+        values = raw.get('settings', {})
+        ids = (2, 3, 121) if state['mode'] == 'video' else (122,) if state['mode'] == 'photo' else (2, 5)
+        state['specification'] = ' · '.join(option_label(i, values[str(i)]) for i in ids if str(i) in values)
+        return state
 
     @staticmethod
     def idle_reason(state):
@@ -704,7 +713,7 @@ def probe(url):
     return GoProSource.probe(url)
 
 
-def link(action, serial, stop=None):
+def link(action, serial, stop=None, *, parameters=None):
     if action == 'probe':
         from .gopro_discovery import probe
         found = probe('http://10.5.5.9:8080', stop, timeout=2)
@@ -713,12 +722,12 @@ def link(action, serial, stop=None):
             found['compatibility'] = {**found['compatibility'], 'delete_verified': False}
         return found
     from ..radio import request
-    return request('gopro', action, serial, stop)
+    return request('gopro', action, serial, stop, parameters=parameters) if parameters else request('gopro', action, serial, stop)
 
 
-def radio_operation(action, serial, expires_at=None):
+def radio_operation(action, serial, expires_at=None, parameters=None):
     from .gopro_radio import run
-    return run(action, serial, expires_at)
+    return run(action, serial, expires_at, parameters) if parameters else run(action, serial, expires_at)
 
 
 def controls(device):
@@ -731,7 +740,8 @@ def controls(device):
         return {'commands': [], 'reason': '当前机型尚未适配拍摄控制'}
     if not device.get('http_ready', True):
         return {'commands': ['state', 'stop_recording'], 'reason': '媒体链路未连接；可通过蓝牙读取状态或停止录像'}
-    commands = ['state', 'start_recording', 'stop_recording', 'mode_video']
+    commands = ['state', 'start_recording', 'stop_recording', 'mode_video',
+                'catalog', 'load_preset', 'set_parameter', 'start_timelapse', 'hilight']
     if 'MINI' not in model_key(device.get('model_name', '')):
         commands += ['photo', 'mode_photo']
     return {'commands': commands, 'reason': None}

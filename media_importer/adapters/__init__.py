@@ -70,13 +70,13 @@ def notification_adapter(kind):
     return _module(NOTIFICATIONS, kind, "通知")
 
 
-def source_link(kind, action, serial, stop=None):
+def source_link(kind, action, serial, stop=None, *, parameters=None):
     module = _module(SOURCES, kind, "来源")
     method = getattr(module, 'link', None)
     if method is None:
         from ..model import SourceConnectionError
         raise SourceConnectionError('此适配器尚未提供无线连接')
-    return method(action, serial, stop)
+    return method(action, serial, stop, parameters=parameters) if parameters else method(action, serial, stop)
 
 
 def source_controls(device):

@@ -173,7 +173,8 @@ class Service:
                         store.invalidate_inventory("相机断开，连接后需重新核对清单")
                     except Cancelled:
                         break
-                    finished.wait(min(5, self.config.backup["poll_seconds"]) if keep_awake else self.config.backup["poll_seconds"])
+                    watching = store.get_meta('capture_card_watch', {}).get('until', 0) > time.time()
+                    finished.wait(min(5, self.config.backup["poll_seconds"]) if keep_awake or watching else self.config.backup["poll_seconds"])
             finally:
                 store.close()
         def keep_alive():
@@ -689,13 +690,14 @@ class Service:
                 self.transfer_status(current_bytes=0, speed_bytes_per_second=0, eta_seconds=None)
                 self.clean_temporaries("local")
 
-    def source_snapshot(self):
+    def source_snapshot(self, source=None):
         from .source_connection import require
+        source = self.source if source is None else source
         require(self.store, self.config)
-        fresh = self.source.snapshot()
+        fresh = source.snapshot()
         require(self.store, self.config)
-        if hasattr(self.source, "reconcile"):
-            fresh = self.source.reconcile(fresh, self.rows())
+        if hasattr(source, "reconcile"):
+            fresh = source.reconcile(fresh, self.rows())
         return fresh
 
     def settle(self):

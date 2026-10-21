@@ -128,6 +128,7 @@ def daemon(config_path, directory, stop):
                     heartbeat_at = time.monotonic()
                 db.status(**updates)
                 from .capture import mutating_pending as capture_pending
+                from .capture import pending as any_capture_pending
                 from .live_preview import requested as preview_requested
                 connection = db.get_meta('source_connection', {})
                 session_id = connection.get('id')
@@ -137,7 +138,7 @@ def daemon(config_path, directory, stop):
                 source_session_id = session_id
                 from .camera_operations import pending
                 from .selected_imports import pending as selection_pending
-                if pending(db.db) or selection_pending(db.db):
+                if pending(db.db) or selection_pending(db.db) or any_capture_pending(db.db):
                     control.changed.set()
                 stop.wait(1)
         finally:

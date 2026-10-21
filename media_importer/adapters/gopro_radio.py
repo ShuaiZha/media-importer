@@ -110,7 +110,7 @@ class Camera:
             for service in self.client.services:
                 for char in service.characteristics:
                     if 'notify' in char.properties:
-                        callback = self.receive if char.uuid in (characteristic(0x73), characteristic(0x77)) else lambda *_: None
+                        callback = self.receive if char.uuid in (characteristic(0x73), characteristic(0x75), characteristic(0x77)) else lambda *_: None
                         await asyncio.wait_for(self.client.start_notify(char, callback), 5)
             identity = hardware(await self.command(0x3c))
             if self.serial and identity['serial_number'] != self.serial:
@@ -162,7 +162,7 @@ class Camera:
     async def state(self):
         values = await self.statuses(8, 10, 38, 39, 96, 97)
         return {'recording': bool(values[10]), 'busy': bool(values[8]),
-                'mode': {1000: 'video', 1001: 'photo'}.get(values[96], 'other'),
+                'mode': {1000: 'video', 1001: 'photo', 1002: 'timelapse'}.get(values[96], 'other'),
                 'preset': values[97], 'photos': values[38], 'videos': values[39], 'observed_at': now()}
 
     def check_expiry(self):
@@ -199,20 +199,50 @@ class Camera:
             await asyncio.sleep(.25)
         raise SourceConnectionError('模式切换结果尚未确认，请刷新相机状态')
 
-    async def execute(self, action):
+    async def execute(self, action, parameters=None):
+        parameters = parameters or {}
         before = await self.state()
         if action == 'state':
             return before
+        if action == 'catalog':
+            from .gopro_capture import catalog
+            return await catalog(self)
+        if action == 'hilight':
+            if not before['recording'] or before['mode'] != 'video':
+                raise SourceConnectionError('HiLight 仅在视频录像中可用')
+            count = (await self.statuses(58))[58]
+            self.check_expiry()
+            lost = False
+            try:
+                await self.command(0x18)
+            except (TimeoutError, SourceConnectionError):
+                lost = True
+            confirmed = False
+            for _ in range(8):
+                after = await self.state()
+                confirmed = (await self.statuses(58))[58] > count
+                if confirmed or not after['recording']: break
+                await asyncio.sleep(.25)
+            return {**after, 'ack_lost': lost, 'uncertain': not confirmed,
+                    **({'reason': '标记结果待核验，未重复添加'} if not confirmed else {'hilight_added': True})}
         if action == 'stop_recording' and not before['recording']:
             return {**before, 'already_satisfied': True}
-        if action == 'start_recording' and before['recording']:
+        if action in ('start_recording', 'start_timelapse') and before['recording']:
+            expected = 'timelapse' if action == 'start_timelapse' else 'video'
+            if before['mode'] != expected:
+                raise SourceConnectionError('相机正在执行另一种拍摄，请先停止并刷新状态')
             return {**before, 'already_satisfied': True}
         if action != 'stop_recording' and (before['recording'] or before['busy']):
             raise SourceConnectionError('相机正在录像或忙碌；请先停止录像并等待完成')
         if action in ('mode_video', 'mode_photo'):
             return await self.set_mode(action.removeprefix('mode_'))
+        if action in ('load_preset', 'set_parameter'):
+            from .gopro_capture import load_preset, set_parameter
+            return await (load_preset(self, parameters) if action == 'load_preset' else set_parameter(self, parameters))
+        if action == 'start_timelapse' and before['mode'] != 'timelapse':
+            raise SourceConnectionError('请先选择延时摄影预设，再开始拍摄')
         desired = 'photo' if action == 'photo' else 'video'
-        if action == 'photo' or (action != 'stop_recording' and before['mode'] != desired):
+        if action == 'photo' or (action not in ('stop_recording', 'start_timelapse') and before['mode'] != desired):
             before = await self.set_mode(desired)
         self.check_expiry()
         # Never retry shutter writes: an ACK timeout can mean the operation succeeded.
@@ -224,7 +254,7 @@ class Camera:
         for _ in range(12):
             after = await self.state()
             done = (after['photos'] > before['photos'] and not after['busy'] if action == 'photo' else
-                    after['recording'] == (action == 'start_recording') and
+                    after['recording'] == (action in ('start_recording', 'start_timelapse')) and
                     (action != 'stop_recording' or not after['busy']))
             if done:
                 return {**after, 'ack_lost': uncertain}
@@ -232,7 +262,7 @@ class Camera:
         return {**after, 'uncertain': True, 'reason': '命令结果未确认，请刷新状态；不会自动重复拍摄'}
 
 
-async def perform(action, serial, expires_at=None):
+async def perform(action, serial, expires_at=None, parameters=None):
     if action != 'discover' and not serial:
         raise SourceConnectionError('请先通过飞书确认相机身份')
     interface = uplink = None
@@ -288,8 +318,8 @@ async def perform(action, serial, expires_at=None):
             return {**device, 'http_ready': True}
         # BLE has already verified the full serial. A lost HTTP media route
         # must not prevent stopping an active recording or reading its state.
-        return await camera.execute(action)
+        return await camera.execute(action, parameters) if parameters else await camera.execute(action)
 
 
-def run(action, serial, expires_at=None):
-    return asyncio.run(asyncio.wait_for(perform(action, serial, expires_at), 130 if action == 'connect' else 60))
+def run(action, serial, expires_at=None, parameters=None):
+    return asyncio.run(asyncio.wait_for(perform(action, serial, expires_at, parameters), 130 if action == 'connect' else 60))
