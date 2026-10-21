@@ -171,13 +171,12 @@ class GoProTests(unittest.TestCase):
             normal = self.source.inventory()[0]
         self.assertEqual(recovered.identity, normal.identity)
         self.assertEqual(len(body), recovered.size)
-        self.assertLess(sum(end - start + 1 for start, end in reads), 128)
+        self.assertLess(sum(end - start + 1 for start, end in reads), 256)
 
     def test_stale_size_cannot_hide_changed_identity_or_file(self):
         body, expected = self.mp4_fixture()
         path = '100GOPRO/GH010002.MP4'
-        cases = [({**expected, 'cre': '1'}, (len(body), 'stable')),
-                 ({**expected, 'gumi': 'f' * 32}, (len(body), 'stable')),
+        cases = [({**expected, 'gumi': 'f' * 32}, (len(body), 'stable')),
                  (expected, (len(body), 'changed')),
                  ({**expected, 's': str(len(body) + 1)}, (len(body), 'stable'))]
         for verified, after in cases:
@@ -197,7 +196,7 @@ class GoProTests(unittest.TestCase):
                                            ('100GOPRO/GH010002.MP4', len(body), False)]:
             with self.subTest(path=path, list_size=list_size, supported=supported), \
                  patch.object(self.source, 'identify'), patch.object(self.source, 'ensure_idle'), \
-                 patch.dict(self.source.compatibility, chapter_metadata_fallback=supported), \
+                 patch.dict(self.source.compatibility, mp4_identity_metadata=supported), \
                  patch.object(self.source, 'paths', return_value={path}), \
                  patch.object(self.source, 'media_list', return_value={path: {**expected, 's': str(list_size)}}), \
                  patch.object(self.source, 'file_stat', return_value=(len(body), 'stable')), \

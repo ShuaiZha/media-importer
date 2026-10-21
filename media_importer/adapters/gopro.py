@@ -34,7 +34,8 @@ class _Links(HTMLParser):
 
 
 def make_asset(serial, path, size, created, modified, gumi, primary, parent_gumi="", device_name="GoPro"):
-    # GUMI and the camera timestamps define the source's stable material identity.
+    # Preserve existing IDs. The adapter normalizes unstable API timestamps
+    # before constructing this identity; never deduplicate by name/size alone.
     payload = {"serial": serial, "path": path, "size": size, "created": created,
                "modified": modified, "gumi": gumi, "primary": primary, "parent_gumi": parent_gumi}
     identity = uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(payload, sort_keys=True)).hex
@@ -462,7 +463,7 @@ class GoProSource:
             return self._mp4_media_info(path)
 
     def _mp4_media_info(self, path):
-        """Bounded MP4 identity reads when a remaining chapter has no API metadata."""
+        """Read identity metadata without reading video payload (mdat)."""
         size, modified = self.file_stat(path)
         consumed, count = 0, 0
 
@@ -520,6 +521,28 @@ class GoProSource:
     def gumi(value):
         return value.lower() if isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{32}", value) else ""
 
+    def _identity_metadata(self, path, size, modified, item=None):
+        metadata = self.media_info(path)
+        video_headers = (self.compatibility.get('mp4_identity_metadata', False)
+                         and PurePosixPath(path).suffix.lower() == '.mp4')
+        if metadata.get('s') is not None and int(metadata['s']) != size:
+            # HERO9 may report the previous photo's size for a video. Require
+            # the independent listing to agree before accepting that defect.
+            item = self.media_list().get(path, {}) if item is None else item
+            if not (video_headers and item.get('s') is not None and int(item['s']) == size):
+                raise SourceError(f"素材大小正在变化: {path}")
+        if video_headers:
+            # HERO9 can shift API `cre` after reboot although the file is
+            # unchanged. mvhd is stored in the MP4 itself and is stable across
+            # reboot/transport changes. Check GUMI and size before using it.
+            verified = self._mp4_media_info(path)
+            if (int(verified['s']) != size or self.file_stat(path) != (size, modified)
+                    or not self.gumi(verified['gumi'])
+                    or self.gumi(verified['gumi']) != self.gumi(metadata.get('gumi'))):
+                raise SourceError(f"素材元数据不一致，保留文件: {path}")
+            metadata = {**metadata, 'cre': verified['cre'], 's': verified['s']}
+        return metadata
+
     def inventory(self):
         self.identify()
         self.ensure_idle()
@@ -531,22 +554,8 @@ class GoProSource:
         by_stem = {}
         for path in sorted(paths):
             size, modified = self.file_stat(path)
-            metadata = self.media_info(path) if path in primary else {}
             item = primary.get(path, {})
-            if metadata.get("s") is not None and int(metadata["s"]) != size:
-                # HERO9 can retain the previous photo's size after returning to
-                # video mode. Accept only a stale size, never a different identity:
-                # list + stable Range size + bounded MP4 metadata must agree.
-                if not (self.compatibility['chapter_metadata_fallback']
-                        and PurePosixPath(path).suffix.lower() == '.mp4'
-                        and item.get('s') is not None and int(item['s']) == size):
-                    raise SourceError(f"素材大小正在变化: {path}")
-                verified = self._mp4_media_info(path)
-                if (int(verified['s']) != size or self.file_stat(path) != (size, modified)
-                        or str(verified['cre']) != str(metadata.get('cre', ''))
-                        or self.gumi(verified['gumi']) != self.gumi(metadata.get('gumi'))):
-                    raise SourceError(f"素材元数据不一致，保留文件: {path}")
-                metadata = {**metadata, 's': verified['s']}
+            metadata = self._identity_metadata(path, size, modified, item) if path in primary else {}
             asset = make_asset(self.serial, path, size, str(metadata.get("cre", item.get("cre", ""))),
                           modified, self.gumi(metadata.get("gumi")), path in primary, device_name=self.device_name)
             assets.append(asset)
@@ -584,7 +593,7 @@ class GoProSource:
         if not asset.metadata["primary"] or not asset.metadata["gumi"]:
             raise SourceError("缺少可确认的素材 ID，保留相机文件")
         size, modified = self.file_stat(asset.path)
-        info = self.media_info(asset.path)
+        info = self._identity_metadata(asset.path, size, modified)
         actual = make_asset(asset.serial, asset.path, size, str(info.get("cre", "")), modified,
                        self.gumi(info.get("gumi")), True, device_name=self.device_name)
         if actual.identity != asset.identity:
