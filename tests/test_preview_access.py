@@ -45,7 +45,7 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
         self.config = {'local': '', 'public': 'https://preview.example.ts.net:8443', 'port': 0}
         self.gateway = Gateway(self.root, self.config)
         self.server = await serve(self.gateway.stream, '127.0.0.1', 0, process_request=self.gateway.request,
-                                  close_timeout=.1, max_size=2048)
+                                  close_timeout=.1, max_size=32768)
         self.config.update(port=self.server.sockets[0].getsockname()[1])
         self.config['local'] = 'http://127.0.0.1:' + str(self.config['port'])
         self.path = '/view/' + self.token + '/'
@@ -110,6 +110,48 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
             async with connect('ws'+self.config['local'][4:]+self.path+'socket',proxy=None,origin='https://evil.example'): pass
         self.assertEqual(0,self.streams)
 
+    async def test_bounded_buffer_statistics_are_saved_without_media_commands(self):
+        from websockets.asyncio.client import connect
+        from websockets.exceptions import ConnectionClosed
+        url='ws'+self.config['local'][4:]+self.path+'socket'
+        async with connect(url,proxy=None) as viewer:
+            await viewer.send(json.dumps({'type':'viewer-stats','frames':30,'seconds':1.5,
+                                          'mode':'webrtc','buffer_seconds':.8,'jitter_buffer_ms':10}))
+            for _ in range(30):
+                if self.db.get_meta('preview_viewer'):break
+                await asyncio.sleep(.01)
+            value=self.db.get_meta('preview_viewer')
+            self.assertEqual(.8,value['buffer_seconds']);self.assertEqual('webrtc',value['mode'])
+            self.assertEqual(10,value['jitter_buffer_ms']);self.assertFalse(self.commands)
+            await viewer.send(json.dumps({'type':'viewer-stats','frames':31,'seconds':2,
+                                          'mode':'hls','buffer_seconds':float('nan')}))
+            with self.assertRaises(ConnectionClosed):await asyncio.wait_for(viewer.recv(),2)
+        self.assertEqual(value,self.db.get_meta('preview_viewer'))
+
+    async def test_receive_only_rtc_requires_capability_and_is_revoked(self):
+        from websockets.asyncio.client import connect
+        from websockets.exceptions import ConnectionClosed
+        from test_preview_rtc import OFFER
+        self.db.set_meta('live_preview', {**self.state, 'webrtc': True})
+        self.assertIn(b'"webrtc": true', await self.http(self.path+'status'))
+        async with connect('ws'+self.config['local'][4:]+self.path+'socket',proxy=None) as viewer:
+            await viewer.send(json.dumps({'type':'webrtc/offer','value':OFFER}))
+            self.assertEqual(b'tiny-media-frame',await viewer.recv())
+            self.assertEqual('webrtc/offer',self.commands[0]['type'])
+            self.db.set_meta('live_preview',{**self.state,'stop_requested':True})
+            with self.assertRaises(ConnectionClosed):await asyncio.wait_for(viewer.recv(),2)
+
+    async def test_repeat_offers_are_rejected_without_reaching_component(self):
+        from websockets.asyncio.client import connect
+        from websockets.exceptions import ConnectionClosed
+        from test_preview_rtc import OFFER
+        self.db.set_meta('live_preview',{**self.state,'webrtc':True})
+        async with connect('ws'+self.config['local'][4:]+self.path+'socket',proxy=None) as viewer:
+            await viewer.send(json.dumps({'type':'webrtc/offer','value':OFFER}));await viewer.recv()
+            await viewer.send(json.dumps({'type':'webrtc/offer','value':OFFER}))
+            with self.assertRaises(ConnectionClosed):await asyncio.wait_for(viewer.recv(),2)
+        self.assertEqual(1,len(self.commands))
+
     async def test_hls_uses_only_bound_resources_and_revokes_in_flight_segments(self):
         master = b'#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=192000\nhls/playlist.m3u8?id=abcDEF12'
         playlist = b'#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:0.500,\nsegment.ts?id=abcDEF12&n=1'
@@ -147,15 +189,15 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_existing_configuration_defaults_to_loopback_and_remote_link_uses_origin(self):
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(18765,configuration()['port'])
-            self.assertTrue(links({'viewer_token':'a'*64})['url'].startswith('http://127.0.0.1:18765/'))
+            self.assertEqual(18765,configuration({})['port'])
+            self.assertTrue(links({'viewer_token':'a'*64}, {})['url'].startswith('http://127.0.0.1:18765/'))
         with patch.dict(os.environ, {'PREVIEW_PUBLIC_URL':'https://preview.example.ts.net:8443'},clear=True):
-            urls=links({'viewer_token':'a'*64})
+            urls=links({'viewer_token':'a'*64}, {'preview': {'public_url': 'https://preview.example.ts.net:8443'}})
             self.assertTrue(urls['remote_configured'])
             self.assertTrue(urls['url'].startswith('https://preview.example.ts.net:8443/view/'))
         for value in ('http://host','https://u:p@host','https://host/path','https://host/?x=1'):
             with patch.dict(os.environ, {'PREVIEW_PUBLIC_URL':value},clear=True):
-                with self.assertRaises(ConfigError):configuration()
+                with self.assertRaises(ConfigError):configuration({'preview': {'public_url': value}})
 
     def test_only_fixed_media_negotiation_is_forwarded(self):
         for value in ('{}','[]','{"type":"mse","value":"http://other"}',

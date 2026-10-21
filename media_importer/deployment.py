@@ -44,37 +44,11 @@ def number(values, key, default, integer=False):
         raise ConfigError(f".env 中 {key} 必须是{'整数' if integer else '数值'}") from None
 
 
-def connections():
-    from .adapters import source_defaults
-    env = environment()
-    source = source_defaults(text(env, "SOURCE_TYPE", source_defaults()['type']))
-    return {
-        "source": {
-            "type": source["type"],
-            "url": text(env, "SOURCE_URL", source["url"]),
-            "serial": text(env, "SOURCE_SERIAL", source["serial"]),
-            "timeout_seconds": number(env, "SOURCE_TIMEOUT_SECONDS", source["timeout_seconds"]),
-            "transport": text(env, "SOURCE_TRANSPORT", source["transport"]),
-            "request_attempts": number(env, "SOURCE_REQUEST_ATTEMPTS", source["request_attempts"], integer=True),
-        },
-        "destination": {
-            "type": text(env, "DESTINATION_TYPE", "smb"),
-            "name": text(env, "DESTINATION_NAME", "SMB 存储"),
-            "host": text(env, "DESTINATION_HOST", required=True),
-            "port": number(env, "DESTINATION_PORT", 445, integer=True),
-            "share": text(env, "DESTINATION_SHARE", required=True),
-            "directory": text(env, "DESTINATION_DIRECTORY", "media"),
-            "username": text(env, "DESTINATION_USERNAME", required=True),
-            "domain": text(env, "DESTINATION_DOMAIN", "WORKGROUP"),
-        },
-    }
-
-
-def destination_password(destination=None):
+def destination_password(destination):
     if destination and destination.get("credential_file"):
         from .credentials import read
         return read(destination["credential_file"])
-    return text(environment(), "DESTINATION_PASSWORD", required=True)
+    raise ConfigError("缺少本机 SMB 凭据引用，请通过飞书归档存储重新填写密码")
 
 
 def notification_credentials():

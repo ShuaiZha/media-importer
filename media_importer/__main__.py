@@ -52,6 +52,8 @@ def main(argv=None):
         if args.command in ('daemon', 'bot'):
             from .deployment import assert_runtime
             assert_runtime(args.data)
+            from .config_upgrade import prepare
+            prepare(args.config, args.data)
         if args.command in ('recover-cache', 'export-cache'):
             from .recovery import recover
             with worker_lock(args.data) as acquired:
@@ -83,6 +85,10 @@ def main(argv=None):
                 bot = Bot(Settings(args.config, args.data), args.data)
                 send_card(bot.credentials, bot.panel())
                 print("控制面板已发送到本人飞书单聊")
+            return 0
+        if args.command == "validate":
+            Config.load(args.config)
+            print("配置有效；未连接相机或目的地，未修改配置。")
             return 0
         if args.command == "sync":
             from .settings import Settings

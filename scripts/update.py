@@ -226,7 +226,7 @@ def perform(root, manifest):
     override = managed_override(root)
     paths = deployment(root)
     settings = paths['/config'] / 'settings.json'
-    if not settings.is_file() or settings.is_symlink() or json.loads(settings.read_text())['version'] != 4:
+    if not settings.is_file() or settings.is_symlink() or json.loads(settings.read_text())['version'] not in (4, 5):
         raise ValueError('运行配置需要先迁移到版本 4')
     tag = 'v' + manifest['version']
     print('检查稳定版本 ' + tag + '，下载期间现有服务继续运行…', flush=True)

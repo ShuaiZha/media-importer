@@ -68,6 +68,9 @@ class Settings:
         return self.update_preferences({"backup": {"enabled": enabled}})
 
     def update_preferences(self, changes, expected=None):
+        if isinstance(changes, dict) and set(changes) == {'preview'}:
+            from .preview_settings import save
+            return save(self, changes['preview'], expected)
         allowed = {"backup": {"enabled", "delete_source_after_import", "stop_after_current", "media_scope", "source_transport", "archive_previews",
                               "poll_seconds", "retry_seconds", "stability_seconds"},
                    "limits": {"upload_mib_per_second", "min_free_disk_gib", "max_cache_gib"},
@@ -126,6 +129,7 @@ class Settings:
         structural = json.loads(json.dumps(item["config"]))
         if structural:
             structural.pop("notifications", None)
+            structural.pop("preview", None)
             for key in ("enabled", "delete_source_after_import", "stop_after_current"):
                 structural["backup"].pop(key, None)
         return item, revision(json.dumps(structural, sort_keys=True))

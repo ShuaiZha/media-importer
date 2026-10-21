@@ -43,33 +43,37 @@ def _merge(raw, defaults, prefix=""):
 
 
 DEFAULTS = {
-    "version": 4,
+    "version": 5,
     "backup": {"enabled": False, "delete_source_after_import": False, "stop_after_current": False,
                "media_scope": "all", "source_transport": "auto", "archive_previews": False,
                "poll_seconds": 10, "retry_seconds": 30, "stability_seconds": 2},
     "limits": {"upload_mib_per_second": 0, "min_free_disk_gib": 10, "max_cache_gib": 50},
+    "preview": {"public_url": ""},
     "notifications": {"enabled": False, "connection_events": True, "progress_interval_seconds": 300, "keyword": ""},
 }
 
 
 def runtime_config(raw):
-    if not isinstance(raw, dict) or type(raw.get("version")) is not int or raw["version"] != 4:
-        raise ConfigError("settings.json 必须使用 version: 4；请先停止服务并运行一次性迁移")
+    if not isinstance(raw, dict) or type(raw.get("version")) is not int or raw["version"] != 5:
+        raise ConfigError("settings.json 必须使用 version: 5；旧配置将在服务启动时一次性迁移")
     values = _merge({k: v for k, v in raw.items() if k not in ("archive", "source_options")}, DEFAULTS)
     if "source_options" in raw:
-        options = _merge(raw["source_options"],
-                         {"url": "", "serial": "", "timeout_seconds": 20, "request_attempts": 3},
+        from .adapters import source_defaults
+        if not isinstance(raw['source_options'], dict) or 'type' not in raw['source_options']:
+            raise ConfigError('source_options.type 缺失')
+        defaults = {key: value for key, value in source_defaults(raw['source_options']['type']).items() if key != 'transport'}
+        options = _merge(raw["source_options"], defaults,
                          "source_options.")
         values["source_options"] = options
     if "archive" in raw:
         archive = raw["archive"]
         required = {"host", "port", "share", "directory", "id", "change_id"}
-        optional = {"name": "", "username": "", "domain": "", "credential_id": ""}
+        optional = {"type": "smb", "name": "SMB 存储", "username": "", "domain": "WORKGROUP", "credential_id": ""}
         if (not isinstance(archive, dict) or not required.issubset(archive)
                 or set(archive) - required - set(optional)):
             raise ConfigError("archive 格式无效，请通过飞书重新配置归档位置")
         archive = _merge(archive, {"host": "", "port": 445, "share": "", "directory": "", "id": "", "change_id": "",
-                                  **{key: default for key, default in optional.items() if key in archive}}, "archive.")
+                                  **optional}, "archive.")
         if len(archive["change_id"]) != 32 or any(c not in "0123456789abcdef" for c in archive["change_id"]):
             raise ConfigError("archive.change_id 无效")
         if not (archive["id"] and len(archive["id"]) <= 2048):
@@ -93,11 +97,27 @@ def runtime_config(raw):
     keyword = values["notifications"]["keyword"]
     if len(keyword) > 100 or any(ord(c) < 32 for c in keyword):
         raise ConfigError("通知前缀最多 100 字符，不能包含控制字符")
+    from .preview_settings import normalize_url
+    values["preview"]["public_url"] = normalize_url(values["preview"]["public_url"])
     return values
 
 
 def preferences(values):
-    return {key: values[key] for key in (*DEFAULTS, "archive", "source_options") if key in values}
+    """Serialize the durable hints, never a discovered camera address or a password."""
+    import uuid
+    result = {key: values[key] for key in (*DEFAULTS, "archive", "source_options") if key in values}
+    if "source_options" not in result and "source" in values:
+        result["source_options"] = {k: v for k, v in values["source"].items() if k != "transport"}
+    if "archive" not in result and "destination" in values:
+        target = values["destination"]
+        identity = target.get("archive_id") or destination_identity(target)
+        result["archive"] = {k: target[k] for k in
+            ("type", "name", "host", "port", "share", "directory", "username", "domain")}
+        credential = (Path(target["credential_file"]).stem if target.get("credential_file") else
+                      uuid.uuid5(uuid.NAMESPACE_URL, "credential:" + identity).hex)
+        result["archive"].update(id=identity, change_id=uuid.uuid5(uuid.NAMESPACE_URL, identity).hex,
+                                credential_id=credential)
+    return result
 
 
 @dataclass(frozen=True)
@@ -110,35 +130,35 @@ class Config:
             raw = json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
         except (OSError, ValueError) as exc:
             raise ConfigError(f"无法读取 JSON 配置: {exc}") from exc
+        # Package validation is read-only, including when upgrading a v4 install.
+        if not isinstance(raw, dict):
+            raise ConfigError("配置必须是 JSON 对象")
+        if raw.get("version") == 4:
+            from .config_upgrade import convert
+            raw, _ = convert(raw, Path(path).parent)
         return cls.from_dict(raw, Path(path).parent)
 
     @classmethod
     def from_dict(cls, raw, config_directory=None):
-        from .deployment import connections
-        data = {**runtime_config(raw), **connections()}
-        if "archive" in data:
-            data["destination"].update({k: data["archive"][k] for k in
-                                       ("host", "port", "share", "directory", "name", "username", "domain")
-                                       if k in data["archive"]})
-            data["destination"]["archive_id"] = data["archive"]["id"]
-            if "credential_id" in data["archive"]:
-                from .credentials import credential_path
-                if config_directory is None:
-                    import os
-                    config_directory = Path(os.environ.get("MEDIA_IMPORTER_CONFIG", "/config/settings.json")).parent
-                data["destination"]["credential_file"] = str(credential_path(config_directory, data["archive"]["credential_id"]))
-        if "source_options" in data:
-            data["source"].update(data["source_options"])
-        # Existing installations retain their .env source choice until the first
-        # saved preference. Initial connection values remain in .env;
-        # checked overrides and credential references live in settings.
-        data["source"]["transport"] = raw.get("backup", {}).get("source_transport", data["source"]["transport"])
+        data = runtime_config(raw)
+        if not {"archive", "source_options"}.issubset(data):
+            raise ConfigError("settings.json 缺少相机或归档连接，请运行首次配置向导")
+        from .credentials import credential_path
+        import os
+        if config_directory is None:
+            config_directory = Path(os.environ.get("MEDIA_IMPORTER_CONFIG", "/config/settings.json")).parent
+        archive = data["archive"]
+        data["source"] = {**data["source_options"], "transport": data["backup"]["source_transport"]}
+        data["destination"] = {k: archive[k] for k in
+            ("type", "name", "host", "port", "share", "directory", "username", "domain")}
+        data["destination"].update(archive_id=archive["id"],
+            credential_file=str(credential_path(config_directory, archive["credential_id"])))
         return cls.from_values(data)
 
     @classmethod
     def from_values(cls, values):
         # Internal construction only; serialized settings exclude credentials.
-        data = runtime_config(preferences(values))
+        data = runtime_config({key: values[key] for key in (*DEFAULTS, "archive", "source_options") if key in values})
         data.update(source=dict(values["source"]), destination=dict(values["destination"]))
         validate_source(data["source"])
         data["backup"]["source_transport"] = data["source"]["transport"]

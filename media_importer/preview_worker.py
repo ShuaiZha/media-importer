@@ -22,7 +22,7 @@ def emit(event, **values):
     print(json.dumps({'event': event, **values}), flush=True)
 
 
-def run(source, stop, emit_event=emit, *, cleanup_only=False):
+def run(source, stop, emit_event=emit, *, cleanup_only=False, public_url=""):
     client = create_source(SimpleNamespace(source=source))
     client.identify()
     if cleanup_only:
@@ -44,9 +44,12 @@ def run(source, stop, emit_event=emit, *, cleanup_only=False):
             token = uuid.uuid4().hex
             base = f'http://127.0.0.1:{port}/{token}'
             config = Path(temporary) / 'go2rtc.json'
-            # JSON is valid YAML. Only the current machine can reach this endpoint.
+            from .preview_rtc import endpoint
+            rtc = endpoint(public_url)
+            # Management stays on loopback; encrypted media binds only to loopback
+            # or this host's Tailscale address, with no public STUN/TURN service.
             config.write_text(json.dumps({'api': {'listen': f'127.0.0.1:{port}', 'base_path': '/' + token},
-                                         'rtsp': {'listen': ''}, 'webrtc': {'listen': ''},
+                                         'rtsp': {'listen': ''}, 'webrtc': rtc or {'listen': '', 'ice_servers': []},
                                          'streams': {'preview': []}}))
             process = subprocess.Popen([str(component()), '-config', str(config)], stdout=subprocess.DEVNULL,
                                        stderr=subprocess.DEVNULL)
@@ -91,7 +94,7 @@ def run(source, stop, emit_event=emit, *, cleanup_only=False):
                 stream = streams.get('preview', {})
                 if not ready and any('H264' in media for p in stream.get('producers') or [] for media in p.get('medias', [])):
                     ready = True
-                    emit_event('ready', url=base + '/stream.html?src=preview&mode=mse&media=video')
+                    emit_event('ready', url=base + '/stream.html?src=preview&mode=mse&media=video', webrtc=bool(rtc))
                 if not ready and stamp - started_at > 20:
                     raise BackupError('未取得可播放的视频流，请检查相机模式后重新打开预览')
                 stop.wait(.5)
@@ -130,7 +133,7 @@ def main():
                 if time.monotonic() - heartbeat['at'] > 15: stop.set()
         threading.Thread(target=owner, daemon=True).start()
         threading.Thread(target=watchdog, daemon=True).start()
-        run(payload['source'], stop, cleanup_only=bool(payload.get('cleanup_only')))
+        run(payload['source'], stop, cleanup_only=bool(payload.get('cleanup_only')), public_url=payload.get('public_url', ''))
         return 0
     except Exception as exc:
         emit('error', message=str(exc) if isinstance(exc, BackupError) else '预览组件无法启动，请检查连接或安装包')

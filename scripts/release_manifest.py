@@ -14,7 +14,7 @@ def manifest(root, tag, digest):
         raise ValueError('Invalid image digest')
     return {'format': 1, 'version': version, 'image': 'ghcr.io/shuaizha/media-importer@' + digest,
             'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
-            'updater_version': 1, 'config_version': 4, 'database_version': 5}
+            'updater_version': 1, 'config_version': 4, 'settings_version': 5, 'database_version': 5}
 
 
 if __name__ == '__main__':

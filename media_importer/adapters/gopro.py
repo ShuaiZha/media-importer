@@ -70,7 +70,7 @@ def validate(values):
     for key, value in defaults().items():
         values.setdefault(key, value)
     if values["transport"] not in ("auto", "usb", "wifi"):
-        raise ConfigError("SOURCE_TRANSPORT 必须为 auto、usb 或 wifi")
+        raise ConfigError("backup.source_transport 必须为 auto、usb 或 wifi")
     for key in ("url",):
         if not values[key]:
             continue  # USB discovery supplies the address before confirmation.
@@ -83,7 +83,7 @@ def validate(values):
     if values["timeout_seconds"] < 1:
         raise ConfigError("source.timeout_seconds 必须至少为 1")
     if type(values["request_attempts"]) is not int or not 1 <= values["request_attempts"] <= 5:
-        raise ConfigError("SOURCE_REQUEST_ATTEMPTS 必须为 1 到 5")
+        raise ConfigError("source_options.request_attempts 必须为 1 到 5")
 
 
 class GoProSource:

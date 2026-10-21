@@ -92,7 +92,7 @@ class BackupTests(unittest.TestCase):
         identifier = 'c' * 32
         stage(self.settings.parent, identifier, 'backup-fixture-secret')
         values = json.loads(self.settings.read_text())
-        values['archive'] = {**{k: self.config.destination[k] for k in ('host', 'port', 'share', 'directory')},
+        values['archive'] = {**{k: self.config.destination[k] for k in ('type', 'name', 'host', 'port', 'share', 'directory', 'username', 'domain')},
                              'id': self.config.destination_id, 'change_id': 'd' * 32, 'credential_id': identifier}
         self.settings.write_text(json.dumps(values))
         self.make_bundle()

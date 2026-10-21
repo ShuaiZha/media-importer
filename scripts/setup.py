@@ -67,7 +67,7 @@ def write_new(path, content):
 def save(root, cache, values):
     env, settings = root / '.env', root / 'config/settings.json'
     if env.exists() or env.is_symlink() or settings.exists() or settings.is_symlink() or (root / 'data/state.sqlite3').exists():
-        raise ValueError('已有配置或任务记录，向导不会覆盖。修改连接请编辑 .env，迁移请使用 manage.py restore')
+        raise ValueError('已有配置或任务记录，向导不会覆盖。修改连接请通过飞书设置，迁移请使用 manage.py restore')
     for path in (root / 'config', root / 'data', cache):
         path.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(prefix='.setup-check-', dir=cache) as probe:
@@ -79,17 +79,18 @@ def save(root, cache, values):
     mounts = {'MEDIA_IMPORTER_CONFIG_HOST_DIR': (root / 'config').as_posix(),
               'MEDIA_IMPORTER_DATA_HOST_DIR': (root / 'data').as_posix(),
               'MEDIA_IMPORTER_CACHE_HOST_DIR': cache.as_posix()}
-    document = '# 本机连接与凭据；不要提交到 Git。\n' + ''.join(key + '=' + literal(value) + '\n' for key, value in {**mounts, **values}.items())
-    example = root / 'config/settings.example.json'
-    if example.is_file():
-        runtime = json.loads(example.read_text(encoding='utf-8'))
-    else:
-        from media_importer.config import DEFAULTS
-        runtime = json.loads(json.dumps(DEFAULTS))
-    runtime['backup'].update(delete_source_after_import=False, stop_after_current=False)
+    from media_importer.config_upgrade import convert
+    from media_importer.credentials import stage
+    runtime, credential = convert({'version': 4}, settings.parent, values)
+    runtime['backup'].update(enabled=False, delete_source_after_import=False, stop_after_current=False)
     runtime['notifications']['enabled'] = False
+    local = {key: value for key, value in values.items() if not key.startswith(('SOURCE_', 'DESTINATION_')) and key != 'PREVIEW_PUBLIC_URL'}
+    document = '# 本机部署与飞书凭据；业务配置保存在 config/settings.json。不要提交到 Git。\n' + ''.join(
+        key + '=' + literal(value) + '\n' for key, value in {**mounts, **local}.items())
     write_new(env, document)
     try:
+        if credential:
+            stage(settings.parent, *credential)
         write_new(settings, json.dumps(runtime, ensure_ascii=False, indent=2) + '\n')
     except Exception:
         env.unlink()  # Only the file exclusively created by this invocation.
@@ -130,7 +131,7 @@ def check(root):
 def setup(root, *, read=input, hidden=getpass.getpass, probe=camera_identity, checks=check, native=False):
     root = root.resolve()
     if (root / '.env').exists() or (root / '.env').is_symlink() or (root / 'config/settings.json').exists() or (root / 'data/state.sqlite3').exists():
-        raise ValueError('检测到已有安装，向导不会覆盖配置或记录；修改连接请编辑 .env')
+        raise ValueError('检测到已有安装，向导不会覆盖配置或记录；修改连接请通过飞书设置')
     print('首次配置：连接相机、选择缓存盘、填写 SMB 和飞书应用。密码输入时不回显。')
     from media_importer.adapters import source_defaults, validate_source
     source = source_defaults()

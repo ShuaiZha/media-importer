@@ -21,6 +21,8 @@ class PreflightTests(unittest.TestCase):
         self.env = patch.dict(os.environ, ENV, clear=True); self.env.start()
         self.path = self.root / 'settings.json'
         self.path.write_text(json.dumps(preferences(configuration(enabled=False).values)))
+        from media_importer.credentials import stage
+        stage(self.root, json.loads(self.path.read_text())['archive']['credential_id'], ENV['DESTINATION_PASSWORD'])
         self.settings = Settings(self.path)
         self.store = Store(self.root / 'data')
         self.source, self.destination = Mock(), Mock()

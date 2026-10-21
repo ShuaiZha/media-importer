@@ -26,7 +26,7 @@ def bind(store, config):
     """Additive migration; no file, group, round or notification IDs change."""
     binding = read(store.db)
     requested = config.values.get('archive', {}).get('id')
-    if requested and (not binding or requested != binding['id']):
+    if requested and binding and requested != binding['id']:
         # The JSON write is the durable switch intent. Commit the binding only
         # after proving the old work is settled; a restart can safely repeat it.
         with store.db:
@@ -47,7 +47,9 @@ def bind(store, config):
                 previous = connection if connection in known else known[0] if len(known) == 1 else None
             if known and previous is None:
                 raise DestinationError('历史记录包含多个目的地，无法自动选择；请恢复原连接后重试', code='destination_identity')
-            binding = {'id': previous or connection, 'connection': previous or connection, 'bound_at': now()}
+            if requested and previous and requested != previous:
+                assert_settled(store)
+            binding = {'id': requested or previous or connection, 'connection': previous or connection, 'bound_at': now()}
             store.db.execute('INSERT INTO meta VALUES (?,?)', (KEY, json.dumps(binding)))
     values = {**config.values, 'destination': {**config.destination, 'archive_id': binding['id']}}
     return Config.from_values(values)

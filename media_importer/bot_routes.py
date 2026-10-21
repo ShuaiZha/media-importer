@@ -1,5 +1,7 @@
 """Stable menu events and optional text shortcuts, independent of card rendering."""
-TEXT_ACTIONS = {"状态": {"panel": "status"}, "进度": {"panel": "status"}, "查看状态": {"panel": "status"},
+TEXT_ACTIONS = {
+    '预览设置': {'panel': 'preview_settings'},
+    '预览连接检查': {'panel': 'preview_check'},"状态": {"panel": "status"}, "进度": {"panel": "status"}, "查看状态": {"panel": "status"},
             "运行状态": {"panel": "status"},
             "相机控制": {"capture": {"version": 1, "action": "panel"}},
             "实时预览": {"live_preview": {"version": 1, "action": "open"}},

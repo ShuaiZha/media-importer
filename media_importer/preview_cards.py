@@ -39,6 +39,7 @@ def panel(bot, state):
         buttons.append(button(bot, '核验并结束' if state.get('cleanup_pending') else '结束预览', 'stop', state['id']))
     else:
         buttons.append(button(bot, '开启预览', 'open'))
+    buttons.append(bot.button('预览设置', {'panel': 'preview_settings'}))
     elements.append(bot.buttons(*buttons))
     if phase in ACTIVE:
         if phase == 'ready':

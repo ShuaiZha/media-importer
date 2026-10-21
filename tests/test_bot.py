@@ -54,7 +54,7 @@ class BotTests(unittest.TestCase):
         self.assertEqual(self.original.destination_id, new.destination_id)
         self.settings.update_preferences({'limits':{'max_cache_gib':60}})
         saved = json.loads(self.path.read_text())
-        self.assertEqual({'version','backup','limits','notifications'}, set(saved))
+        self.assertEqual({'version','backup','limits','notifications','preview','archive','source_options'}, set(saved))
         self.assertNotIn('provider', saved['notifications'])
         for secret in ('example-secret','secret$with#quotes','FEISHU_APP_SECRET','destination'):
             self.assertNotIn(secret, self.path.read_text())

@@ -278,6 +278,7 @@ class WorkerTests(unittest.TestCase):
                     patch.object(preview_worker.socket, 'socket', side_effect=[udp, port]), \
                     patch.object(preview_worker, 'urlopen', return_value=response), \
                     patch.object(preview_worker, 'component', return_value=Path('/fixture/go2rtc')), \
+                    patch('media_importer.preview_rtc.endpoint', return_value=None), \
                     patch.object(preview_worker.subprocess, 'Popen', return_value=process), \
                     patch.object(preview_worker.http.client, 'HTTPConnection'):
                 preview_worker.run({}, threading.Event(), lambda event, **values: events.append((event, values)))

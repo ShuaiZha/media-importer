@@ -29,6 +29,8 @@ def migrate(config_path, directory, backup=None):
             defaults.update({k:v for k,v in raw.get(group,{}).items() if k in defaults})
     target['backup'].update(enabled=False, delete_source_after_import=False)
     target = runtime_config(target)
+    target.pop('preview', None)
+    target['version'] = 4
     with worker_lock(directory) as acquired:
         if not acquired:
             raise RuntimeError('请先停止 Compose 两个服务')

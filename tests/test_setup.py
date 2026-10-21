@@ -32,7 +32,10 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(0, wizard.setup(self.root, read=lambda _: next(answers), hidden=lambda _: next(secrets),
                                              probe=lambda _: 'CEXAMPLE000001', checks=None))
         values = dotenv_values(self.root / '.env', interpolate=False)
-        self.assertEqual("x$#'\\password", values['DESTINATION_PASSWORD'])
+        from media_importer.credentials import credential_path, read
+        raw = json.loads((self.root / 'config/settings.json').read_text())
+        self.assertEqual("x$#'\\password", read(credential_path(self.root / 'config', raw['archive']['credential_id'])))
+        self.assertNotIn('DESTINATION_PASSWORD', values)
         self.assertNotIn('fake-app-secret', str(output.call_args_list))
         self.assertNotIn('password', str(output.call_args_list))
         settings = json.loads((self.root / 'config/settings.json').read_text())
@@ -69,8 +72,10 @@ class SetupTests(unittest.TestCase):
             wizard.setup(self.root, read=lambda _: next(answers), hidden=lambda _: 'example-secret',
                          probe=lambda _: self.fail('empty hint must not make a request'), checks=None)
         values = dotenv_values(self.root / '.env', interpolate=False)
-        self.assertEqual('', values['SOURCE_URL'])
-        self.assertEqual('', values['SOURCE_SERIAL'])
+        raw = json.loads((self.root / 'config/settings.json').read_text())
+        self.assertEqual('', raw['source_options']['url'])
+        self.assertEqual('', raw['source_options']['serial'])
+        self.assertNotIn('SOURCE_URL', values)
 
     def test_missing_external_disk_does_not_create_fallback(self):
         with patch.object(wizard.sys, 'platform', 'darwin'), patch.object(Path, 'is_mount', return_value=False):

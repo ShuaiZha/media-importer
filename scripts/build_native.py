@@ -34,7 +34,7 @@ def build(output):
     bundle = work / 'dist/media-importer'
     from scripts.preview_bundle import bundle as bundle_preview
     components = bundle_preview(bundle, key)
-    info = {'format': 1, 'version': __version__, 'platform': key, 'config_version': 4, 'database_version': 5}
+    info = {'format': 1, 'version': __version__, 'platform': key, 'config_version': 4, 'settings_version': 5, 'database_version': 5}
     if components: info['components'] = components
     (bundle / 'bundle.json').write_text(json.dumps(info, indent=2) + '\n')
     actual = subprocess.check_output([str(executable(bundle)), '--version'], text=True).strip()

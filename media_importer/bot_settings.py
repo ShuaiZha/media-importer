@@ -4,8 +4,8 @@ import math
 from .bot_cards import card, markdown, note, paragraph, plain
 from .config import ConfigError, runtime_config
 
-FORMS = {'transfer_settings', 'notification_settings', 'destination_settings', 'source_settings', 'advanced_settings'}
-PAGES = FORMS | {'settings', 'media_settings', 'local_storage'}
+FORMS = {'preview_settings', 'transfer_settings', 'notification_settings', 'destination_settings', 'source_settings', 'advanced_settings'}
+PAGES = FORMS | {'settings', 'media_settings', 'local_storage', 'preview_check', 'preview_detect'}
 LIMIT_FIELDS = {'upload_mib_per_second', 'max_cache_gib', 'min_free_disk_gib'}
 INTERVAL_FIELDS = {'poll_seconds', 'retry_seconds', 'stability_seconds'}
 
@@ -23,7 +23,7 @@ def select(name, label, value, options):
 
 def form(bot, name, fields, revision, **extra):
     payload = {'settings_form': name, 'settings_version': 3 if name == 'transfer_settings' else 2, **extra}
-    button = bot.button('检查归档位置' if name == 'destination_settings' else '保存设置', payload, revision)
+    button = bot.button('检查归档位置' if name == 'destination_settings' else '检查并保存' if name == 'preview_settings' else '保存设置', payload, revision)
     button.update(name='save_' + name, action_type='form_submit', type='primary')
     return {'tag': 'form', 'name': name, 'elements': fields + [button]}
 
@@ -111,7 +111,35 @@ def panel(bot, page, item):
             note('先停止同步再修改。已确认相机可在 USB／无线间切换；其他相机仍需确认。'),
             note('配置一次后，从「同步 → 开启同步」启动自动连接和备份；相机暂时离线也可以开启，重连后自动继续。'),
             note('无线自动连接仅支持 Mac 原生版，需要相机开启无线连接及 Mac 有线上网；首次配对可能需在相机选择 Quik 配对入口。'),
-            bot.buttons(bot.button('打开相机控制', {'capture': {'version': 1, 'action': 'panel'}}))], shared=True)
+            bot.buttons(bot.button('预览设置', {'panel': 'preview_settings'}), bot.button('打开相机控制', {'capture': {'version': 1, 'action': 'panel'}}))], shared=True)
+    if page in ('preview_settings', 'preview_check', 'preview_detect'):
+        from .preview_access import configuration
+        from .preview_settings import discover, inspect
+        config = configuration(values)
+        public = config['public']
+        elements = []
+        if page == 'preview_detect':
+            try:
+                public = discover(config['port'])
+                elements.append(paragraph('已读取本机 Tailscale 入口，尚未保存。'))
+            except ConfigError as exc:
+                elements.append(paragraph(str(exc)))
+        elif page == 'preview_check':
+            report = inspect(public, config['port'])
+            elements.append(markdown('**' + ('入口检查通过' if report['ok'] else '入口检查未通过') + '**'))
+            elements.append(paragraph('\n'.join(('✓ ' if c['ok'] else '⚠ ') + c['label'] + '：' + c['detail'] for c in report['checks'])))
+        elements += [
+            paragraph('当前观看范围：' + ('Tailscale 远程访问' if config['public'] else '仅本机') +
+                      '\n本机入口：' + config['local']),
+            form(bot, 'preview_settings', [
+                input_field('public_url', 'Tailscale HTTPS 地址（留空仅本机）', public, required=False, maximum=512)
+            ], revision),
+            bot.buttons(bot.button('读取本机入口', {'panel': 'preview_detect'}),
+                        bot.button('检查当前连接', {'panel': 'preview_check'})),
+            note('先结束预览再保存；检查不会开启预览或修改 Tailscale。设置保存在本机 JSON。'),
+            note('观看设备需登录同一 Tailnet 或已获授权。此处核验本机入口；外网播放还取决于观看端网络和访问权限。'),
+            note('低延迟视频使用本机 PREVIEW_RTC_PORT（默认 18555，TCP/UDP）；Tailscale 登录、Serve、端口和防火墙在本机管理。')]
+        return card('预览设置', elements, shared=True)
     if page == 'local_storage':
         import os
         from .deployment import cache_path
@@ -132,6 +160,7 @@ def location(target):
 
 def parse(name, fields, version=2):
     expected = {
+        'preview_settings': {'public_url'},
         'transfer_settings': LIMIT_FIELDS,
         'notification_settings': {'enabled', 'connection_events', 'progress_interval_seconds', 'keyword'},
         'destination_settings': {'host', 'port', 'share', 'directory', 'mode'},
@@ -148,6 +177,9 @@ def parse(name, fields, version=2):
         raise ConfigError('表单格式无效，请检查输入内容')
     fields = {k: v if k == 'password' else v.strip() for k, v in fields.items()}
     try:
+        if name == 'preview_settings':
+            from .preview_settings import normalize_url
+            return {'preview': {'public_url': normalize_url(fields['public_url'])}}
         if name == 'transfer_settings':
             numbers = {k: float(fields[k]) for k in LIMIT_FIELDS}
             if any(not math.isfinite(v) or v < 0 for v in numbers.values()):

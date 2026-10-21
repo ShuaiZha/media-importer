@@ -21,7 +21,7 @@ class RuntimeTests(unittest.TestCase):
     def tearDown(self):self.store.close();self.env.stop();self.tmp.cleanup()
 
     def test_single_schema_rejects_old_switches_and_embedded_connections(self):
-        raw=copy.deepcopy(DEFAULTS)
+        raw=preferences(configuration(enabled=False).values)
         self.assertFalse(Config.from_dict(raw).backup['enabled'])
         self.assertFalse(Config.from_dict(raw).backup['delete_source_after_import'])
         for key in ('automatic','import_paused','cleanup_cache_after_upload','delete_source_after_upload'):
@@ -36,7 +36,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(before,self.settings.token()[1])
 
     def test_saved_switch_survives_a_new_runtime_with_default_sync_off(self):
-        self.assertFalse(Config.from_dict({'version': 4}).backup['enabled'])
+        self.assertFalse(Config.from_dict(preferences(configuration(enabled=False).values)).backup['enabled'])
         for enabled in (True, False):
             self.settings.set_enabled(enabled)
             restarted = Control(Settings(self.path), threading.Event())

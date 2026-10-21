@@ -22,6 +22,8 @@ python scripts/check_repository.py
 
 Windows 用 `py -3 -m venv .venv` 创建环境，再用 `.venv/Scripts/python.exe` 执行安装和测试。单元测试不要求真实设备、SMB 或飞书凭据。
 
+播放器脚本回归测试需要 Node.js（仅测试使用，不是运行依赖）；未安装时这些测试会跳过。
+
 ## 修改边界
 
 先读[架构](docs/architecture.md)。通用流程保持设备无关，差异放在适配器，不为未接入的品牌或协议预建框架。

@@ -231,7 +231,7 @@ class ArchiveSettingsTests(SettingsFormsTests):
         path.unlink()
         self.store.cache.rmdir()
         with self.assertRaises(ConfigError): self.checked(save=True)
-        self.assertNotIn('archive', json.loads(self.path.read_text()))
+        self.assertEqual(self.original.destination_id, json.loads(self.path.read_text())['archive']['id'])
 
     def test_readonly_or_missing_destination_never_changes_config(self):
         before = self.path.read_bytes()
@@ -266,11 +266,11 @@ class ArchiveSettingsTests(SettingsFormsTests):
         self.submit('destination_settings', fields); self.process()
         response = self.sender.call_args.args[1]
         self.assertIn('尚未保存', json.dumps(response, ensure_ascii=False))
-        self.assertNotIn('archive', json.loads(self.path.read_text()))
+        self.assertEqual(self.original.destination_id, json.loads(self.path.read_text())['archive']['id'])
         token = response['elements'][-1]['actions'][-1]['value']
         self.store.batch(self.original.destination_id, [footage()])
         self.bot.receive_card(self.callback(token, event_id='confirm')); self.process()
-        self.assertNotIn('archive', json.loads(self.path.read_text()))
+        self.assertEqual(self.original.destination_id, json.loads(self.path.read_text())['archive']['id'])
         self.assertIn('未保存', self.sender.call_args.args[1]['header']['title']['content'])
 
     def test_save_then_reply_crash_does_not_allocate_another_archive(self):
@@ -280,9 +280,10 @@ class ArchiveSettingsTests(SettingsFormsTests):
                          save=True, change_id='a' * 32)
         self.assertEqual(saved['revision'], restored['revision'])
 
-    def test_local_env_edit_invalidates_confirmation(self):
+    def test_local_json_edit_invalidates_confirmation(self):
         item = self.settings.read()
-        os.environ['DESTINATION_HOST'] = 'changed.example.test'
+        raw = json.loads(self.path.read_text()); raw['archive']['host'] = 'changed.example.test'
+        self.path.write_text(json.dumps(raw))
         with self.assertRaises(Conflict):
             check(self.settings, self.fields, 'new', item['revision'], connection_revision(item['config']),
                   save=True, change_id='a' * 32)

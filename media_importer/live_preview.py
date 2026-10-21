@@ -171,7 +171,7 @@ def _run_session(service, settings):
                    [sys.executable, '-m', 'media_importer.preview_worker'])
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, text=True, start_new_session=True)
-        process.stdin.write(json.dumps({'source': source, 'cleanup_only': bool(state.get('cleanup_pending'))}) + '\n')
+        process.stdin.write(json.dumps({'source': source, 'cleanup_only': bool(state.get('cleanup_pending')), 'public_url': settings.read()['config']['preview']['public_url']}) + '\n')
         process.stdin.flush()
         started = True
         events = queue.Queue()
@@ -202,9 +202,9 @@ def _run_session(service, settings):
             if event is None: break
             if event.get('event') == 'ready' and not stopping:
                 from .preview_access import links
-                urls = links(current)
+                urls = links(current, settings.read()['config'])
                 update(store, identifier, state='ready', reason='实时画面已就绪',
-                       upstream=event['url'], **urls)
+                       upstream=event['url'], webrtc=bool(event.get('webrtc')), **urls)
             elif event.get('event') == 'closed':
                 final = event
             elif event.get('event') == 'error':

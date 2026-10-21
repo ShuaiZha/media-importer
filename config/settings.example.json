@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "backup": {
     "enabled": false,
     "delete_source_after_import": false,
@@ -16,10 +16,33 @@
     "min_free_disk_gib": 10,
     "max_cache_gib": 50
   },
+  "preview": {
+    "public_url": ""
+  },
   "notifications": {
     "enabled": false,
     "connection_events": true,
     "progress_interval_seconds": 300,
     "keyword": ""
+  },
+  "archive": {
+    "host": "storage.example.com",
+    "port": 445,
+    "share": "media",
+    "directory": "imports",
+    "id": "{\"directory\": \"imports\", \"domain\": \"WORKGROUP\", \"host\": \"storage.example.com\", \"port\": 445, \"share\": \"media\", \"username\": \"backup\"}",
+    "change_id": "b50eede0fce2592199fa59141d06355a",
+    "type": "smb",
+    "name": "SMB 存储",
+    "username": "backup",
+    "domain": "WORKGROUP",
+    "credential_id": "e926f9ab09885c75bb15ba27c4e444fd"
+  },
+  "source_options": {
+    "type": "gopro",
+    "url": "",
+    "serial": "",
+    "timeout_seconds": 20.0,
+    "request_attempts": 3
   }
 }

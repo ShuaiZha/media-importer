@@ -27,10 +27,10 @@ def run(settings, store, stop=None):
         config = Config.from_values(settings.read()["config"])
         from .destination_binding import bind
         config = bind(store, config)
-        destination_password()
+        destination_password(config.destination)
         checks["configuration"] = item("ok", "连接配置与日常设置有效")
     except (ConfigError, OSError, ValueError, TypeError):
-        checks["configuration"] = item("error", "检查 .env 和 settings.json；配置内容不会写入日志")
+        checks["configuration"] = item("error", "检查 settings.json、凭据文件与本机 .env；配置内容不会写入日志")
         config = None
     try:
         healthy = [r[0] for r in store.db.execute("PRAGMA quick_check")] == ["ok"]

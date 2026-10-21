@@ -100,7 +100,11 @@ class SourceAdapterTests(unittest.TestCase):
             changes.start()
             self.addCleanup(changes.stop)
         self.path = self.root / 'settings.json'
-        self.path.write_text(json.dumps(preferences(configuration(archive_previews=False).values)))
+        raw = preferences(configuration(archive_previews=False).values)
+        raw['source_options'] = {k:v for k,v in defaults().items() if k != 'transport'}
+        raw['source_options'].update(url=URL, serial=SERIAL)
+        raw['backup']['source_transport'] = 'usb'
+        self.path.write_text(json.dumps(raw))
         self.store = Store(self.root / 'data')
         self.addCleanup(lambda: self.store.close())
         self.settings = Settings(self.path, self.store.directory)
@@ -135,8 +139,9 @@ class SourceAdapterTests(unittest.TestCase):
     def test_connections_use_adapter_defaults_and_reject_explicit_empty_type(self):
         source = self.config().source
         self.assertEqual((KIND, 7, 2), (source['type'], source['timeout_seconds'], source['request_attempts']))
-        with patch.dict(os.environ, {'SOURCE_TYPE': ''}):
-            self.assertIsNotNone(self.settings.read()['error'])
+        raw = json.loads(self.path.read_text()); raw['source_options']['type'] = ''
+        self.path.write_text(json.dumps(raw))
+        self.assertIsNotNone(self.settings.read()['error'])
 
     def test_setup_leaves_address_and_serial_validation_to_adapter(self):
         from test_setup import wizard
@@ -147,10 +152,10 @@ class SourceAdapterTests(unittest.TestCase):
         with patch.dict(adapters.SOURCES, {KIND: '._fixture'}, clear=True), patch('builtins.print'):
             wizard.setup(project, read=lambda _: next(answers), hidden=lambda _: 'example-only',
                          probe=lambda _: None, checks=None)
-        text = (project / '.env').read_text()
-        self.assertIn("SOURCE_TYPE='fixture_source'", text)
-        self.assertIn("SOURCE_SERIAL='camera-A-123'", text)
-        self.assertIn("SOURCE_URL='fixture://device'", text)
+        raw = json.loads((project / 'config/settings.json').read_text())
+        self.assertEqual('fixture_source', raw['source_options']['type'])
+        self.assertEqual('camera-A-123', raw['source_options']['serial'])
+        self.assertEqual('fixture://device', raw['source_options']['url'])
 
     def test_monitoring_uses_adapter_clients_and_keep_alive_interval(self):
         self.confirm()
@@ -182,9 +187,10 @@ class SourceAdapterTests(unittest.TestCase):
         state['device']['url'] = values['source']['url']
         self.store.set_meta(KEY, state)
         self.assertIsNotNone(reason(self.store, Config.from_values(values)))
-        with patch.dict(os.environ, {'SOURCE_TYPE': 'gopro', 'SOURCE_URL': values['source']['url']}):
-            with self.assertRaises(ConfigError):
-                decide(self.store, self.settings, state['id'], True)
+        raw = json.loads(self.path.read_text()); raw['source_options'].update(type='gopro', url=values['source']['url'])
+        self.path.write_text(json.dumps(raw))
+        with self.assertRaises(ConfigError):
+            decide(self.store, self.settings, state['id'], True)
 
     def test_same_serial_with_other_type_unfinished_work_blocks_switch(self):
         self.store.batch(self.config().destination_id, [footage()])

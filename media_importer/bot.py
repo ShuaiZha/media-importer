@@ -122,7 +122,7 @@ class Bot:
             group, updates = next(iter(changes.items()))
             if group == 'backup' and isinstance(updates, dict) and set(updates) == {'stop_after_current'}:
                 return payload['settings_version'] == 2 and type(updates['stop_after_current']) is bool
-            allowed = {'limits': {'upload_mib_per_second', 'max_cache_gib', 'min_free_disk_gib'},
+            allowed = {'preview': {'public_url'}, 'limits': {'upload_mib_per_second', 'max_cache_gib', 'min_free_disk_gib'},
                        'notifications': {'enabled', 'connection_events', 'progress_interval_seconds', 'keyword'},
                        'source_options': {'url', 'serial', 'timeout_seconds', 'request_attempts'},
                        'backup': {'poll_seconds', 'retry_seconds', 'stability_seconds'}}

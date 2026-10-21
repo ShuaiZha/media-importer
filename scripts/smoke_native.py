@@ -58,7 +58,12 @@ def smoke(bundle):
         for name in ('config', 'data', 'cache'):
             (project / name).mkdir()
         (project / '.env').write_text("DESTINATION_HOST='storage.example.com'\nDESTINATION_NAME='测试存储'\nDESTINATION_SHARE='media'\nDESTINATION_USERNAME='example'\nDESTINATION_PASSWORD='example-only'\nMEDIA_IMPORTER_CACHE_HOST_DIR='./cache'\n", encoding='utf-8')
-        (project / 'config/settings.json').write_text(json.dumps(DEFAULTS, ensure_ascii=False), encoding='utf-8')
+        from media_importer.config_upgrade import convert
+        from media_importer.credentials import stage
+        from dotenv import dotenv_values
+        raw, credential = convert({'version': 4}, project / 'config', dotenv_values(project / '.env', interpolate=False))
+        stage(project / 'config', *credential)
+        (project / 'config/settings.json').write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
         (project / 'cache/完整素材.txt').write_text('complete user data', encoding='utf-8')
         (project / 'README.md').write_text('unrelated source checkout', encoding='utf-8')
         protected = {p: p.read_bytes() for p in project.rglob('*') if p.is_file()}

@@ -52,6 +52,8 @@ def settings_result(changes, applied, stopping):
         return {'title': '将在当前文件完成后停止', 'detail': '两路不再启动新文件；当前操作结束后关闭同步。', 'level': 'success'}
     if 'source_transport' in changes.get('backup', {}):
         return {'title': '连接策略已保存', 'detail': '已保存连接方式，后台将重新核验相机；任务和完整缓存保留。', 'level': 'success'}
+    if 'preview' in changes:
+        return {'title': '预览设置已保存', 'detail': ('远程入口：' + changes['preview']['public_url'] if changes['preview']['public_url'] else '观看范围：仅本机') + '\n下次开启预览时使用此入口。', 'level': 'success'}
     if 'source_options' in changes:
         return {'title': '相机连接设置已生效', 'detail': '后台按新提示重新发现相机；识别到其他设备仍需确认。同步与原片处理开关保持不变。', 'level': 'success'}
     intervals = (f"扫描间隔：{backup['poll_seconds']:g} 秒\n重试基础间隔：{backup['retry_seconds']:g} 秒\n"

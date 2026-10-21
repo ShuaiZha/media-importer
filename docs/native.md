@@ -54,7 +54,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 停止后台会让机器人离线；日常暂停传输请在飞书选择「同步 → 立即停止」（v0.11.0 开发版为「停止同步」）；需等待当前文件完成时发送文字命令 `当前文件完成后停止`。
 
-飞书「设置」提供素材、传输、通知与归档配置。v0.10.25 起也可修改 SMB 账号密码、相机连接和运行间隔；连接修改前须停止同步，SMB 检查通过后确认保存。首次飞书凭据由安装向导填写，目录迁移仍在本机进行。见[参数设置](feishu.md#参数设置)与[配置优先级](configuration.md#smb)；升级程序后还需在飞书后台[更新并发布菜单](feishu.md#3-订阅与菜单)。
+飞书「设置」提供素材、传输、通知与归档配置。v0.10.25 起也可修改 SMB 账号密码、相机连接和运行间隔；连接修改前须停止同步，SMB 检查通过后确认保存。首次飞书凭据由安装向导填写，目录迁移仍在本机进行。见[参数设置](feishu.md#参数设置)与[配置来源](configuration.md#文件与目录)；升级程序后还需在飞书后台[更新并发布菜单](feishu.md#3-订阅与菜单)。
 
 「相机状态」「选择素材」「清理原片」需要 [v0.10.26](releases/v0.10.26.md)。从旧版更新后补齐飞书菜单，无需新增飞书权限或更换凭据。
 
@@ -75,6 +75,8 @@ media-importer update
 更新按“下载与核验 → 停止后台 → 配置与 SQLite 一致快照 → 切换程序 → 恢复运行状态”执行。配置、开关、未完成任务和完整缓存保留。已是目标版本则不替换、不重启；拉取源码也不会更新已安装程序。
 
 在线安装与更新只获取已发布的正式包。若 `main` 的版本尚未出现在 Releases，需等待发布或按[贡献指南](../CONTRIBUTING.md#原生包)构建后使用 `--bundle` 更新。
+
+v0.11.0 开发版首次启动会将旧配置迁入 version 5：连接和偏好统一存 JSON，SMB 密码单独保存，`.env` 保留飞书凭据、本机目录与端口。原配置值、任务和缓存保留；旧 `.env` 业务字段不再覆盖 JSON。升级与回滚规则见[配置迁移](configuration.md#从旧配置升级)。
 
 快照不含视频，不能替代[完整备份](recovery.md)。失败时保留诊断和快照，不直接用旧数据库覆盖已产生的新任务。
 
@@ -112,25 +114,21 @@ Windows 请使用安装生成的 `.cmd` 入口。彻底卸载等待文件占用�
 本节仅适用于已集成预览的 v0.11.0 Mac 原生开发版。运行程序的 Mac 和观看设备均需连接 Tailscale，且访问策略允许该端口；Mac 仍需有独立的有线上网链路。
 
 1. 在本机执行 `tailscale status` 确认登录，找到这台 Mac 的 MagicDNS 名称。
-2. 在项目 `.env` 添加以下示例，将域名换成这台 Mac 的名称：
-
-   ```dotenv
-   PREVIEW_LOCAL_PORT=18765
-   PREVIEW_PUBLIC_URL=https://mac.example.ts.net:8443
-   ```
-
-3. 创建专用私有映射（如已有相同端口用途，请选择空闲端口）：
+2. 本机播放端口默认 `18765`，低延迟视频端口默认 `18555` TCP/UDP；仅需修改端口时，在 `.env` 设置 `PREVIEW_LOCAL_PORT` / `PREVIEW_RTC_PORT` 并重启后台。
+3. 在本机创建专用私有映射（如已有相同端口用途，请选择空闲端口）：
 
    ```sh
    tailscale serve --bg --https=8443 http://127.0.0.1:18765
-   media-importer stop
-   media-importer start
    ```
 
-   macOS 的 Tailscale CLI 不在 PATH 时使用 `/Applications/Tailscale.app/Contents/MacOS/Tailscale`。首次使用按 Tailscale 提示启用 HTTPS。这里是私有 Serve，不使用 Funnel 或公网端口转发。
+   macOS 的 CLI 不在 PATH 时使用 `/Applications/Tailscale.app/Contents/MacOS/Tailscale`。首次使用按 Tailscale 提示启用 HTTPS。这里使用私有 Serve，不使用 Funnel。
 
-4. 飞书「相机 → 实时预览」打开画面。程序只核验专用映射，不重置其他 Serve 设置。浏览器使用同一 HTTPS 入口传输页面和视频，无需另开 WebRTC 端口。
+4. 飞书「设置 → 相机连接 → 预览设置」，点击「读取本机入口」，或填写 `https://mac.example.ts.net:8443`。点击「检查并保存」。地址只保存到 JSON，不再写 `.env`，也不需要重启。
+5. 「检查当前连接」核验本机播放服务、Tailscale 登录、Serve 映射和 HTTPS 握手；不会更改系统配置或开启预览。本机检查通过后，仍需在实际观看端验证网络和访问策略。
+6. 从「相机 → 实时预览」打开画面。默认优先 WebRTC：页面与协商经过 HTTPS，视频经 Tailscale 私有地址的 `18555` TCP/UDP 端口。访问策略也需允许观看设备访问该端口；无需路由器公网端口转发。
 
 取消映射使用 `tailscale serve --https=8443 off`，不要使用整体 reset。关闭预览立即撤销会话链接，但保留映射供下次使用。播放器仅开放当前会话的只读播放接口，go2rtc 管理接口仍在本机内部。连接被拒绝时检查程序后台、Serve、Tailscale 和端口；页面打开但无画面时检查相机链路和客户端播放支持。
 
-客户端支持原生 HLS 时自动采用 MPEG-TS HLS，其余客户端使用 MSE。HLS 保留相机视频中的真实编码参数，避免 Apple 播放器因默认初始化参数出现黑屏；不额外转码。两者都经同一 Tailscale HTTPS 入口，结束预览立即撤销会话。若电脑代理使用 Fake-IP，可仅为预览域名添加 DNS／直连例外；无需关闭全部代理。
+低延迟通道约 10 秒未出画时，自动回退到兼容播放：Apple 客户端使用 MPEG-TS HLS，其他客户端使用 MSE，均通过原来的 HTTPS 入口。页面显示实际模式，也可主动选择「兼容播放」或「播放／重新连接」重试。HLS 保留相机真实编码参数，不额外转码，但通常需要更多播放缓冲。WebRTC 不使用外部 STUN/TURN 服务，也不请求手机摄像头或麦克风权限。
+
+停止预览撤销链接并回收媒体进程。若电脑代理使用 Fake-IP，可仅为预览域名添加 DNS／直连例外；无需关闭全部代理。

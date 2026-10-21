@@ -26,13 +26,15 @@ Windows 将 `python3` 替换为 `py -3`。向导生成 `.env`、JSON 和目录�
 
 示例固定为 v0.10.26。选择其他版本时，先在 [Releases](https://github.com/ShuaiZha/media-importer/releases) 确认对应镜像已发布；`main` 可能包含尚未发布的版本，此时按[源码构建说明](../CONTRIBUTING.md#构建与发布)操作。
 
+配置示例须与程序版本对应。`main` 的 version 5 JSON 用于 v0.11.0 开发版，不直接套用到 v0.10.26 镜像；开发版首次启动会[迁移旧配置](configuration.md#从旧配置升级)，保留原配置值、任务和缓存。
+
 检查完成后，继续[配置飞书订阅、菜单并发布](feishu.md#3-订阅与菜单)。首次同步前核对身份，保留原片，用少量素材验证。
 
 从旧版升级到 [v0.10.26](releases/v0.10.26.md) 后，补齐飞书菜单中的「相机状态」「选择素材」「清理原片」，无需新增飞书权限或更换凭据。
 
 ### 手动配置
 
-不使用向导时，复制 [`.env.example`](../.env.example) 为 `.env`、[`config/settings.example.json`](../config/settings.example.json) 为 `config/settings.json`。按[配置参考](configuration.md)填写真实值，提前创建三个挂载目录并授权 Docker 访问。默认目录为 `config/`、`data/`、`data/cache/`。
+不使用向导时，复制 [`.env.example`](../.env.example) 为 `.env`、[`config/settings.example.json`](../config/settings.example.json) 为 `config/settings.json`。开发版还需按[配置参考](configuration.md#从旧配置升级)创建 SMB 凭据引用文件；填写真实值，提前创建三个挂载目录并授权 Docker 访问。默认目录为 `config/`、`data/`、`data/cache/`。
 
 ```sh
 docker compose config --quiet
@@ -76,6 +78,6 @@ python3 scripts/manage.py update
 
 修改 `.env` 后执行 `docker compose up -d --force-recreate --no-build`；JSON 偏好自动重读。换盘、换电脑和恢复备份见[迁移与恢复](recovery.md)。运行中的数据库只通过容器内 CLI 查询，不在宿主机直接打开。
 
-飞书「设置」提供传输、通知和 SMB 归档位置；v0.10.25 起也支持 SMB 账号密码、相机连接和运行间隔，无需重建容器。JSON 中保存连接覆盖值，密码单独保存在已挂载的配置目录内；原 `.env` 保留。连接修改须先停止同步，SMB 检查后确认。Docker 宿主机挂载与换盘仍在本机处理。见[飞书参数设置](feishu.md#参数设置)；升级程序后还需在飞书后台[更新并发布菜单](feishu.md#3-订阅与菜单)。
+飞书「设置」提供传输、通知和 SMB 归档位置；v0.10.25 起也支持 SMB 账号密码、相机连接和运行间隔，无需重建容器。正式版使用 JSON 连接覆盖；v0.11.0 开发版升级后连接统一存 JSON，密码只从已挂载配置目录的凭据文件读取，旧 `.env` 业务字段不再生效。连接修改须先停止同步，SMB 检查后确认。Docker 宿主机挂载与换盘仍在本机处理。见[飞书参数设置](feishu.md#参数设置)；升级程序后还需在飞书后台[更新并发布菜单](feishu.md#3-订阅与菜单)。
 
 源码构建与发布见[贡献指南](../CONTRIBUTING.md#构建与发布)。
