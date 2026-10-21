@@ -29,6 +29,8 @@ class ConnectionAttempt:
             backup = (item.get('config') or {}).get('backup', {})
             self.cancelled = bool(item.get('error') or backup.get('source_transport') != self.mode or
                                   (not backup.get('enabled') if self.automatic else time.time() >= self.requested_until))
+            if not self.automatic and not self.cancelled:
+                self.cancelled = self.manager.store.get_meta('source_connect_request', {}).get('until', 0) < self.requested_until
         return self.cancelled
 
 
@@ -61,7 +63,7 @@ class ConnectionManager:
         state = self.store.get_meta(KEY, {})
         old = state.get('device', {})
         status = self.store.get_meta('status', {})
-        working = bool(status.get('source_work') or status.get('capture_work'))
+        working = bool(status.get('source_work') or status.get('capture_work') or status.get('preview_work'))
         device = None
         if mode in ('auto', 'usb'):
             hints = [h for h in (hint, old, source) if h.get('transport') != 'wifi']

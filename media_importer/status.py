@@ -335,7 +335,7 @@ def snapshot(directory, settings):
     inventory = state.get('inventory', {})
     scope_current = bool(selected_import) or inventory.get('media_scope', 'all') == media_scope
     all_imported = all(f['imported'] for f in files if f['selected'])
-    reading = (state.get('capture_work') or state.get('source_work') or state.get('maintenance_running') or state.get('phase') in ('scanning', 'checking_cleanup', 'cleaning_source')
+    reading = (state.get('preview_work') or state.get('capture_work') or state.get('source_work') or state.get('maintenance_running') or state.get('phase') in ('scanning', 'checking_cleanup', 'cleaning_source')
                or stages['import'].get('phase') in ('downloading', 'scanning', 'verifying'))
     ready = bool(live and approved and state.get('source', {}).get('online')
                  and inventory.get('verified') and inventory.get('scanned') and scope_current

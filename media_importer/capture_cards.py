@@ -33,19 +33,18 @@ def panel(bot, store, receipt=None, *, waiting=False):
     device = connection.get('device', {})
     support = capabilities(device)
     commands = allowed_commands(store, connection)
-    observed = receipt if receipt is not None else store.get_meta('camera_control', {})
-    if receipt is None and observed.get('serial') != device.get('serial_number'):
-        observed = {}
+    from .capture import observation
+    observed = receipt if receipt is not None else observation(store, device)
     try:
         age = time.time() - datetime.fromisoformat(observed['observed_at']).timestamp()
-        current = 0 <= age < 45
+        current = 0 <= age < 45 and not observed.get('stale')
     except (KeyError, TypeError, ValueError):
         current = False
     title = '正在执行相机操作' if waiting else '操作结果待核验' if observed.get('uncertain') else '相机控制'
     elements = [paragraph((device.get('model_name') or '尚未连接相机') + ' · ' +
                          {'usb': 'USB', 'wifi': 'Wi-Fi'}.get(device.get('transport'), '未连接'))]
     if waiting:
-        elements.append(paragraph('正在停止当前导入并执行命令，已有完整缓存继续上传。结果将更新到本卡片。'))
+        elements.append(paragraph('正在核验相机并执行操作，结果将更新到本卡片。完整缓存按同步设置归档。'))
     elif observed.get('error') or observed.get('reason'):
         elements.append(paragraph(observed.get('error') or observed['reason']))
     elif receipt is not None:
@@ -64,16 +63,27 @@ def panel(bot, store, receipt=None, *, waiting=False):
             elements.append(paragraph('连接：' + link['reason']))
     if not waiting:
         if commands:
-            labels = [('state', '刷新状态'), ('stop_recording', '停止录像')] if current and observed.get('recording') else [
-                ('state', '刷新状态'), ('start_recording', '开始录像'), ('stop_recording', '停止录像'), ('photo', '拍照')]
-            elements.append(bot.buttons(*(button(bot, label, action, connection['id'])
-                                          for action, label in labels if action in commands)))
-            if 'mode_video' in commands and not (current and observed.get('recording')):
+            from .camera_coordinator import preview_active
+            previewing = preview_active(store)
+            recording = current and observed.get('recording')
+            labels = [('stop_recording', '停止录像')] if recording else (
+                [('preview_record', '结束预览并录像')] if previewing else
+                [('photo', '拍照')] if observed.get('mode') == 'photo' else [('start_recording', '开始录像')])
+            controls = []
+            for action, label in labels:
+                if ('start_recording' if action == 'preview_record' else action) in commands:
+                    primary = button(bot, label, action, connection['id']); primary['type'] = 'primary'
+                    controls.append(primary)
+            controls.append(button(bot, '刷新状态', 'state', connection['id']))
+            if not current and 'stop_recording' in commands:
+                controls.append(button(bot, '停止录像', 'stop_recording', connection['id']))
+            elements.append(bot.buttons(*controls))
+            if 'mode_video' in commands and not recording and not previewing:
                 elements.append(bot.buttons(*(button(bot, label, action, connection['id']) for action, label in
                     [('mode_video', '视频模式'), ('mode_photo', '照片模式')] if action in commands)))
         else:
             elements.append(bot.buttons(button(bot, '连接无线相机', 'connect'), button(bot, '刷新连接', 'panel')))
-        elements.append(note('拍摄优先于导入；上传继续。停止同步不会停止录像。'))
+        elements.append(note('拍摄优先于导入；完整缓存按同步设置归档。停止同步不会停止录像。'))
     return card(title, elements, 'orange' if observed.get('uncertain') or observed.get('error') else 'blue', shared=True)
 
 

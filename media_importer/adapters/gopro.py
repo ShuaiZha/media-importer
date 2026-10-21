@@ -108,6 +108,28 @@ class GoProSource:
             client.attempts = 1
         return client
 
+    def preview_info(self):
+        identity = self.identify()
+        support = preview_support({'type': 'gopro', 'transport': self.transport, **identity})
+        if not support['supported']:
+            raise SourceError(support['reason'])
+        state = self._json('/gopro/camera/state').get('status', {})
+        if state.get('10') != 0 or state.get('8') != 0 or state.get('32') != 0:
+            raise SourceError('相机正在录像、忙碌或已有预览，请结束当前操作后重试')
+        return {'host': urlsplit(self.base).hostname, 'port': 8554}
+
+    def preview_start(self):
+        # Never retry a camera write: the caller owns cleanup after uncertain responses.
+        with self._open('/gopro/camera/stream/start') as response:
+            response.read(65536)
+
+    def preview_stop(self):
+        self.identify()
+        with self._open('/gopro/camera/stream/stop') as response:
+            response.read(65536)
+        if self._json('/gopro/camera/state').get('status', {}).get('32') != 0:
+            raise SourceError('相机尚未确认停止预览')
+
     @staticmethod
     def deletion_effects(asset, members):
         """A single-file delete may also remove this primary's associated sidecars."""
@@ -713,3 +735,11 @@ def controls(device):
     if 'MINI' not in model_key(device.get('model_name', '')):
         commands += ['photo', 'mode_photo']
     return {'commands': commands, 'reason': None}
+
+
+def preview_support(device):
+    if device.get('transport') != 'wifi':
+        return {'supported': False, 'reason': '实时预览请使用独立供电并连接相机 Wi-Fi；USB 备份保持可用'}
+    if model_key(device.get('model_name', '')) != 'HERO9':
+        return {'supported': False, 'reason': '当前实时预览已验证 HERO9 Black；其他机型等待实机验证'}
+    return {'supported': True, 'reason': None}

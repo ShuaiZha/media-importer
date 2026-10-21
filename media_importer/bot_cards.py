@@ -141,7 +141,7 @@ def _stage_label(view, name):
             'scanning': '扫描中', 'verifying': '核验中', 'draining': '等待当前操作结束',
             'waiting_source': '等待相机', 'waiting_confirmation': '等待相机确认', 'waiting_destination': '等待存储',
             'waiting_cache': '等待缓存盘', 'waiting_space': '等待可用空间',
-            'waiting_retry': '等待重试', 'failed': '等待重试'}.get(phase, '等待处理')
+            'waiting_retry': '等待重试', 'waiting_preview': '预览中，导入等待', 'failed': '等待重试'}.get(phase, '等待处理')
 
 
 def progress_bar(value):
@@ -236,6 +236,8 @@ def _title(view):
 
 
 def headline_elements(view):
+    if view.get('running') and view.get('status', {}).get('preview_work'):
+        return [paragraph('实时预览进行中；相机导入与清理暂停，完整缓存按同步设置继续归档。')]
     unplug, batch = view.get('unplug', {}), view.get('batch', {})
     source = view.get('health', {}).get('source', {})
     ready = (view.get('running') and source.get('online') is True and not source.get('stale')

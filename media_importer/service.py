@@ -78,6 +78,9 @@ class Service:
 
     def allowed(self, policy=None):
         if policy == 'delete_source_after_import':
+            from .live_preview import active
+            if active(self.store):
+                return False
             from .capture import pending
             if pending(self.store.db):
                 return False

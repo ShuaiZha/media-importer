@@ -334,6 +334,9 @@ def _outcome(service, op, *, recovery=False):
 
 def process_one(parent, settings):
     """Called at an import boundary, or by the idle daemon while sync is off."""
+    from .live_preview import active
+    if active(parent.store):
+        return False
     store = parent.store
     op = store.db.execute("SELECT * FROM camera_operations WHERE state IN "
                           "('queued','running','queued_delete','deleting','queued_verify','verifying') ORDER BY created LIMIT 1").fetchone()

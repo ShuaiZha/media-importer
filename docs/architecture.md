@@ -16,7 +16,7 @@
 
 Mac 无线工作放入可终止的子进程。凭据只在该进程中读取；连接检查有上限，失败按既有间隔重试。拍摄请求先持久化，导入线程取消当前临时下载后执行；上传线程继续。快门不自动重发，崩溃后只查询实际状态。控制结果短期保留，不新增历史查询体系。
 
-这不是多设备调度框架：每个实例仍只有一台相机、一个目的地。拍摄控制按适配器能力显示；其他系统与实时预览未实现时明确禁用。
+每个实例仍只有一台相机、一个目的地，拍摄与预览按适配器能力开放。预览由独立受管会话运行；相机协调器让导入和原片清理等待，完整缓存仍可上传；相机 MPEG-TS 经内部 Python 进程直接交给内置 go2rtc，不转码、不落盘，客户端使用 MSE 或原生 HLS 播放。内部媒体组件监听本机随机端口；稳定的只读播放网关经 Tailscale Serve 提供 HTTPS/WSS。关闭观看端不结束会话；源连接中断、父进程退出或后台重启时回收，停止结果未知时阻止新的相机读取和删除。
 
 ## 一个文件的完成边界
 
@@ -40,6 +40,7 @@ Mac 无线工作放入可终止的子进程。凭据只在该进程中读取；�
 | [radio](../media_importer/radio.py) / [capture](../media_importer/capture.py) | 有超时限制的原生无线进程、拍摄意图与实际结果 |
 | [camera_operations](../media_importer/camera_operations.py) / [camera_cards](../media_importer/camera_cards.py) | 一次性相机查询、清理预览与确认回执；复用来源适配器和清理核验 |
 | [selected_imports](../media_importer/selected_imports.py) / [selected_transfer](../media_importer/selected_transfer.py) / [selected_cards](../media_importer/selected_cards.py) | 固定所选素材范围，复用两路传输、停止恢复与同卡进度 |
+| [live_preview](../media_importer/live_preview.py) / [preview_worker](../media_importer/preview_worker.py) / [preview_cards](../media_importer/preview_cards.py) | 按需预览会话、子进程回收与飞书入口；Mac 包内置 go2rtc |
 | [store](../media_importer/store.py) / [storage](../media_importer/storage.py) | 任务、锁、缓存盘与副本核验 |
 | [lifecycle](../media_importer/lifecycle.py) | 完成后收尾，保留必要去重与待发结果 |
 | [bot](../media_importer/bot.py) / [notifications](../media_importer/notifications.py) | 本人交互、发送队列与失败重试 |
@@ -62,6 +63,12 @@ Mac 无线工作放入可终止的子进程。凭据只在该进程中读取；�
 
 同一份数据仅一个传输实例。初始凭据在 `.env`，飞书更新的 SMB 密码存入本机配置目录的 `credentials/`；JSON 和控制队列只保存随机引用，连接检查通过后才原子切换。更新快照、备份与迁移包含凭据文件。素材身份决定去重，归档禁止覆盖，源清理、归档和缓存清理分别记录，不能相互替代。
 
-手动相机操作使用现有导入线程的文件边界；同步关闭时由空闲后台执行，不新增常驻线程。预览只读核验并固定清单，确认绑定本人、连接会话和配置版本，执行时再次核验。服务中断后仅复查已发出的删除结果，未执行部分需要重新确认；与自动清理共用组缓存锁。
+手动相机操作使用现有导入线程的文件边界；同步关闭时由空闲后台执行，不新增常驻线程。清理预览只读核验并固定清单，确认绑定本人、连接会话和配置版本，执行时再次核验。服务中断后仅复查已发出的删除结果，未执行部分需要重新确认；与自动清理共用组缓存锁。
 
 选定导入必须在全量同步停止后执行，独立记录本次范围但共用传输核心。每个主文件独立选择，直接附属文件按归档设置处理；清理边界仍由适配器的完整素材组决定。选定任务固定保留原片，停止和继续不扩大范围、不改变全量同步开关。完成后只收尾本次文件，未选任务与缓存保持原状；升级前已确认的分组任务仍按原清单恢复。
+
+### 相机与播放边界
+
+`camera_coordinator` 负责来源占用和预览线程生命周期，`host_network` 负责宿主机联网和只读 Serve 检查；适配器负责具体相机协议。`preview_access` 只代理当前会话的页面、固定 MSE 协商和媒体字节，不接受任意流地址、管理 API 或拍摄命令。结束后链接和已打开连接同时撤销。
+
+`bot_routes` 将稳定菜单事件和文字命令映射到既有应用入口。读取拍摄状态使用带时间的快照，不取消正在导入的文件；新的停止录像意图取消尚未执行的旧拍摄意图，并让出普通蓝牙连接任务。预览转录像必须等待预览停止确认；发送后的未知结果只复查，不重放快门命令。

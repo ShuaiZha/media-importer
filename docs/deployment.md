@@ -10,7 +10,7 @@
 - [支持的 USB 设备](compatibility.md)、缓存目录、已存在且可读写的 SMB 共享与子目录。
 - [飞书 App ID、App Secret、本人 Open ID](feishu.md#1-准备应用与凭据)。
 
-Docker 本轮仅支持 USB，不负责宿主机蓝牙与 Wi-Fi 切换；无线自动连接及拍摄控制使用 Mac 原生版。USB 通过网络读取，无需设备直通。宿主机连通不等于容器连通，VPN / Tailscale 环境也需从容器检查。
+Docker 本轮仅支持 USB，不负责宿主机蓝牙与 Wi-Fi 切换；无线自动连接、拍摄控制及实时预览使用 Mac 原生版。USB 通过网络读取，无需设备直通。宿主机连通不等于容器连通，VPN / Tailscale 环境也需从容器检查。
 
 ## 首次部署
 
@@ -57,7 +57,7 @@ docker compose exec backup python3 -m media_importer check --json
 | 停止 / 启动后台 | `docker compose stop` / `docker compose up -d --no-build` |
 | 移除容器和网络 | `docker compose down` |
 
-`stop`、`down` 保留宿主机配置、任务与缓存，但机器人会离线。日常暂停传输使用飞书「同步 → 立即停止」或「当前文件完成后停止」。
+`stop`、`down` 保留宿主机配置、任务与缓存，但机器人会离线。日常暂停传输使用飞书「同步 → 立即停止」（v0.11.0 开发版为「停止同步」）；需等待当前文件完成时发送文字命令 `当前文件完成后停止`。
 
 ## 更新稳定版
 

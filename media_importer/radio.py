@@ -10,6 +10,7 @@ import time
 from .model import Cancelled, SourceConnectionError
 
 _LOCK = threading.Lock()
+_PRIORITY = threading.Event()
 ACTIONS = {'discover', 'connect', 'state', 'start_recording', 'stop_recording', 'photo', 'mode_video', 'mode_photo'}
 
 
@@ -20,13 +21,25 @@ def request(adapter, action, serial, stop=None):
         raise ValueError('Unsupported radio operation')
     deadline = time.monotonic() + (140 if action == 'connect' else 65)
     mutating = action not in ('discover', 'connect', 'state')
-    while not _LOCK.acquire(timeout=.1):
-        if mutating:
-            raise SourceConnectionError('无线连接正在调整，未发送拍摄命令；请稍后重新操作')
-        if stop and stop.is_set():
-            raise Cancelled('无线操作已停止')
-        if time.monotonic() >= deadline:
-            raise SourceConnectionError('蓝牙正在处理其他操作，请稍后重试')
+    priority = action == 'stop_recording'
+    if priority: _PRIORITY.set()
+    acquired = False
+    try:
+        while not acquired:
+            if priority or not _PRIORITY.is_set():
+                acquired = _LOCK.acquire(timeout=.1)
+            else:
+                time.sleep(.1)
+            if acquired: break
+            if mutating and not priority:
+                raise SourceConnectionError('无线连接正在调整，未发送拍摄命令；请稍后重新操作')
+            if stop and stop.is_set():
+                raise Cancelled('无线操作已停止')
+            if time.monotonic() >= deadline:
+                raise SourceConnectionError('蓝牙正在处理其他操作，请稍后重试')
+    except BaseException:
+        if priority: _PRIORITY.clear()
+        raise
     process = None
     try:
         if stop and stop.is_set():
@@ -40,6 +53,8 @@ def request(adapter, action, serial, stop=None):
         payload = json.dumps({'adapter': adapter, 'action': action, 'serial': serial,
                               'expires_at': time.time() + 30 if mutating else None})
         while True:
+            if not mutating and _PRIORITY.is_set():
+                raise Cancelled('无线连接操作让出通道，优先处理停止录像')
             if stop and stop.is_set():
                 raise Cancelled('无线操作已停止；已发出的拍摄命令需查询结果')
             if time.monotonic() >= deadline:
@@ -65,6 +80,7 @@ def request(adapter, action, serial, stop=None):
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=3)
         _LOCK.release()
+        if priority: _PRIORITY.clear()
 
 
 def main():

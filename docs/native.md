@@ -52,7 +52,7 @@ export PATH="$HOME/.local/bin:$PATH"
 | `media-importer stop` / `start` | 停止 / 启动整个后台，保留偏好与任务 |
 | `media-importer run` | 前台运行，适用于不使用系统服务的环境 |
 
-停止后台会让机器人离线；日常暂停传输请在飞书选择「同步 → 立即停止」或「当前文件完成后停止」。
+停止后台会让机器人离线；日常暂停传输请在飞书选择「同步 → 立即停止」（v0.11.0 开发版为「停止同步」）；需等待当前文件完成时发送文字命令 `当前文件完成后停止`。
 
 飞书「设置」提供素材、传输、通知与归档配置。v0.10.25 起也可修改 SMB 账号密码、相机连接和运行间隔；连接修改前须停止同步，SMB 检查通过后确认保存。首次飞书凭据由安装向导填写，目录迁移仍在本机进行。见[参数设置](feishu.md#参数设置)与[配置优先级](configuration.md#smb)；升级程序后还需在飞书后台[更新并发布菜单](feishu.md#3-订阅与菜单)。
 
@@ -61,6 +61,8 @@ export PATH="$HOME/.local/bin:$PATH"
 ## 无线连接与相机控制
 
 [v0.11.0 开发版](releases/v0.11.0.md)在 Mac 原生包中加入自动 Wi-Fi 连接和蓝牙拍摄控制；Linux / Windows 继续使用 USB。无需额外 App，但首次配对、蓝牙与目录访问权限可能需要本人授权。具体网络要求见[兼容性](compatibility.md#无线连接与拍摄控制)。
+
+Mac 包同时内置 go2rtc 预览组件，随安装、更新和卸载统一管理，无需另装 FFmpeg。使用「相机 → 实时预览」按需打开和结束 HERO9 无线画面；支持本机观看，也可配置下方的 Tailscale 远程入口，见[使用说明](feishu.md#实时预览)。
 
 ## 更新
 
@@ -104,3 +106,31 @@ Windows：
 Windows 请使用安装生成的 `.cmd` 入口。彻底卸载等待文件占用释放，最多重试 30 秒；失败时保留入口及 `.purge.json` 恢复记录。解除占用后重试 `media-importer uninstall --purge --yes`，不要先删恢复记录。此恢复机制从 v0.10.22 起提供。
 
 修改连接与凭据见[配置生效方式](configuration.md#修改后生效)；移动配置、任务或缓存目录见[迁移指南](recovery.md)，不能仅修改路径。
+
+## 远程预览：Tailscale
+
+本节仅适用于已集成预览的 v0.11.0 Mac 原生开发版。运行程序的 Mac 和观看设备均需连接 Tailscale，且访问策略允许该端口；Mac 仍需有独立的有线上网链路。
+
+1. 在本机执行 `tailscale status` 确认登录，找到这台 Mac 的 MagicDNS 名称。
+2. 在项目 `.env` 添加以下示例，将域名换成这台 Mac 的名称：
+
+   ```dotenv
+   PREVIEW_LOCAL_PORT=18765
+   PREVIEW_PUBLIC_URL=https://mac.example.ts.net:8443
+   ```
+
+3. 创建专用私有映射（如已有相同端口用途，请选择空闲端口）：
+
+   ```sh
+   tailscale serve --bg --https=8443 http://127.0.0.1:18765
+   media-importer stop
+   media-importer start
+   ```
+
+   macOS 的 Tailscale CLI 不在 PATH 时使用 `/Applications/Tailscale.app/Contents/MacOS/Tailscale`。首次使用按 Tailscale 提示启用 HTTPS。这里是私有 Serve，不使用 Funnel 或公网端口转发。
+
+4. 飞书「相机 → 实时预览」打开画面。程序只核验专用映射，不重置其他 Serve 设置。浏览器使用同一 HTTPS 入口传输页面和视频，无需另开 WebRTC 端口。
+
+取消映射使用 `tailscale serve --https=8443 off`，不要使用整体 reset。关闭预览立即撤销会话链接，但保留映射供下次使用。播放器仅开放当前会话的只读播放接口，go2rtc 管理接口仍在本机内部。连接被拒绝时检查程序后台、Serve、Tailscale 和端口；页面打开但无画面时检查相机链路和客户端播放支持。
+
+客户端支持原生 HLS 时自动采用 MPEG-TS HLS，其余客户端使用 MSE。HLS 保留相机视频中的真实编码参数，避免 Apple 播放器因默认初始化参数出现黑屏；不额外转码。两者都经同一 Tailscale HTTPS 入口，结束预览立即撤销会话。若电脑代理使用 Fake-IP，可仅为预览域名添加 DNS／直连例外；无需关闭全部代理。

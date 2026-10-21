@@ -1,0 +1,43 @@
+"""Stable menu events and optional text shortcuts, independent of card rendering."""
+TEXT_ACTIONS = {"状态": {"panel": "status"}, "进度": {"panel": "status"}, "查看状态": {"panel": "status"},
+            "运行状态": {"panel": "status"},
+            "相机控制": {"capture": {"version": 1, "action": "panel"}},
+            "实时预览": {"live_preview": {"version": 1, "action": "open"}},
+            "相机状态": {"camera": {"version": 1, "action": "inspect"}},
+            "清理原片": {"camera": {"version": 1, "action": "select", "mode": "archived"}},
+            "选择素材": {"selected_import": {"version": 1, "action": "browse"}},
+            "设置": {"panel": "settings"}, "参数设置": {"panel": "settings"},
+            "素材与清理": {"panel": "media_settings"}, "传输与缓存": {"panel": "transfer_settings"},
+            "消息通知": {"panel": "notification_settings"}, "归档位置": {"panel": "destination_settings"},
+            "归档存储": {"panel": "destination_settings"}, "相机连接": {"panel": "source_settings"},
+            "高级设置": {"panel": "advanced_settings"}, "本机目录": {"panel": "local_storage"},
+            "运行总览": {"panel": "status"}, "设备与存储": {"panel": "status"},
+            "当前任务": {"panel": "status"}, "归档结果": {"panel": "status"},
+            "原片处理": {"panel": "cleanup"}, "删除原片": {"panel": "cleanup"}, "删除原片开关": {"panel": "cleanup"},
+            "清理设置": {"panel": "cleanup"},
+            "自动通知": {"panel": "notifications"}, "通知开关": {"panel": "notifications"},
+            "预览文件": {"panel": "previews"}, "素材范围": {"panel": "scope"},
+            "开启同步": {"changes": {"backup": {"enabled": True}}},
+            "停止同步": {"changes": {"backup": {"enabled": False}}},
+            "立即停止": {"changes": {"backup": {"enabled": False}}},
+            "完成当前文件后停止": {"changes": {"backup": {"stop_after_current": True}}, "settings_version": 2},
+            "当前文件完成后停止": {"changes": {"backup": {"stop_after_current": True}}, "settings_version": 2},
+            "关闭同步": {"changes": {"backup": {"enabled": False}}}}
+
+MENU_ACTIONS = {
+    'sync.status': {'panel': 'status'},
+    'sync.start': {'changes': {'backup': {'enabled': True}}},
+    'sync.stop': {'changes': {'backup': {'enabled': False}}},
+    'sync.select': {'selected_import': {'version': 1, 'action': 'browse'}},
+    'sync.cleanup': {'camera': {'version': 1, 'action': 'select', 'mode': 'archived'}},
+    'camera.overview': {'camera': {'version': 1, 'action': 'inspect'}},
+    'camera.preview': {'live_preview': {'version': 1, 'action': 'open'}},
+    'camera.capture': {'capture': {'version': 1, 'action': 'panel'}},
+    'settings.media': {'panel': 'media_settings'},
+    'settings.transfer': {'panel': 'transfer_settings'},
+    'settings.notifications': {'panel': 'notification_settings'},
+    'settings.source': {'panel': 'source_settings'},
+    'settings.destination': {'panel': 'destination_settings'},
+}
+TEXT_ACTIONS['相机概览'] = MENU_ACTIONS['camera.overview']
+TEXT_ACTIONS['拍摄控制'] = MENU_ACTIONS['camera.capture']

@@ -87,37 +87,8 @@ def http_identity(serial):
     return info
 
 
-def route():
-    output = subprocess.run(['/sbin/route', '-n', 'get', 'default'], capture_output=True,
-                            text=True, timeout=5).stdout
-    found = re.search(r'^\s+interface: (\S+)', output, re.M)
-    return found[1] if found else None
-
-
-def wifi_interface():
-    output = subprocess.run(['/usr/sbin/networksetup', '-listallhardwareports'], capture_output=True,
-                            text=True, timeout=5).stdout
-    for block in output.split('\n\n'):
-        if re.search(r'Hardware Port: (Wi-Fi|AirPort)', block):
-            match = re.search(r'Device: (\S+)', block)
-            if match:
-                return match[1]
-    raise SourceConnectionError('未找到 Mac Wi-Fi 网卡')
-
-
-def join_wifi(interface, ssid, password):
-    # macOS may exit zero while association failed. Only HTTP identity proves success.
-    result = subprocess.run(['/usr/sbin/networksetup', '-setairportnetwork', interface, ssid, password],
-                            capture_output=True, text=True, timeout=25, check=False)
-    output = (result.stdout + result.stderr).lower()
-    # Do not expose raw OS diagnostics: they can contain the SSID or password.
-    if 'could not find network' in output:
-        return 'not_found'
-    if 'authorization' in output or 'permission' in output:
-        raise SourceConnectionError('macOS 未允许本进程切换 Wi-Fi；可先手动连接相机热点')
-    if 'password' in output or 'authentication' in output:
-        raise SourceConnectionError('macOS 未接受相机热点凭据，请检查配对状态或手动连接')
-    return 'attempted'
+# Keep adapter-local names for the protocol workflow; implementation is host-owned.
+from ..host_network import route, wifi_interface, join_wifi
 
 
 class Camera:

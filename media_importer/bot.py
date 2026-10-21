@@ -83,6 +83,9 @@ class Bot:
         """Accept only the explicitly supported, versioned settings controls."""
         if payload.get('form') or payload.get('operation'):
             return False
+        if 'live_preview' in payload:
+            from .preview_cards import supported
+            return supported(payload['live_preview']) and not payload.get('changes')
         if 'capture' in payload:
             from .capture_cards import supported
             return supported(payload['capture']) and not payload.get('changes')
@@ -291,32 +294,10 @@ class Bot:
         except (ValueError, AttributeError):
             return False
         # Keep no arbitrary chat text, media, or credentials in the task database.
-        commands = {"状态": {"panel": "status"}, "进度": {"panel": "status"}, "查看状态": {"panel": "status"},
-                    "运行状态": {"panel": "status"},
-                    "相机控制": {"capture": {"version": 1, "action": "panel"}},
-                    "相机状态": {"camera": {"version": 1, "action": "inspect"}},
-                    "清理原片": {"camera": {"version": 1, "action": "select", "mode": "archived"}},
-                    "选择素材": {"selected_import": {"version": 1, "action": "browse"}},
-                    "设置": {"panel": "settings"}, "参数设置": {"panel": "settings"},
-                    "素材与清理": {"panel": "media_settings"}, "传输与缓存": {"panel": "transfer_settings"},
-                    "消息通知": {"panel": "notification_settings"}, "归档位置": {"panel": "destination_settings"},
-                    "归档存储": {"panel": "destination_settings"}, "相机连接": {"panel": "source_settings"},
-                    "高级设置": {"panel": "advanced_settings"}, "本机目录": {"panel": "local_storage"},
-                    "运行总览": {"panel": "status"}, "设备与存储": {"panel": "status"},
-                    "当前任务": {"panel": "status"}, "归档结果": {"panel": "status"},
-                    "原片处理": {"panel": "cleanup"}, "删除原片": {"panel": "cleanup"}, "删除原片开关": {"panel": "cleanup"},
-                    "清理设置": {"panel": "cleanup"},
-                    "自动通知": {"panel": "notifications"}, "通知开关": {"panel": "notifications"},
-                    "预览文件": {"panel": "previews"}, "素材范围": {"panel": "scope"},
-                    "开启同步": {"changes": {"backup": {"enabled": True}}},
-                    "停止同步": {"changes": {"backup": {"enabled": False}}},
-                    "立即停止": {"changes": {"backup": {"enabled": False}}},
-                    "完成当前文件后停止": {"changes": {"backup": {"stop_after_current": True}}, "settings_version": 2},
-                    "当前文件完成后停止": {"changes": {"backup": {"stop_after_current": True}}, "settings_version": 2},
-                    "关闭同步": {"changes": {"backup": {"enabled": False}}}}
+        from .bot_routes import TEXT_ACTIONS as commands
         action = dict(commands.get(command, {"panel": "status", "notice":
-            "请选择「状态」「同步」或「设置」。设置中可修改素材、传输、通知、相机及 SMB 连接与凭据；本机目录入口提供实际路径和迁移步骤。"}))
-        if "changes" in action:
+            "请选择「同步」「相机」或「设置」。设置中可修改素材、传输、通知、相机及 SMB 连接与凭据；本机目录入口提供实际路径和迁移步骤。"}))
+        if "changes" in action or 'live_preview' in action:
             action["revision"] = self.settings.read()["revision"]
             try:
                 if abs(time.time() - int(message["create_time"]) / 1000) > 300:
@@ -325,6 +306,27 @@ class Bot:
             except (KeyError, ValueError, TypeError):
                 return False
         self.enqueue("message:" + header["event_id"], action)
+        return True
+
+    def receive_menu(self, data):
+        from .bot_routes import MENU_ACTIONS
+        header, event = data.get('header', {}), data.get('event', {})
+        operator = event.get('operator', {}).get('operator_id', {})
+        action = MENU_ACTIONS.get(event.get('event_key'))
+        if (header.get('app_id') != self.credentials['app_id'] or operator.get('open_id') != self.owner or
+                not isinstance(header.get('event_id'), str) or not action):
+            return False
+        try:
+            stamp = float(event.get('timestamp') or header.get('create_time'))
+            if stamp > 1e14: stamp /= 1e6
+            elif stamp > 1e11: stamp /= 1e3
+            if not abs(time.time() - stamp) <= 300: return False
+        except (TypeError, ValueError):
+            return False
+        payload = json.loads(json.dumps(action))
+        if 'changes' in payload or 'live_preview' in payload:
+            payload['revision'] = self.settings.read()['revision']
+        self.enqueue('menu:' + header['event_id'], payload)
         return True
 
     def receive_card(self, data):
@@ -395,7 +397,7 @@ class Bot:
             message_id = event.get('context', {}).get('open_message_id')
             if (payload.get('panel') not in STATUS_PANELS or not isinstance(message_id, str) or
                     not re.fullmatch(r'om_[A-Za-z0-9_-]{1,128}', message_id)):
-                return {'toast': {'type': 'error', 'content': '原消息不可用，请通过状态菜单重新打开'}}
+                return {'toast': {'type': 'error', 'content': '原消息不可用，请从底部菜单重新打开'}}
             payload['message_id'] = message_id
         self.enqueue("card:" + event_id, payload)
         return {"toast": {"type": "info", "content": "正在更新状态" if payload.get('refresh') else "操作已提交，正在处理"}}
@@ -408,6 +410,9 @@ class Bot:
             return False
         try:
             payload = json.loads(job['payload'])
+            if 'live_preview' in payload and self.supported(payload):
+                from .preview_cards import process_job
+                return process_job(self, job, payload)
             # The existing stop menu also applies to the independent one-shot task.
             changes = payload.get('changes')
             if job['state'] == 'queued' and changes in (
@@ -512,7 +517,7 @@ class Bot:
                         notice = {'title': '相机已确认' if payload['source_decision'] else '本次连接暂不备份',
                                   'detail': '同步已开启，等待服务核对当前设备后开始导入。' if payload['source_decision'] and changed else
                                             '本次连接已确认；同步仍按当前开关设置运行。' if payload['source_decision'] else
-                                            '相机素材保留，可通过状态菜单重新确认。', 'level': 'success' if payload['source_decision'] else 'info'}
+                                            '相机素材保留，可从「同步 → 运行状态」重新确认。', 'level': 'success' if payload['source_decision'] else 'info'}
                     # Enabling arms discovery even before the camera is reachable.
                     # Source IO still requires a fresh, approved identity; a new
                     # camera receives its own confirmation without blocking SMB.
@@ -610,7 +615,9 @@ def serve(settings, directory):
         bot.receive_message(json.loads(lark.JSON.marshal(event)))
     def callback(event):
         return P2CardActionTriggerResponse(bot.receive_card(json.loads(lark.JSON.marshal(event))))
-    handler = lark.EventDispatcherHandler.builder("", "").register_p2_im_message_receive_v1(message).register_p2_card_action_trigger(callback).build()
+    def menu(event):
+        bot.receive_menu(json.loads(lark.JSON.marshal(event)))
+    handler = lark.EventDispatcherHandler.builder("", "").register_p2_im_message_receive_v1(message).register_p2_card_action_trigger(callback).register_p2_application_bot_menu_v6(menu).build()
     client = lark.ws.Client(bot.credentials["app_id"], bot.credentials["app_secret"], event_handler=handler, log_level=lark.LogLevel.ERROR)
     # SDK log text can contain signed websocket URLs. Expose our own sanitized status.
     from lark_oapi.core.log import logger

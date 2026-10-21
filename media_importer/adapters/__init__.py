@@ -84,3 +84,11 @@ def source_controls(device):
         return {'commands': [], 'reason': '尚未识别可控制的相机'}
     method = getattr(_module(SOURCES, device['type'], '来源'), 'controls', None)
     return method(device) if method else {'commands': [], 'reason': '此适配器尚未提供拍摄控制'}
+
+
+def source_preview_support(device):
+    if device.get('type') in SOURCES:
+        method = getattr(_module(SOURCES, device['type'], '来源'), 'preview_support', None)
+        if method:
+            return method(device)
+    return {'supported': False, 'reason': '此设备尚未适配实时预览'}

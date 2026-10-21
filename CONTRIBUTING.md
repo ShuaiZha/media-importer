@@ -58,6 +58,8 @@ python3.12 -m venv .build/native-venv
 
 最后一行以 macOS ARM64 为例，替换为实际产物路径。Windows 使用 `py -3.12` 与 `.build/native-venv/Scripts/python.exe`。输出在 `dist/native/`，包含程序、压缩包和校验清单。冒烟测试在临时实例中检查安装、更新与卸载，不接管生产数据。
 
+Mac 构建会下载并校验固定版本的 go2rtc，连同 MIT 许可放入包内 `components/`，运行时不下载组件。来源与校验值见 [`scripts/preview_bundle.py`](scripts/preview_bundle.py)；源码测试实时预览前先运行该脚本。不依赖系统 FFmpeg。其他平台不包含尚未适配的预览组件。
+
 ### 发布
 
 1. 同步程序版本、Compose 镜像版本与 `docs/releases/vX.Y.Z.md`。

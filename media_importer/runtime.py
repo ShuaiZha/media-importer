@@ -27,6 +27,8 @@ class Control:
         self.changed = threading.Event()
         self.lock = threading.RLock()
         self.work_guard = threading.Lock()
+        from .camera_coordinator import CameraCoordinator
+        self.camera = CameraCoordinator(stop)
         self.item, self.token, self.error = None, None, None
         self.applied_token, self.applied_revision = None, None
         self.refresh()
@@ -98,10 +100,12 @@ def daemon(config_path, directory, stop):
     from .source_connection import restore, run as discover_sources
     item = control.settings.read()
     restore(store, (item.get('config') or {}).get('source') or {})
+    from .live_preview import restore as restore_preview
+    restore_preview(store)
     from .storage import initialize_cache
     initialize_cache(store)
     store.invalidate_inventory("服务重启后需重新核对相机清单")
-    store.status(source_work=False)
+    store.status(source_work=False, preview_work=False)
     store.set_meta("service", {"running": True, "started_at": now()})
     from .workers import Workers
     failed = threading.Event()
@@ -123,10 +127,11 @@ def daemon(config_path, directory, stop):
                     updates['worker_heartbeat_at'] = now()
                     heartbeat_at = time.monotonic()
                 db.status(**updates)
-                from .capture import pending as capture_pending
+                from .capture import mutating_pending as capture_pending
+                from .live_preview import requested as preview_requested
                 connection = db.get_meta('source_connection', {})
                 session_id = connection.get('id')
-                if capture_pending(db.db) or (source_session_id and session_id != source_session_id):
+                if capture_pending(db.db) or preview_requested(db) or (source_session_id and session_id != source_session_id):
                     control.source_interrupt.set()
                     control.changed.set()
                 source_session_id = session_id
@@ -147,6 +152,8 @@ def daemon(config_path, directory, stop):
     notifier = workers.start('notifications', notify, critical=False)
     from .operations import serve as maintenance
     maintainer = workers.start('maintenance', lambda: maintenance(directory, stop), critical=False)
+    from .preview_access import serve as preview_gateway
+    gateway = workers.start('preview-access', lambda: preview_gateway(directory, stop), critical=False)
     try:
         from .preflight import run as startup_check
         checked = startup_check(control.settings, store, stop)
@@ -183,6 +190,8 @@ def daemon(config_path, directory, stop):
                         control.adopt()
                         try:
                             with control.work_guard:
+                                from .live_preview import process_one as process_preview
+                                process_preview(service, control.settings)
                                 from .capture import process_one as process_capture
                                 process_capture(service, control.settings)
                                 from .camera_operations import process_one
@@ -217,6 +226,8 @@ def daemon(config_path, directory, stop):
     finally:
         stop.set()
         control.changed.set()
+        control.camera.close()
+        gateway.join(timeout=5)
         watcher.join(timeout=3)
         discoverer.join(timeout=15)
         notifier.join(timeout=35)

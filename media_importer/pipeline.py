@@ -61,6 +61,13 @@ def transfer(service):
                         if source_interrupt and source_interrupt.is_set():
                             source_interrupt.clear()
                             inventory, verified = None, False
+                        from .live_preview import process_one as process_preview
+                        with activity.waiting(stage):
+                            previewed = process_preview(task, task.control.settings)
+                        if previewed:
+                            inventory, verified = None, False
+                            changed = True
+                            continue
                         from .capture import process_one as process_capture
                         if process_capture(task, task.control.settings):
                             if source_interrupt:
@@ -68,6 +75,10 @@ def transfer(service):
                             inventory, verified = None, False
                             changed = True
                             continue
+                        from .camera_coordinator import source_wait_reason
+                        reason = source_wait_reason(db)
+                        if reason:
+                            raise SourceBlocked(reason)
                     if stage == 'import' and task.control and task.process_camera_operations:
                         from .camera_operations import process_one
                         if process_one(task, task.control.settings):

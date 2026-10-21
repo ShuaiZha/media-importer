@@ -206,6 +206,7 @@ class SelectionControl:
         self.browsing = browsing
         self.transfer_stop = threading.Event()
         self.source_interrupt = getattr(parent.control, 'source_interrupt', None)
+        self.camera = getattr(parent.control, 'camera', None)
         self.lock = threading.RLock()
         self.checked_at = 0
         self.reason = None
@@ -306,6 +307,9 @@ def process_one(parent, settings, *, browsing_only=False):
     op = dict(row)
     store = parent.store
     browsing = op['state'] in ('queued', 'scanning')
+    from .live_preview import active as preview_active
+    if browsing and preview_active(store):
+        return False
     control = SelectionControl(parent, settings, op, browsing)
     from .liveness import CombinedStop
     combined = CombinedStop(parent.stop, control.transfer_stop)

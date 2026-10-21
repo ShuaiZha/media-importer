@@ -31,6 +31,7 @@ def main(argv=None):
         if command in ("check", "scan", "status"):
             sub.add_argument("--json", action="store_true")
     commands.add_parser("radio")
+    commands.add_parser("live-preview")
     commands.add_parser("bot")
     commands.add_parser("bot-health")
     commands.add_parser("bot-panel")
@@ -42,6 +43,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
     try:
+        if args.command == 'live-preview':
+            from .preview_worker import main as preview_main
+            return preview_main()
         if args.command == 'radio':
             from .radio import main as radio_main
             return radio_main()
