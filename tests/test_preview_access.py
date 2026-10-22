@@ -66,7 +66,7 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
     async def test_page_host_session_and_management_routes(self):
         result = await self.http(self.path)
         self.assertIn(b'200 OK', result)
-        self.assertIn('关闭窗口不会结束预览'.encode(), result)
+        self.assertIn('关闭页面不会结束预览'.encode(), result)
         for path in ('/api/streams', '/config', self.path+'socket?src=exec:evil', self.path+'../api'):
             self.assertIn(b'404', await self.http(path))
         self.assertIn(b'403', await self.http(self.path, 'untrusted.example'))

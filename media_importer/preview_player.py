@@ -3,18 +3,27 @@
 PAGE = '''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>实时预览 · Media Importer</title>
+<script>if(location.hash==='#embedded')document.documentElement.classList.add('embedded');</script>
 <style>
-:root{color-scheme:dark;font-family:system-ui,-apple-system,sans-serif;background:#111827;color:#f3f4f6}
-body{margin:0;padding:24px;max-width:1100px;margin:auto}header{display:flex;align-items:center;justify-content:space-between;gap:16px}
-h1{font-size:20px;font-weight:600}#state{font-size:14px;color:#a5b4fc}viewer-video{display:block;height:100%}
-video{width:100%;height:100%;object-fit:contain}#screen{aspect-ratio:16/9;background:#030712;border-radius:12px;overflow:hidden}
-p{font-size:14px;color:#cbd5e1;line-height:1.7}button{padding:10px 16px;background:#334155;color:white;border:0;border-radius:8px;cursor:pointer}
-#mode{font-size:12px;color:#94a3b8}nav{display:flex;gap:8px;flex-wrap:wrap}
-@media(max-width:600px){body{padding:12px}header{align-items:flex-start;flex-direction:column;gap:0}}
-</style><header><h1>实时预览</h1><span id="state" role="status" aria-live="polite">正在连接画面</span></header>
-<div id="screen"></div><p id="mode"></p>
-<nav><button id="retry" type="button">播放／重新连接</button><button id="compat" type="button">兼容播放</button></nav>
-<p id="detail">关闭窗口不会结束预览。请在飞书卡片中点击「结束预览」。</p>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,sans-serif;background:#0b1220;color:#f3f4f6}
+*{box-sizing:border-box}body{padding:24px;max-width:1100px;margin:auto}
+.page-heading h1{font-size:20px;font-weight:600;margin:0 0 18px}
+#state{font-size:13px;color:#dbeafe;line-height:1.5}viewer-video,video{display:block;width:100%;height:100%;min-height:0}
+video{object-fit:contain}#screen{aspect-ratio:16/9;background:#030712;border-radius:10px;overflow:hidden}
+.playback-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0}
+.playback-status{display:flex;flex-direction:column;gap:4px;min-width:0}#mode{font-size:12px;color:#94a3b8;line-height:1.5;overflow-wrap:anywhere}
+nav{display:flex;gap:8px;flex-shrink:0}button{font:inherit;font-size:12px;min-height:40px;padding:8px 12px;background:#253449;color:#e2e8f0;border:1px solid #3b4a60;border-radius:8px;cursor:pointer;white-space:nowrap}
+button:hover{background:#33465e}button:focus-visible{outline:2px solid #93c5fd;outline-offset:2px}p{font-size:12px;color:#94a3b8;line-height:1.6;margin:0}
+.embedded,.embedded body{height:100%;min-height:0;overflow:hidden}
+.embedded body{padding:0;margin:0;max-width:none;display:grid;grid-template-rows:minmax(0,1fr) auto}
+.embedded .page-heading,.embedded #detail{display:none}
+.embedded #screen{min-height:0;aspect-ratio:auto;border-radius:0}
+.embedded .playback-bar{padding:10px 14px;background:#101c2e;border-top:1px solid #243247}
+@media(max-width:520px){body{padding:12px}.playback-bar{flex-direction:column;align-items:stretch;gap:8px}.playback-status{flex-direction:row;align-items:center;flex-wrap:wrap;gap:4px 10px}nav button{flex:1;min-height:44px}.embedded .playback-bar{padding:10px 12px}}
+</style><body><header class="page-heading"><h1>实时预览</h1></header>
+<div id="screen"></div><div class="playback-bar"><div class="playback-status"><span id="state" role="status" aria-live="polite">正在连接画面</span><span id="mode"></span></div>
+<nav aria-label="播放控制"><button id="retry" type="button">播放／重新连接</button><button id="compat" type="button">兼容播放</button></nav></div>
+<p id="detail">关闭页面不会结束预览。请在相机页面结束预览。</p>
 <script type="module">
 import {VideoRTC} from './player.js';
 customElements.define('viewer-video', VideoRTC);
@@ -31,7 +40,7 @@ function dispose(){
 }
 function finish(){
  ended=true;generation++;dispose();label.textContent='预览已结束';modeLabel.textContent='';
- detail.textContent='请从飞书「相机 → 实时预览」重新开启。';
+ detail.textContent='请从飞书「相机 → 相机页面」重新开启。';
 }
 function play(){video()?.play().catch(()=>{if(!ended)label.textContent='请点击播放按钮';});}
 function fallback(id){if(!ended && generation===id && mode==='webrtc')connect(false,true);}
@@ -136,4 +145,4 @@ setInterval(async()=>{
  }catch{if(!ended && generation===id)label.textContent='连接中断，正在重试；相机预览保持开启';}
  finally{checking=false;}
 },2000);
-</script></html>'''
+</script></body></html>'''
