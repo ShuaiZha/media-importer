@@ -142,7 +142,7 @@ class PreviewTests(unittest.TestCase):
     def test_overview_explains_preview_without_reporting_file_verification(self):
         from media_importer.bot_cards import headline_elements
         text = json.dumps(headline_elements({'running': True, 'status': {'source_work': True, 'preview_work': True}}), ensure_ascii=False)
-        self.assertIn('实时预览进行中', text)
+        self.assertIn('预览进行中', text)
         self.assertNotIn('正在执行读写', text)
 
     def test_active_preview_does_not_block_enabled_upload_pipeline_start(self):
@@ -157,7 +157,7 @@ class PreviewTests(unittest.TestCase):
         self.bind(); before = self.path.read_bytes()
         self.sender.return_value = 'om_preview_fixture'
         with patch.object(preview, 'available'):
-            self.assertTrue(self.bot.receive_message(self.message('实时预览')))
+            self.assertTrue(self.bot.receive_card(self.callback(self.bot.action({'live_preview': {'version': 1, 'action': 'open'}}))))
             self.assertTrue(self.bot.process_one())
         state = self.store.get_meta(preview.KEY)
         preview.update(self.store, state['id'], state='ready', reason='实时画面已就绪',
@@ -165,12 +165,12 @@ class PreviewTests(unittest.TestCase):
         with self.bot.db() as db: db.execute('UPDATE bot_jobs SET retry_at=0')
         self.assertTrue(self.bot.process_one())
         content = json.dumps(self.updater.call_args.args[-1], ensure_ascii=False)
-        self.assertIn('打开画面', content); self.assertIn('applink.feishu.cn', content)
+        self.assertIn('结束预览', content)
         self.assertEqual('om_preview_fixture', self.updater.call_args.args[1])
         preview.update(self.store, state['id'], state='stopped', url=None, reason='预览已结束')
         with self.bot.db() as db: db.execute('UPDATE bot_jobs SET retry_at=0')
         self.assertTrue(self.bot.process_one())
-        self.assertNotIn('打开画面', json.dumps(self.updater.call_args.args[-1], ensure_ascii=False))
+        self.assertNotIn('结束预览', json.dumps(self.updater.call_args.args[-1], ensure_ascii=False))
         self.assertEqual(before, self.path.read_bytes())
         self.sender.assert_called_once()
 
@@ -191,7 +191,7 @@ class PreviewTests(unittest.TestCase):
     def test_source_failure_updates_card_and_sends_one_deduplicated_alert(self):
         self.bind(); self.sender.return_value='om_preview_fixture'
         with patch.object(preview,'available'):
-            self.bot.receive_message(self.message('实时预览')); self.bot.process_one()
+            self.bot.receive_card(self.callback(self.bot.action({'live_preview': {'version': 1, 'action': 'open'}}))); self.bot.process_one()
         state=self.store.get_meta(preview.KEY)
         preview.update(self.store,state['id'],state='error',reason='相机视频流已中断',cleanup_pending=False)
         for _ in range(5):

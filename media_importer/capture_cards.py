@@ -50,11 +50,11 @@ def panel(bot, store, receipt=None, *, waiting=False):
         current = 0 <= age < 45 and not observed.get('stale')
     except (KeyError, TypeError, ValueError):
         current = False
-    title = '正在执行相机操作' if waiting else '操作结果待核验' if observed.get('uncertain') else '相机控制'
+    title = '正在执行相机操作' if waiting else '操作结果待核验' if observed.get('uncertain') else '相机页面'
     elements = [paragraph((device.get('model_name') or '尚未连接相机') + ' · ' +
                          {'usb': 'USB', 'wifi': 'Wi-Fi'}.get(device.get('transport'), '未连接'))]
     if waiting:
-        elements.append(paragraph('正在核验相机并执行操作，结果将更新到本卡片。完整缓存按同步设置归档。'))
+        elements.append(paragraph('正在核验操作结果'))
     elif observed.get('error') or observed.get('reason'):
         elements.append(paragraph(observed.get('error') or observed['reason']))
     elif receipt is not None:
@@ -69,20 +69,14 @@ def panel(bot, store, receipt=None, *, waiting=False):
         mode = observed.get('mode')
         state_label = ('延时拍摄中' if mode == 'timelapse' else '录像中') if observed['recording'] else '待机'
         elements.append(markdown('**' + state_label + '** · ' + {'video': '视频', 'photo': '照片', 'timelapse': '延时摄影', 'other': '其他'}.get(mode, '未知模式')))
-        if observed.get('specification'):
-            elements.append(paragraph(observed['specification']))
-        from .notifications import _size, _duration
-        details = []
         if observed['recording'] and observed.get('recording_seconds') is not None:
-            details.append('已录制 ' + _duration(observed['recording_seconds']))
-        if observed.get('battery_percent') is not None: details.append(f"电量 {observed['battery_percent']}%")
-        if observed.get('storage_remaining_bytes') is not None: details.append('卡剩余 ' + _size(observed['storage_remaining_bytes']))
-        if details: elements.append(paragraph(' · '.join(details)))
+            from .notifications import _duration
+            elements.append(paragraph('已录制 ' + _duration(observed['recording_seconds'])))
         if observed.get('overheating'):
             elements.append(markdown('**相机报告过热，请停止拍摄并检查散热。**'))
-        elements.append(note('观测于 ' + format_time(observed['observed_at'])))
+        if receipt is None: elements.append(note('更新 ' + format_time(observed['observed_at'])))
     elif not waiting:
-        elements.append(note('当前拍摄状态尚未读取或已过期；操作前会重新核验。'))
+        elements.append(note('拍摄状态未知或已过期'))
     if support['reason']:
         elements.append(paragraph(support['reason']))
     if not fresh(connection) and not waiting:
@@ -93,45 +87,61 @@ def panel(bot, store, receipt=None, *, waiting=False):
         from .camera_web import button as workspace_button
         workspace = workspace_button(bot, store)
         if workspace: elements.append(bot.buttons(workspace))
-        if commands:
-            from .camera_coordinator import preview_active
-            previewing = preview_active(store)
-            recording = current and observed.get('recording')
-            mode = observed.get('mode')
-            action = 'photo' if mode == 'photo' else 'start_timelapse' if mode == 'timelapse' else 'start_recording'
-            label = '拍照' if mode == 'photo' else '开始延时摄影' if mode == 'timelapse' else '开始录像'
-            if previewing:
-                action = {'photo': 'preview_photo', 'start_timelapse': 'preview_timelapse', 'start_recording': 'preview_record'}[action]
-                label = '结束预览并' + ('拍照' if mode == 'photo' else '开始延时' if mode == 'timelapse' else '录像')
-            labels = [('stop_recording', '停止拍摄' if mode == 'timelapse' else '停止录像')] if recording else [(action, label)]
-            controls = []
-            for action, label in labels:
-                if PREVIEW_COMMANDS.get(action, action) in commands:
-                    primary = button(bot, label, action, connection['id']); primary['type'] = 'primary'
-                    controls.append(primary)
-            controls.append(button(bot, '刷新状态', 'state', connection['id']))
-            if not current and 'stop_recording' in commands:
-                controls.append(button(bot, '停止录像', 'stop_recording', connection['id']))
-            elements.append(bot.buttons(*controls))
-            if recording and mode == 'video' and 'hilight' in commands:
-                elements.append(bot.buttons(button(bot, '添加 HiLight', 'hilight', connection['id'])))
-            if 'mode_video' in commands and not recording and not previewing:
-                elements.append(bot.buttons(*(button(bot, label, action, connection['id']) for action, label in
-                    [('mode_video', '视频模式'), ('mode_photo', '照片模式')] if action in commands)))
-            if not recording:
-                elements.append(bot.buttons(button(bot, '拍摄设置', 'settings'),
-                    bot.button('查看实时画面' if previewing else '开启实时预览', {'live_preview': {'version': 1, 'action': 'panel' if previewing else 'open'}})))
-        else:
-            elements.append(bot.buttons(button(bot, '连接无线相机', 'connect'), button(bot, '刷新连接', 'panel')))
-        elements.append(note('拍摄优先于导入；完整缓存按同步设置归档。停止同步不会停止录像。'))
+        controls = []
+        if current and observed.get('recording') and 'stop_recording' in commands:
+            controls.append(button(bot, '停止录像', 'stop_recording', connection['id']))
+        from .live_preview import KEY, ACTIVE
+        preview = store.get_meta(KEY, {})
+        if preview.get('state') in ACTIVE or preview.get('cleanup_pending'):
+            controls.append(bot.button('结束预览', {'live_preview': {'version': 1, 'action': 'stop', 'id': preview['id']}}))
+        if controls: elements.append(bot.buttons(*controls))
+        if not fresh(connection):
+            elements.append(bot.buttons(button(bot, '连接相机', 'connect'), button(bot, '刷新', 'panel')))
         shoot = store.get_meta('capture_session', {})
         if shoot.get('owner') == bot.scope and shoot.get('serial') == device.get('serial_number'):
             if shoot.get('state') == 'ready':
-                elements += [paragraph('最近拍摄已保存到相机，尚不代表已完成归档。'),
-                             bot.buttons(button(bot, '导入本次素材', 'import_shoot', id=shoot['id']))]
+                elements += [bot.buttons(button(bot, '导入本次素材', 'import_shoot', id=shoot['id']))]
             elif shoot.get('state') in ('awaiting_media', 'uncertain', 'empty', 'not_started'):
                 elements.append(note(shoot.get('reason') or '正在核验拍摄结果'))
     return card(title, elements, 'orange' if observed.get('uncertain') or observed.get('error') else 'blue', shared=True)
+
+
+def connection_result(bot, store, job, payload):
+    """One bounded connection intent; never change backup or camera operations."""
+    item = bot.settings.read()
+    if item.get('error'):
+        raise ConfigError(item['error'])
+    mode = item['config']['backup']['source_transport']
+    state = store.get_meta('source_connection', {})
+    device = state.get('device', {})
+    if fresh(state) and state.get('state') in ('pending', 'declined'):
+        return bot.source_panel(item['config']), False
+    if fresh(state) and state.get('state') == 'approved' and device.get('http_ready', True):
+        return card('相机已连接', [paragraph((device.get('model_name') or '相机') + ' · ' +
+            {'usb': 'USB', 'wifi': 'Wi-Fi'}.get(device.get('transport'), '未知')),
+            bot.buttons(button(bot, '相机页面', 'panel'))], 'green', shared=True), False
+    if mode == 'usb':
+        return card('等待 USB 连接', [paragraph('请将已开机的相机通过 USB 连接到本机。'),
+            bot.buttons(button(bot, '检查连接', 'connect'))], shared=True), False
+    from .connections import wireless_supported
+    if not wireless_supported():
+        raise ConfigError('无线自动连接仅支持 Mac 原生版；此环境请使用 USB')
+    if payload.get('connect_mode', mode) != mode:
+        return card('连接已停止', [paragraph('连接方式已更改，请重新连接。')], 'grey', shared=True), False
+    if 'connect_until' not in payload:
+        request = store.get_meta('source_connect_request', {})
+        if request.get('until', 0) <= time.time():
+            request = {'id': job['id'], 'until': time.time() + 150}
+            store.set_meta('source_connect_request', request)
+        payload.update(connect_until=request['until'], connect_mode=mode)
+    link = store.get_meta('source_link', {})
+    if time.time() >= payload['connect_until']:
+        return card('相机连接超时', [paragraph('请确认相机已开机、无线连接已开启。'),
+            bot.buttons(button(bot, '重新连接', 'connect'))], 'orange', shared=True), False
+    if link.get('phase') in ('unsupported', 'invalid_config'):
+        raise ConfigError(link.get('reason') or '当前配置不支持连接相机')
+    text = '暂未连接，正在重试。' if link.get('phase') == 'waiting_retry' else '请保持相机开机并开启无线连接。'
+    return card('正在连接相机', [paragraph(text)], shared=True), True
 
 
 def process_job(bot, job, payload):
@@ -141,22 +151,28 @@ def process_job(bot, job, payload):
     store = Store(bot.directory)
     try:
         kind = action['action']
-        if job['state'] == 'queued':
+        if job['state'] == 'queued' and kind != 'connect':
             store.set_meta('capture_card_watch', {'job': job['id'], 'until': time.time() + 30})
         if kind == 'connect':
-            from .connections import wireless_supported
-            if not wireless_supported():
-                raise ConfigError('无线自动连接仅支持 Mac 原生版')
-            if bot.settings.read()['config']['backup']['source_transport'] == 'usb':
-                raise ConfigError('当前配置为仅 USB；请先到「相机连接」改为自动或无线')
-            store.set_meta('source_connect_request', {'until': time.time() + 150})
-            response = card('正在连接无线相机', [paragraph('后台将核验蓝牙身份并连接相机热点，同步开关保持不变。'),
-                bot.buttons(button(bot, '查看连接结果', 'panel'))], shared=True)
-        elif kind == 'panel':
+            if job['state'] == 'queued':
+                with bot.db() as db:
+                    other = db.execute("""SELECT 1 FROM bot_jobs WHERE scope=? AND id!=?
+                        AND state='waiting' AND json_extract(payload,'$.capture.action')='connect' LIMIT 1""",
+                        (bot.scope, job['id'])).fetchone()
+                    if other:
+                        db.execute("UPDATE bot_jobs SET state='done' WHERE id=?", (job['id'],))
+                        return True
+            response, waiting = connection_result(bot, store, job, payload)
+            fingerprint = json.dumps(response, ensure_ascii=False, sort_keys=True)
+            if waiting and payload.get('connect_observation') == fingerprint:
+                with bot.db() as db:
+                    db.execute('UPDATE bot_jobs SET retry_at=? WHERE id=?', (time.time() + 3, job['id']))
+                return False
+            payload['connect_observation'] = fingerprint
+            with bot.db() as db:
+                db.execute('UPDATE bot_jobs SET payload=? WHERE id=?', (json.dumps(payload), job['id']))
+        elif kind in ('panel', 'settings', 'parameter'):
             response = panel(bot, store)
-        elif kind == 'parameter':
-            from .capture_forms import parameter_panel
-            response = parameter_panel(bot, store, action)
         elif kind == 'import_shoot':
             from .capture_sessions import selection
             from .selected_cards import render
@@ -195,11 +211,7 @@ def process_job(bot, job, payload):
                     db.execute('UPDATE bot_jobs SET retry_at=? WHERE id=?', (time.time() + (10 if watching else 1), job['id']))
                 return False
             payload['capture_observation'] = fingerprint
-            if command == 'catalog' and not waiting and not result.get('error'):
-                from .capture_forms import settings_panel
-                response = settings_panel(bot, store)
-            else:
-                response = panel(bot, store, result, waiting=waiting)
+            response = panel(bot, store, result, waiting=waiting)
             waiting = waiting or watching
     except ConfigError as exc:
         response = card('相机操作未执行', [paragraph(str(exc)),

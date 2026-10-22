@@ -24,9 +24,9 @@ class PreviewSettingsTests(unittest.TestCase):
     process = SettingsFormsTests.process
 
     def test_form_entry_is_available_without_starting_preview(self):
-        for page in ('source_settings','preview_settings'):
+        for page in ('camera_settings','preview_settings'):
             text = json.dumps(self.bot.panel(page), ensure_ascii=False)
-            self.assertIn('预览设置', text)
+            self.assertIn('观看入口', text)
         self.assertEqual({}, self.store.get_meta('live_preview', {}))
         form = self.bot.panel('preview_settings')
         fields = [e for e in form['elements'] if e['tag']=='form'][0]['elements']
@@ -86,7 +86,7 @@ class PreviewSettingsTests(unittest.TestCase):
         with patch('media_importer.preview_settings.discover',return_value=URL), \
                 patch('media_importer.preview_settings.inspect',return_value=GOOD):
             self.assertIn(URL,json.dumps(self.bot.panel('preview_detect')))
-            self.assertIn('入口检查通过',json.dumps(self.bot.panel('preview_check'),ensure_ascii=False))
+            self.assertIn('连接检查通过',json.dumps(self.bot.panel('preview_check'),ensure_ascii=False))
         self.assertEqual(before,self.path.read_bytes())
 
     def test_only_owner_can_submit_and_invalid_values_are_rejected(self):

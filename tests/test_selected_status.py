@@ -2,7 +2,7 @@
 import json
 import unittest
 
-from media_importer.bot_cards import progress_card, status_content
+from media_importer.bot_cards import detail_content, progress_card, status_content
 from media_importer.model import now
 from media_importer.notifications import freeze_completion, initialize
 from media_importer.storage import cache_evidence
@@ -56,7 +56,7 @@ class SelectedStatusTests(unittest.TestCase):
         card = progress_card(view, 300)
         text = json.dumps(card, ensure_ascii=False)
         self.assertEqual('选定素材导入进行中', card['header']['title']['content'])
-        self.assertIn('50.0%', text)
+        self.assertIn('50%', text)
         self.assertNotIn('自动进度更新已停止', text)
         self.assertNotIn('同步已停止', text)
         self.assertNotIn(other['id'], text)
@@ -90,7 +90,7 @@ class SelectedStatusTests(unittest.TestCase):
         self.assertFalse(view['policy']['delete_source'])
         self.assertFalse(view['policy']['delete_source_requested'])
         self.assertEqual(0, view['work']['pending_cleanup'])
-        text = json.dumps(status_content(view), ensure_ascii=False)
+        text = json.dumps(detail_content(view), ensure_ascii=False)
         self.assertIn('本次保留相机原片', text)
         self.assertNotIn('导入后自动删除', text)
 
@@ -163,7 +163,7 @@ class SelectedStatusTests(unittest.TestCase):
         self.assertEqual(0, view['queues']['import']['pending_files'])
         self.assertIsNone(view['disk']['next_file'])
         self.assertFalse(view['unplug']['ready'])
-        text = json.dumps(status_content(view), ensure_ascii=False)
+        text = json.dumps(detail_content(view), ensure_ascii=False)
         self.assertIn('已有归档待核验', text)
         self.assertIn('既有归档缺失或身份已变化', text)
         self.assertNotIn('选定素材归档完成', text)

@@ -128,9 +128,9 @@ class BotTests(unittest.TestCase):
             response = self.bot.panel(page)
             self.assertTrue(response['config']['update_multi'])
             buttons = [button for e in response['elements'] if e['tag'] == 'action' for button in e['actions']]
-            self.assertIn('刷新状态', [b['text']['content'] for b in buttons])
-            self.assertTrue(all(b['text']['content'] in ('刷新状态',) for b in buttons))
-            refresh = next(b for b in buttons if b['text']['content'] == '刷新状态')
+            self.assertIn('刷新', [b['text']['content'] for b in buttons])
+            self.assertTrue(all(b['text']['content'] in ('刷新', '查看详情') for b in buttons))
+            refresh = next(b for b in buttons if b['text']['content'] == '刷新')
             with self.bot.db() as db:
                 payload = json.loads(db.execute('SELECT payload FROM bot_actions WHERE token=?',
                                                (refresh['value']['token'],)).fetchone()[0])
@@ -148,7 +148,7 @@ class BotTests(unittest.TestCase):
 
     def test_refresh_replaces_the_clicked_message_and_retry_does_not_send_a_new_one(self):
         before = self.path.read_bytes()
-        value = next(b['value'] for b in self.bot.panel('devices')['elements'][-1]['actions'] if b['text']['content'] == '刷新状态')
+        value = next(b['value'] for b in self.bot.panel('devices')['elements'][-1]['actions'] if b['text']['content'] == '刷新')
         event = self.callback(value)
         event['event']['context'] = {'open_message_id': 'om_status_test'}
         reply = self.bot.receive_card(event)
@@ -168,7 +168,7 @@ class BotTests(unittest.TestCase):
         self.assertEqual(before, self.path.read_bytes())
 
     def test_refresh_requires_a_valid_original_message_and_owner(self):
-        value = next(b['value'] for b in self.bot.panel()['elements'][-1]['actions'] if b['text']['content'] == '刷新状态')
+        value = next(b['value'] for b in self.bot.panel()['elements'][-1]['actions'] if b['text']['content'] == '刷新')
         for message_id in (None, 'https://example.invalid', 'om_bad/other'):
             event = self.callback(value)
             event['event']['context'] = {'open_message_id': message_id}
@@ -251,4 +251,4 @@ class BotTests(unittest.TestCase):
         self.sender.assert_not_called()
         with self.store.db:
             events = self.store.db.execute("SELECT kind FROM notification_events").fetchall()
-        self.assertEqual(['started'], [r[0] for r in events])
+        self.assertEqual(['requested_progress'], [r[0] for r in events])

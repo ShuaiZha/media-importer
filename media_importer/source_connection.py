@@ -186,8 +186,7 @@ def decide(store, settings, session_id, accept):
             # One active camera only. Completed work awaiting retirement does not block a switch.
             if _other_camera_busy(store, configured['config'], device):
                 raise ConfigError('另一台相机仍有传输或清理事项，请先完成原任务后再切换设备')
-            # Save the switch first. A crash before committing approval remains gated.
-            settings.set_enabled(True)
+            # Device authorization never changes the user's synchronization choice.
             state['state'] = 'approved'
             state['approved_at'] = now()
             store.db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)',

@@ -208,7 +208,7 @@ class DrainReceiptTests(unittest.TestCase):
             return actual_snapshot(*args)
         with patch('media_importer.bot.snapshot', side_effect=adopt):
             self.assertTrue(self.bot.process_one())
-        self.assertIn('将在当前文件完成后停止', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn('当前文件完成后停止', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         with self.bot.db() as db:
             self.assertEqual('waiting', db.execute('SELECT state FROM bot_jobs').fetchone()[0])
             db.execute('UPDATE bot_jobs SET retry_at=0')

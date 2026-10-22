@@ -49,7 +49,7 @@ DEFAULTS = {
                "poll_seconds": 10, "retry_seconds": 30, "stability_seconds": 2},
     "limits": {"upload_mib_per_second": 0, "min_free_disk_gib": 10, "max_cache_gib": 50},
     "preview": {"public_url": ""},
-    "notifications": {"enabled": False, "connection_events": True, "progress_interval_seconds": 300, "keyword": ""},
+    "notifications": {"enabled": False, "connection_events": False, "progress_interval_seconds": 300, "keyword": ""},
 }
 
 

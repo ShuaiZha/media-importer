@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 from media_importer.adapters.gopro import GoProSource, make_asset
 from media_importer.bot import Bot
-from media_importer.bot_cards import status_content, settings_result, progress_card
+from media_importer.bot_cards import detail_content, status_content, settings_result, progress_card
 from media_importer.config import Config, ConfigError, preferences
 from media_importer.media import select_groups, selected_file_ids
 from media_importer.model import now
@@ -98,8 +98,8 @@ class MediaScopeTests(unittest.TestCase):
         self.assertTrue(view['unplug']['ready'])
         self.assertEqual(3, view['selection']['excluded_source_files'])
         self.assertEqual(0, view['queues']['import']['pending_files'])
-        text = json.dumps(status_content(view), ensure_ascii=False)
-        self.assertIn('可断开相机连接', text)
+        text = json.dumps(detail_content(view), ensure_ascii=False)
+        self.assertTrue(view['unplug']['ready'])
         self.assertIn('仅视频', text)
         self.assertIn('仅视频', text)
         self.assertIn('范围外', text)
@@ -170,7 +170,7 @@ class MediaScopeTests(unittest.TestCase):
         self.assertEqual(1, view['batch']['total_files'])
         self.assertEqual(1, view['selection']['cached_outside_scope_files'])
         self.assertEqual(1, view['queues']['upload']['pending_files'])
-        for card in (status_content(view), progress_card(view, 300)):
+        for card in (detail_content(view),):
             text = json.dumps(card, ensure_ascii=False)
             self.assertIn('GH010001.MP4', text)
             self.assertIn('其他类别的 1 个既有缓存', text)

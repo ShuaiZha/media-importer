@@ -197,6 +197,7 @@ def _proof(service, row, mode):
 def inspect(service, mode=None):
     identity = service.observe_source()
     connection = service.store.get_meta('source_connection', {})
+    identity = {**identity, 'transport': connection.get('device', {}).get('transport')}
     if connection.get('state') != 'approved':
         return {'identity': identity, 'scanned': False, 'reason': '等待确认当前相机，尚未扫描素材'}, None
     service.boundary()

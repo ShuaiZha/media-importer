@@ -29,35 +29,20 @@ def panel(bot, state):
     phase = state.get('state', 'stopped')
     title = {'queued': '正在准备预览', 'connecting': '正在连接相机', 'starting': '正在准备画面',
              'ready': '实时预览进行中', 'stopping': '正在结束预览', 'error': '实时预览异常'}.get(phase, '实时预览已结束')
-    elements = [paragraph(state.get('reason') or '仅在需要观看时启动预览。')]
+    elements = []
+    if phase == 'error': elements.append(paragraph(state.get('reason') or '请检查相机连接'))
     buttons = []
-    if phase == 'ready' and state.get('url') and not state.get('stop_requested'):
-        url = 'https://applink.feishu.cn/client/web_url/open?' + urlencode(
-            {'mode': 'window', 'url': state['url'], 'width': '1000', 'height': '700'})
-        buttons.append({'tag': 'button', 'text': plain('打开画面'), 'type': 'primary', 'url': url})
     if phase in ACTIVE or state.get('cleanup_pending'):
-        buttons.append(button(bot, '核验并结束' if state.get('cleanup_pending') else '结束预览', 'stop', state['id']))
-    else:
-        buttons.append(button(bot, '开启预览', 'open'))
-    buttons.append(bot.button('预览设置', {'panel': 'preview_settings'}))
-    elements.append(bot.buttons(*buttons))
-    elements.append(bot.buttons(bot.button('拍摄控制', {'capture': {'version': 1, 'action': 'panel'}})))
+        buttons.append(button(bot, '结束预览', 'stop', state['id']))
     from .camera_web import button as workspace_button
     store = Store(bot.directory)
     try:
         workspace = workspace_button(bot, store)
-        if workspace: elements.append(bot.buttons(workspace))
+        if workspace: buttons.insert(0, workspace)
     finally: store.close()
-    if phase in ACTIVE:
-        if phase == 'ready':
-            elements.append(paragraph((state.get('remote_reason') or '远程入口已配置 · 观看设备需连接 Tailscale') if state.get('remote_configured')
-                                      else '仅本机观看 · 外网观看需配置 Tailscale 播放入口'))
-        enabled = bool((bot.settings.read().get('config') or {}).get('backup', {}).get('enabled'))
-        elements.append(note('关闭播放窗口不会结束预览。\n' +
-            ('本地导入与原片清理等待；完整缓存继续归档。' if enabled else '同步已关闭；预览独立运行，不处理相机原片。')))
-    if state.get('observed_at'):
-        elements.append(note('更新于 ' + format_time(state['observed_at'])))
-    return card(title, elements, 'green' if phase == 'ready' else 'orange' if phase == 'error' else 'blue', shared=True)
+    if phase == 'error': buttons.append(bot.button('连接检查', {'panel': 'preview_check'}))
+    if buttons: elements.append(bot.buttons(*buttons))
+    return card(title, elements, 'orange' if phase == 'error' else 'blue', shared=True)
 
 
 def process_job(bot, job, payload):

@@ -10,7 +10,7 @@ from media_importer.bot import Bot
 from media_importer.config import Config
 from media_importer.model import ConfigError
 from media_importer.adapters.gopro import GoProSource
-from media_importer.bot_cards import status_content
+from media_importer.bot_cards import detail_content, status_content
 from test_bot_cards import view
 
 
@@ -90,7 +90,7 @@ class SimpleControlsTests(unittest.TestCase):
         self.assertEqual(['归档预览文件'], [button['text']['content'] for element in previews['elements'] if element['tag'] == 'action' for button in element['actions']])
         self.assertFalse(self.settings.read()['config']['backup']['archive_previews'])
         confirmation = self.bot.panel('confirm_previews')
-        self.assertIn('正在进行的这一轮保持原设置', json.dumps(confirmation, ensure_ascii=False))
+        self.assertIn('下轮生效', json.dumps(confirmation, ensure_ascii=False))
         enable = confirmation['elements'][-1]['actions'][-1]
         self.bot.receive_card(self.callback(enable['value'], event_id='previews-on'))
         with patch('media_importer.bot.time.monotonic', side_effect=[1, 6]):
@@ -129,7 +129,8 @@ class SimpleControlsTests(unittest.TestCase):
         self.bot.receive_message(self.message('private example value'))
         self.bot.process_one()
         response = json.dumps(self.sender.call_args.args[1],ensure_ascii=False)
-        self.assertIn('设置中可修改',response)
+        self.assertIn('底部',response)
+        self.assertNotIn('████',response)
         self.assertIn('设置',response)
         self.assertNotIn('private example value',response)
 
@@ -137,8 +138,8 @@ class SimpleControlsTests(unittest.TestCase):
         current=view()
         current['archive']={'locations':['smb://example.test/share/Camera']}
         current['issues']=[{'path':'clip.mp4','error':'稍后重试'}]
-        text=json.dumps(status_content(current),ensure_ascii=False)
-        for value in ('相机：在线','本地缓存：可用','SMB：在线','归档位置','smb://example.test/share/Camera','稍后重试','clip.mp4'):
+        text=json.dumps(detail_content(current),ensure_ascii=False)
+        for value in ('相机在线','缓存可用','存储在线','归档位置','smb://example.test/share/Camera','稍后重试','clip.mp4'):
             self.assertIn(value,text)
         self.assertNotIn('历史',text)
         self.assertNotIn('设备与存储',text)
@@ -150,5 +151,5 @@ class SimpleControlsTests(unittest.TestCase):
         current['unplug']={'ready':True,'can_disconnect':True}
         text=json.dumps(status_content(current),ensure_ascii=False)
         self.assertIn('同步待机',text)
-        self.assertIn('当前无待处理任务',text)
+        self.assertIn('没有待处理文件',text)
         self.assertNotIn('需保持可用',text)

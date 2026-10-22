@@ -27,7 +27,7 @@ class MessageContractTests(unittest.TestCase):
         state['stages']['import']['phase'] = 'downloading'
         title, _, content = status_content(state)
         self.assertNotIn('导入进行中', title)
-        self.assertIn('已完成 **2 / 2**', text(content))
+        self.assertIn('2 / 2', text(content))
         self.assertNotIn('可断开', text(content))
 
     def test_stale_disconnect_permission_cannot_be_presented_as_current(self):
@@ -45,14 +45,14 @@ class MessageContractTests(unittest.TestCase):
         state['stages']['upload']['phase'] = 'uploading'
         rendered = text(progress_card(state, 300))
         self.assertIn('99.9%', rendered)
-        self.assertNotIn('100.0%', rendered)
+        self.assertNotIn('100%', rendered)
 
     def test_disabled_notifications_do_not_claim_sync_has_stopped(self):
         state = view()
         state['stages']['upload']['phase'] = 'uploading'
         card = progress_card(state, 300, notifications_enabled=False)
         self.assertEqual('远端归档进行中', card['header']['title']['content'])
-        self.assertIn('自动进度更新已关闭', text(card))
+        self.assertNotIn('自动进度更新', text(card))
         self.assertNotIn('同步已停止', text(card))
 
     def test_stopping_has_priority_over_complete_but_only_ack_confirms_stop(self):
@@ -64,7 +64,7 @@ class MessageContractTests(unittest.TestCase):
         response = settings_result({'backup': {'enabled': False}}, True, True)
         self.assertNotIn('均已停止', response['detail'])
         response = settings_result({'backup': {'enabled': False}}, True, False)
-        self.assertIn('均已停止', response['detail'])
+        self.assertEqual('同步已停止', response['title'])
 
     def test_empty_batch_with_durable_work_is_not_reported_as_empty(self):
         state = view()
@@ -85,17 +85,17 @@ class MessageContractTests(unittest.TestCase):
         rendered = text(card)
         self.assertIn('**2 个文件**', rendered)
         self.assertNotIn('99', rendered)
-        self.assertEqual(1, rendered.count('预览文件：'))
-        self.assertIn('未归档 2 个；已删除 2 个', rendered)
-        self.assertIn('smb://storage.example.com/media/Camera', rendered)
+        self.assertNotIn('预览文件：', rendered)
+        self.assertIn('原片已删除 4 个', rendered)
+        self.assertNotIn('smb://', rendered)
         self.assertEqual(before, result)
 
     def test_archive_complete_with_cleanup_failure_keeps_archive_success(self):
         result = {'file_count': 2, 'byte_count': 1024, 'cleanup': {'cache_cleared': 1, 'cache_pending': 1}}
         card = event_card('completed', '', '', view(), result=result)
-        self.assertEqual('归档完成 · 清理待处理', card['header']['title']['content'])
+        self.assertEqual('归档完成', card['header']['title']['content'])
         self.assertEqual('orange', card['header']['template'])
-        self.assertIn('已清理 1 个；待清理 1 个', text(card))
+        self.assertIn('缓存待清理 1 个', text(card))
         self.assertIn('**2 个文件**', text(card))
 
     def test_import_completion_is_specific_and_does_not_claim_archive_completion(self):
@@ -103,23 +103,23 @@ class MessageContractTests(unittest.TestCase):
         state['batch'].update(imported_files=2, import_percent=100)
         state['unplug'].update(ready=True)
         card = event_card('imported', '', '', state)
-        self.assertEqual('本地导入完成', card['header']['title']['content'])
+        self.assertEqual('导入完成', card['header']['title']['content'])
         self.assertEqual('blue', card['header']['template'])
-        self.assertIn('待归档：2 个文件', text(card))
-        self.assertIn('可断开相机连接', text(card))
+        self.assertIn('待归档 2 个', text(card))
+        self.assertIn('相机读取已结束', text(card))
 
     def test_disconnection_does_not_assert_physical_unplug_or_active_upload(self):
         state = view()
         card = event_card('disconnected', '', '', state)
-        self.assertEqual('相机连接不可用', card['header']['title']['content'])
-        self.assertIn('可继续上传', text(card))
+        self.assertEqual('相机已断开', card['header']['title']['content'])
+        self.assertNotIn('上传中', text(card))
         self.assertNotIn('已拔出', text(card))
 
     def test_titles_are_formal_and_complete_without_emoji_or_colloquial_instructions(self):
         state = view()
         messages = [progress_card(state, 300)]
         messages += [event_card(kind, title, '说明', state) for kind, title in (
-            ('connected', '相机连接已建立'), ('disconnected', '相机连接不可用'),
+            ('connected', '相机已连接'), ('disconnected', '相机已断开'),
             ('completed', '归档完成'), ('imported', '本地导入完成'),
             ('failed', '存储认证失败'), ('recovered', '存储连接已恢复'),
             ('backlog', '归档等待恢复'), ('test', '通知连接正常'))]

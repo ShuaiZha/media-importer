@@ -21,7 +21,7 @@
   },
   "notifications": {
     "enabled": false,
-    "connection_events": true,
+    "connection_events": false,
     "progress_interval_seconds": 300,
     "keyword": ""
   },

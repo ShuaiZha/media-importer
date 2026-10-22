@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 from media_importer.adapters.gopro import GoProSource
 from media_importer.bot import Bot
-from media_importer.bot_cards import progress_card, status_content
+from media_importer.bot_cards import detail_content, progress_card, status_content
 from media_importer.config import Config, ConfigError, DEFAULTS
 from media_importer.notifications import NotificationWorker
 from media_importer.store import Store
@@ -77,7 +77,7 @@ class PreviewPolicyTests(unittest.TestCase):
                 self.assertIsNone(row['remote_path'])
         for card in (progress_card(view, 300), status_content(view)):
             text = json.dumps(card, ensure_ascii=False)
-            self.assertIn('预览文件：未归档 2 个', text)
+            self.assertIn('预览文件：未归档 2 个', json.dumps(detail_content(view), ensure_ascii=False))
             self.assertNotIn('3 / 3', text)
         rows = self.store.files()
         self.assertTrue(NotificationWorker._complete(rows))

@@ -42,10 +42,9 @@ class SettingsFormsTests(TestCase):
         self.bot.receive_message(self.message('设置'))
         self.process()
         result = json.dumps(self.sender.call_args.args[1], ensure_ascii=False)
-        for title in ('素材与清理', '传输与缓存', '消息通知', '归档存储', '相机连接', '本机目录'):
+        for title in ('素材与清理', '传输与缓存', '消息通知', '归档存储', '相机与预览'):
             self.assertIn(title, result)
-        self.assertNotIn('"tag": "button"', result)
-        self.assertIn('底部菜单', result)
+        self.assertIn('"tag": "button"', result)
         for page in ('transfer_settings', 'notification_settings', 'destination_settings', 'source_settings', 'advanced_settings', 'local_storage'):
             result += json.dumps(self.bot.panel(page), ensure_ascii=False)
         for secret in (test_bot.ENV['DESTINATION_PASSWORD'], test_bot.ENV['FEISHU_APP_SECRET']):
@@ -56,17 +55,14 @@ class SettingsFormsTests(TestCase):
         row = self.store.files()[0]
         path = self.store.cached_path(row); path.write_bytes(b'complete-test-cache')
         before = self.store.files()
-        fields = {'upload_mib_per_second': '0.5', 'max_cache_gib': '20', 'min_free_disk_gib': '5',
-                  'poll_seconds': '15', 'retry_seconds': '45', 'stability_seconds': '3'}
+        fields = {'upload_mib_per_second': '0.5', 'max_cache_gib': '20', 'min_free_disk_gib': '5'}
         self.assertEqual('info', self.submit('transfer_settings', fields)['toast']['type'])
         self.process()
         values = self.settings.read()['config']
         self.assertEqual({'upload_mib_per_second': .5, 'max_cache_gib': 20, 'min_free_disk_gib': 5}, values['limits'])
         self.assertFalse(values['backup']['enabled'])
         self.assertFalse(values['backup']['delete_source_after_import'])
-        self.assertEqual(45, values['backup']['retry_seconds'])
-        self.assertEqual(15, values['backup']['poll_seconds'])
-        self.assertEqual(3, values['backup']['stability_seconds'])
+        self.assertEqual(self.original.backup['retry_seconds'], values['backup']['retry_seconds'])
         self.assertEqual(before, self.store.files())
         self.assertEqual(b'complete-test-cache', path.read_bytes())
         self.assertIn('等待生效', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
@@ -76,7 +72,7 @@ class SettingsFormsTests(TestCase):
             key: values['backup'][key] for key in ('poll_seconds', 'retry_seconds', 'stability_seconds')}}, True, False)
         self.assertEqual('传输与缓存已生效', result['title'])
         self.assertIn('0.5 MiB/s', result['detail'])
-        self.assertIn('45 秒', result['detail'])
+        self.assertIn('秒', result['detail'])
 
     def test_all_settings_inputs_fit_feishu_card_limits(self):
         # Feishu rejects the entire card when any input exceeds its 1–1000 limit.
@@ -99,7 +95,7 @@ class SettingsFormsTests(TestCase):
                 self.assertEqual('form_submit', fields[-1]['action_type'])
         fields = next(e for e in self.bot.panel('transfer_settings')['elements'] if e['tag'] == 'form')['elements']
         from media_importer.bot_settings import LIMIT_FIELDS, INTERVAL_FIELDS
-        self.assertEqual(LIMIT_FIELDS | INTERVAL_FIELDS, {e['name'] for e in fields if e['tag'] == 'input'})
+        self.assertEqual(LIMIT_FIELDS, {e['name'] for e in fields if e['tag'] == 'input'})
 
     def test_invalid_or_unknown_fields_are_rejected_before_persistence(self):
         before = self.path.read_bytes()
@@ -114,14 +110,14 @@ class SettingsFormsTests(TestCase):
             self.assertFalse(db.execute('SELECT 1 FROM bot_jobs').fetchone())
 
     def test_notification_form_validates_interval_and_preserves_other_values(self):
-        fields = {'enabled': 'on', 'connection_events': 'off', 'progress_interval_seconds': '600', 'keyword': '导入助手'}
+        fields = {'enabled': 'on', 'progress_interval_seconds': '600'}
         before = copy.deepcopy(self.settings.read()['config'])
         self.assertEqual('info', self.submit('notification_settings', fields)['toast']['type'])
         self.process()
         after = self.settings.read()['config']
         self.assertEqual(before['backup'], after['backup'])
         self.assertEqual(before['limits'], after['limits'])
-        self.assertEqual({'enabled': True, 'connection_events': False, 'progress_interval_seconds': 600, 'keyword': '导入助手'}, after['notifications'])
+        self.assertEqual({'enabled': True, 'connection_events': False, 'progress_interval_seconds': 600, 'keyword': ''}, after['notifications'])
         for value in ('0', '59', '86401', '1.5'):
             self.assertEqual('error', self.submit('notification_settings', {**fields, 'progress_interval_seconds': value}, value)['toast']['type'])
         self.assertIn('通知设置', settings_result({'notifications': after['notifications']}, True, False)['title'])
@@ -129,8 +125,7 @@ class SettingsFormsTests(TestCase):
     def test_old_form_cannot_overwrite_new_settings_and_duplicate_delivery_applies_once(self):
         panel = self.bot.panel('transfer_settings')
         token = next(e for e in panel['elements'] if e['tag'] == 'form')['elements'][-1]['value']
-        fields = {'upload_mib_per_second': '1', 'max_cache_gib': '40', 'min_free_disk_gib': '5',
-                  'poll_seconds': '10', 'retry_seconds': '30', 'stability_seconds': '2'}
+        fields = {'upload_mib_per_second': '1', 'max_cache_gib': '40', 'min_free_disk_gib': '5'}
         self.settings.update_preferences({'limits': {'max_cache_gib': 60}})
         self.bot.receive_card(self.callback(token, fields=fields)); self.process()
         self.assertEqual(60, self.settings.read()['config']['limits']['max_cache_gib'])

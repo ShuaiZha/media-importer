@@ -11,14 +11,14 @@ from pathlib import Path
 
 from .adapters import feishu
 from .bot_cards import (card, markdown, note, paragraph, plain,
-                        settings_result, status_content, format_time)
+                        settings_result, status_content, detail_content, cleanup_text, format_time)
 from .config import ConfigError
 from .model import now
 from .status import snapshot, age
 from .store import Store
 
 
-STATUS_PANELS = {'status': status_content}
+STATUS_PANELS = {'status': status_content, 'details': detail_content}
 
 
 class Bot:
@@ -97,12 +97,19 @@ class Bot:
             return supported(payload['selected_import']) and not payload.get('changes')
         from .bot_settings import FORMS, PAGES, LIMIT_FIELDS, INTERVAL_FIELDS
         modern = payload.get('settings_version') in (1, 2)
+        if payload.get('settings_version') == 4:
+            if 'settings_form' in payload:
+                return payload['settings_form'] in ('notification_settings', 'notification_advanced')
+            changes = payload.get('changes', payload.get('changes_applied'))
+            return (isinstance(changes, dict) and set(changes) == {'notifications'} and
+                    isinstance(changes['notifications'], dict) and set(changes['notifications']) in
+                    ({'enabled', 'progress_interval_seconds'}, {'connection_events', 'keyword'}))
         if 'settings_form' in payload:
             return ((modern and payload['settings_form'] in FORMS) or
                     (payload.get('settings_version') == 3 and payload['settings_form'] == 'transfer_settings'))
         if 'archive_change' in payload or 'archive_draft' in payload:
             return modern and payload.get('mode') in ('connection', 'new')
-        if payload.get('panel', 'status') not in ('status', 'cleanup', 'confirm_delete', 'source_confirmation', 'source_offline', 'source_online',
+        if payload.get('panel', 'status') not in ('status', 'details', 'stop_options', 'event_details', 'cleanup', 'confirm_delete', 'source_confirmation', 'source_offline', 'source_online',
                                                   'notifications', 'previews', 'confirm_previews', 'scope', *PAGES):
             return False
         if 'source_decision' in payload:
@@ -154,23 +161,28 @@ class Bot:
             if isinstance(notice, str):
                 notice = {'title': '操作说明', 'detail': notice, 'level': 'info'}
             color = {'error': 'red', 'warning': 'orange', 'success': 'green', 'info': 'blue'}[notice['level']]
-            actions = [self.button('查看状态', {'panel': 'status'})]
-            from .bot_settings import PAGES
-            if page in PAGES:
-                actions.insert(0, self.button('继续设置', {'panel': page}))
-            return card(notice['title'], ([paragraph(notice['detail'])] if notice.get('detail') else []) + [note(format_time(now()))] +
-                        [self.buttons(*actions)], color, shared=True)
+            elements = [paragraph(notice['detail'])] if notice.get('detail') else []
+            if notice['title'] in ('同步已停止', '正在停止同步'):
+                view = snapshot(self.directory, self.settings)
+                pending = view.get('work', {}).get('pending_files', 0)
+                if pending: elements.append(paragraph(f'剩余 {pending} 个文件'))
+            if notice['level'] == 'error':
+                elements.append(self.buttons(self.button('重新打开', {'panel': page})))
+            return card(notice['title'], elements, color, shared=True)
         values, rev = item["config"], item["revision"]
         from .bot_settings import PAGES, panel as settings_panel
         if page in PAGES:
             return settings_panel(self, page, item)
         if page in ('source_confirmation', 'source_offline', 'source_online'):
             return self.source_panel(values, page)
+        if page == 'stop_options':
+            return card('停止同步', [self.buttons(
+                self.button('立即停止', {'changes': {'backup': {'enabled': False}}}),
+                self.button('当前文件完成后停止', {'changes': {'backup': {'stop_after_current': True}}, 'settings_version': 2}, rev))], shared=True)
         if page == 'confirm_delete':
             return card('启用自动删除原片', [
                 markdown('**原片将在本地导入与核验完成后删除，不等待远端归档。**'),
-                paragraph('远端归档完成前，本地缓存可能是唯一副本。此规则也适用于已有的合格缓存。'),
-                note('关联预览文件同时删除；范围外或身份无法确认的素材保留。停止同步将停止删除操作。'),
+                paragraph('远端归档完成前，本地缓存可能是唯一副本。'),
                 self.buttons(self.button('取消', {'panel': 'cleanup'}), self.button('确认启用',
                     {'changes': {'backup': {'delete_source_after_import': True}}, 'page': 'cleanup'}, rev, danger=True))
             ], 'orange', shared=True)
@@ -178,25 +190,17 @@ class Bot:
             enabled = values['notifications']['enabled']
             return card('自动通知', [
                 markdown('**自动通知：' + ('已开启' if enabled else '已关闭') + '**'),
-                paragraph('开启后发送进度、完成和异常。确认相机、查看状态和下面的设置不依赖这个开关。'),
                 self.buttons(self.button('关闭自动通知' if enabled else '开启自动通知',
                     {'changes': {'notifications': {'enabled': not enabled}}, 'page': 'notifications'}, rev))
             ], 'blue', shared=True)
         if page == 'confirm_previews':
-            return card('归档预览文件', [
-                paragraph('开启后，已确认关联的 LRV、THM 将随原片归档。'),
-                note('正在进行的这一轮保持原设置。之后新扫描到的素材才按新设置处理。'),
-                self.buttons(self.button('取消', {'panel': 'previews'}), self.button('确认归档预览',
-                    {'changes': {'backup': {'archive_previews': True}}, 'page': 'previews'}, rev, danger=True))
-            ], 'orange', shared=True)
+            page = 'previews'  # Old confirmation cards reopen the ordinary setting.
         if page == 'previews':
             enabled = values['backup']['archive_previews']
-            action = ({'changes': {'backup': {'archive_previews': False}}, 'page': 'previews'} if enabled
-                      else {'panel': 'confirm_previews'})
+            action = {'changes': {'backup': {'archive_previews': not enabled}}, 'page': 'previews'}
             return card('预览文件', [
                 markdown('**归档预览：' + ('已开启' if enabled else '已关闭') + '**'),
-                paragraph('已开启时，关联的 LRV、THM 随原片归档。' if enabled else '目前只归档原片，跳过能确认关联的预览文件。'),
-                note('正在进行的这一轮保持原设置。'),
+                note('关联 LRV、THM；修改在下轮生效。'),
                 self.buttons(self.button('改为不归档预览' if enabled else '归档预览文件', action, rev))
             ], 'blue', shared=True)
         if page == 'scope':
@@ -204,7 +208,6 @@ class Bot:
             current = values['backup']['media_scope']
             return card('素材范围', [
                 markdown('**当前范围：' + MEDIA_SCOPES[current] + '**'),
-                paragraph('之后的扫描只导入所选类别。已经开始传输的文件会继续完成。'),
                 self.buttons(*(self.button(label, {'changes': {'backup': {'media_scope': key}}, 'page': 'scope'}, rev)
                                for key, label in MEDIA_SCOPES.items()))
             ], 'blue', shared=True)
@@ -218,15 +221,14 @@ class Bot:
                 markdown('**自动删除：' + ('已启用' if enabled else '已停用') + '**'),
                 paragraph('当前设备未通过删除验收，保留原片；配置开关保持不变。' if enabled and not effective else
                           '整组素材完成本地导入与核验后，自动删除相机原片。' if enabled else '导入完成后保留相机原片。'),
-                note('删除不等待远端归档；停止同步也停止删除。' if enabled else '如需自动释放相机空间，可启用导入后删除。'),
                 self.buttons(self.button('停用自动删除' if enabled else '启用自动删除', action, rev))
             ], 'blue', shared=True)
         view = snapshot(self.directory, self.settings)
-        title, color, elements = status_content(view)
+        title, color, elements = STATUS_PANELS.get(page, status_content)(view)
         connection = view.get('source_connection', {})
         if connection.get('state') in ('pending', 'declined'):
             elements.append(self.buttons(self.button('确认相机', {'panel': 'source_confirmation'})))
-        elements.append(self.buttons(self.button('刷新状态', {'panel': 'status', 'refresh': True})))
+        elements += self.progress_actions(view, detail=page == 'details')
         return card(title, elements, color, shared=True)
 
     def source_panel(self, values, page='source_confirmation'):
@@ -234,29 +236,23 @@ class Bot:
         state = read(self.directory)
         device = state.get('device', {})
         if page == 'source_offline':
-            return card('相机连接不可用', [paragraph('相机暂时无法访问。完整缓存按当前同步设置继续归档；已确认相机恢复连接后自动继续。'),
-                                         note(format_time(now()))], 'grey')
+            return card('相机已断开', [], 'grey')
         if not fresh(state):
-            return card('等待相机连接', [paragraph('请连接并开启相机。新相机需要确认；已确认相机按当前同步设置继续。')], 'blue')
+            return card('相机未连接', [paragraph('请连接并开启相机。')], 'blue')
         if page == 'source_online':
-            transport = {'usb': 'USB', 'wifi': 'Wi-Fi'}.get(device.get('transport'), '未知')
-            return card('相机已连接', [paragraph(device['model_name'] + ' · ' + transport),
-                paragraph('已识别受信任相机，按设置继续导入。' if values['backup']['enabled'] else '同步已关闭，尚未开始传输。'),
-                note(format_time(now()))], 'green')
+            return card('相机已连接', [paragraph(device['model_name'] + ' · ' +
+                {'usb': 'USB', 'wifi': 'Wi-Fi'}.get(device.get('transport'), '未知'))], 'green')
         support = device['compatibility']
-        elements = [paragraph(device['model_name'] + '\n序列号：' + device['serial_number'] +
-                              '\n固件：' + (device.get('firmware_version') or '未知')),
-                    markdown('**兼容状态：' + support['validation'] + '**'), paragraph(support['reason'])]
-        deleting = values['backup']['delete_source_after_import'] and support['delete_verified']
-        elements.append(note('本次原片策略：' + ('完整导入后自动删除，不等待远端归档。' if deleting else '保留相机原片。')))
+        elements = [paragraph(device['model_name'] + '\n序列号：' + device['serial_number'])]
+        if not support.get('delete_verified'):
+            elements.append(paragraph(support['reason']))
         if support['import_supported'] and state.get('state') != 'approved':
-            buttons = [self.button('暂不备份', {'source_decision': False, 'session_id': state['id']}),
-                       self.button('确认并备份', {'source_decision': True, 'session_id': state['id']})]
+            buttons = [self.button('暂不确认', {'source_decision': False, 'session_id': state['id']}),
+                       self.button('确认相机', {'source_decision': True, 'session_id': state['id']})]
             buttons[-1]['type'] = 'primary'
             elements.append(self.buttons(*buttons))
-        elements.append(note('确认卡仅适用于当前连接。此后同一台相机重连或切换 USB／无线时，按同步开关自动继续。'))
         return card('相机已确认' if state.get('state') == 'approved' else
-                    '相机待确认' if support['import_supported'] else '相机尚未适配', elements, 'blue', shared=True)
+                    '确认相机' if support['import_supported'] else '相机尚未适配', elements, 'blue', shared=True)
 
     def announce_source(self):
         from .source_connection import read, fresh
@@ -272,8 +268,35 @@ class Bot:
             self.enqueue('source:offline:' + state['id'], {'panel': 'source_offline', 'session_id': state['id']})
         self._source_event = event
 
+    def progress_actions(self, view, *, detail=False):
+        actions = [self.button('返回摘要' if detail else '查看详情', {'panel': 'status' if detail else 'details'}),
+                   self.button('刷新', {'panel': 'details' if detail else 'status', 'refresh': True})]
+        if view.get('transfer_enabled', view.get('configuration', {}).get('sync_enabled')):
+            actions.append(self.button('停止同步', {'panel': 'stop_options'}))
+        return [self.buttons(*actions)]
+
+    def active_progress_message(self):
+        from .notifications import _digest
+        recipient = _digest([self.credentials['app_id'], self.credentials['receive_id_type'], self.credentials['receive_id']])
+        with self.db() as db:
+            values = [json.loads(r[0]) for r in db.execute("SELECT value FROM meta WHERE key LIKE 'notification_progress_card:%'")]
+        candidates = [p for p in values if p.get('recipient') == recipient and p.get('message_id') and not p.get('finished')]
+        return max(candidates, key=lambda p: p.get('updated_at', 0))['message_id'] if candidates else None
+
+    def result_actions(self, result, locations):
+        # Bounded snapshot in an expiring action token; no historical task table.
+        return [self.buttons(self.button('查看详情', {'panel': 'event_details',
+            'result_detail': {'result': result or {}, 'locations': (locations or [])[:8]}}))]
+
     def problem_actions(self, view, revision):
-        return [self.buttons(self.button('查看状态', {'panel': 'status'}))]
+        actions = []
+        codes = {(stage.get('issue') or {}).get('code') for stage in view.get('stages', {}).values()}
+        if codes & {'authentication', 'permission', 'destination_path', 'destination_identity', 'destination_full'}:
+            actions.append(self.button('归档存储', {'panel': 'destination_settings'}))
+        elif codes & {'cache_unavailable', 'cache_verification', 'cache_cleanup'}:
+            actions.append(self.button('本机目录', {'panel': 'local_storage'}))
+        actions.append(self.button('查看详情', {'panel': 'details'}))
+        return [self.buttons(*actions)]
 
     def enqueue(self, key, payload):
         with self.db() as db:
@@ -294,9 +317,8 @@ class Bot:
         except (ValueError, AttributeError):
             return False
         # Keep no arbitrary chat text, media, or credentials in the task database.
-        from .bot_routes import TEXT_ACTIONS as commands
-        action = dict(commands.get(command, {"panel": "status", "notice":
-            "请选择「同步」「相机」或「设置」。设置中可修改素材、传输、通知、相机及 SMB 连接与凭据；本机目录入口提供实际路径和迁移步骤。"}))
+        from .bot_routes import TEXT_ACTIONS as commands, HELP
+        action = dict(commands.get(command, {'notice': {'title': '未识别的指令', 'detail': HELP, 'level': 'info'}}))
         if "changes" in action or 'live_preview' in action:
             action["revision"] = self.settings.read()["revision"]
             try:
@@ -405,7 +427,19 @@ class Bot:
                     not re.fullmatch(r'om_[A-Za-z0-9_-]{1,128}', message_id)):
                 return {'toast': {'type': 'error', 'content': '原消息不可用，请从底部菜单重新打开'}}
             payload['message_id'] = message_id
-        self.enqueue("card:" + event_id, payload)
+        mutating = bool(payload.get('changes') or 'source_decision' in payload or
+                        payload.get('capture', {}).get('action') not in (None, 'panel', 'settings', 'parameter') or
+                        payload.get('camera', {}).get('action') in ('confirm', 'cancel') or
+                        payload.get('selected_import', {}).get('action') in ('confirm', 'cancel', 'drain', 'resume') or
+                        payload.get('live_preview', {}).get('action') in ('open', 'stop'))
+        # Form revisions/drafts have their own guarded submissions; do not persist secrets.
+        payload['action_token'] = token if mutating and not event.get('action', {}).get('form_value') else None
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if payload['action_token'] and db.execute("SELECT 1 FROM bot_jobs WHERE scope=? AND json_extract(payload,'$.action_token')=?", (self.scope, token)).fetchone():
+                return {'toast': {'type': 'info', 'content': '操作已提交，请查看原回执'}}
+            db.execute('INSERT OR IGNORE INTO bot_jobs (id,scope,payload,created) VALUES (?,?,?,?)',
+                       ('card:' + event_id, self.scope, json.dumps(payload, ensure_ascii=False), time.time()))
         return {"toast": {"type": "info", "content": "正在更新状态" if payload.get('refresh') else "操作已提交，正在处理"}}
 
     def process_one(self):
@@ -430,7 +464,8 @@ class Bot:
                             and not self.settings.read()['config']['backup']['enabled']):
                         from .camera_operations import cancel
                         cancel(db, owner=self.scope)
-                        payload = {'selected_import': {'version': 1, 'id': selected['id'],
+                        payload = {**{k: v for k, v in payload.items() if k in ('response_message_id', 'message_id', 'action_token')},
+                            'selected_import': {'version': 1, 'id': selected['id'],
                             'action': 'drain' if changes['backup'].get('stop_after_current') else 'cancel'}}
                         db.execute('UPDATE bot_jobs SET payload=? WHERE id=?',
                                    (json.dumps(payload), job['id']))
@@ -488,6 +523,7 @@ class Bot:
             if job["state"] == "queued":
                 page, notice = payload.get("panel", payload.get("page", "status")), payload.get("notice")
                 custom_response = None
+                applied = False
                 try:
                     changes = payload.get("changes")
                     if changes in ({'backup': {'enabled': False}}, {'backup': {'stop_after_current': True}}):
@@ -520,10 +556,8 @@ class Bot:
                             changed = decide(store, self.settings, payload['session_id'], payload['source_decision'])
                         finally:
                             store.close()
-                        notice = {'title': '相机已确认' if payload['source_decision'] else '本次连接暂不备份',
-                                  'detail': '同步已开启，等待服务核对当前设备后开始导入。' if payload['source_decision'] and changed else
-                                            '本次连接已确认；同步仍按当前开关设置运行。' if payload['source_decision'] else
-                                            '相机素材保留，可从「同步 → 运行状态」重新确认。', 'level': 'success' if payload['source_decision'] else 'info'}
+                        notice = {'title': '相机已确认' if payload['source_decision'] else '暂未确认相机',
+                                  'detail': ('同步已开启' if self.settings.read()['config']['backup']['enabled'] else '同步已关闭') if payload['source_decision'] else '', 'level': 'success' if payload['source_decision'] else 'info'}
                     # Enabling arms discovery even before the camera is reachable.
                     # Source IO still requires a fresh, approved identity; a new
                     # camera receives its own confirmation without blocking SMB.
@@ -545,7 +579,7 @@ class Bot:
                         notice = settings_result(changes, applied, stopping)
                         waiting = not applied or stopping or changes == {'backup': {'stop_after_current': True}}
                         payload.update(changes_applied=changes, applied_revision=item['revision'], wait_for_apply=waiting)
-                        if applied and changes.get('backup', {}).get('enabled') is True and item['config']['notifications']['enabled']:
+                        if changes.get('backup', {}).get('enabled') is True:
                             # The notification worker owns the single live progress card.
                             from .notifications import NotificationWorker, _database, _digest
                             from .config import Config
@@ -554,12 +588,26 @@ class Bot:
                                 from .destination_binding import identity
                                 scope = _digest([identity(outgoing, config), config.source['type'], config.source['serial']])
                                 NotificationWorker(self.directory, self.settings, threading.Event())._enqueue(
-                                    outgoing, 'started:control:' + self.scope + ':' + job['id'], 'started', scope, '传输进度', '', time.time())
+                                    outgoing, 'started:control:' + self.scope + ':' + job['id'], 'requested_progress', scope, '传输进度', '', time.time())
                             with self.db() as db:
                                 db.execute("UPDATE bot_jobs SET state='done',error=NULL WHERE id=?", (job['id'],))
                             return True
                 except (ConfigError, ValueError) as exc:
                     notice = {"title": "相机确认未完成" if 'source_decision' in payload else "本次修改未保存", "detail": str(exc), "level": "error"}
+                if changes and changes.get('backup', {}).get('enabled') is False and not payload.get('response_message_id'):
+                    message = self.active_progress_message()
+                    if message: payload['response_message_id'] = message
+                if payload.get('result_detail'):
+                    detail = payload['result_detail']
+                    result = detail.get('result', {})
+                    from .notifications import _size
+                    elements = [paragraph(f"{result.get('file_count', 0)} 个文件 · {_size(result.get('byte_count'))}")]
+                    elements += [paragraph(path) for path in detail.get('locations', [])]
+                    text = cleanup_text(result.get('cleanup', {}), result.get('ignored_preview_files', 0))
+                    if text: elements.append(paragraph(text))
+                    custom_response = card('归档详情', elements, shared=True)
+                elif changes and changes.get('backup', {}).get('enabled') is True and applied:
+                    custom_response = self.panel('status')
                 response = custom_response or self.panel(page, notice)
                 with self.db() as db:
                     db.execute("UPDATE bot_jobs SET state='applied',response=?,payload=? WHERE id=?", (json.dumps(response, ensure_ascii=False), json.dumps(payload, ensure_ascii=False), job["id"]))

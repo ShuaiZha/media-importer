@@ -14,7 +14,7 @@ from media_importer.settings import Settings
 from media_importer.status import snapshot
 from media_importer.storage import cache_evidence, file_identity, inspect_cached_file
 from media_importer.store import Store
-from media_importer.bot_cards import status_content
+from media_importer.bot_cards import detail_content, status_content
 from test_bot import ENV
 from test_service import configuration, footage, FakeSource, FakeDestination
 
@@ -105,7 +105,7 @@ class CacheStatusTests(unittest.TestCase):
         self.assertEqual(1, view['batch']['unverified_files'])
         self.assertEqual(footage().size, view['disk']['unverified_cache_bytes'])
         self.assertEqual(0, view['batch']['imported_files'])
-        self.assertIn('待核验', json.dumps(status_content(view), ensure_ascii=False))
+        self.assertIn('待核验', json.dumps(detail_content(view), ensure_ascii=False))
         result = self.service.verify_caches()
         self.assertEqual([], result['pending'])
         self.assertEqual([footage().path], result['verified'])
@@ -195,7 +195,7 @@ class CacheStatusTests(unittest.TestCase):
         self.assertTrue(state['unplug']['can_disconnect'])
         self.assertFalse(state['unplug']['ready'])
         self.assertIn('仍有 1 个', state['unplug']['message'])
-        self.assertIn('相机清单尚未复核', json.dumps(status_content(state), ensure_ascii=False))
+        self.assertIn('相机清单尚未复核', json.dumps(detail_content(state), ensure_ascii=False))
 
     def test_unplug_requires_all_known_files_and_current_inventory(self):
         self.cache()
@@ -219,7 +219,7 @@ class CacheStatusTests(unittest.TestCase):
         state = self.view()
         self.assertNotIn('recent_result', state)
         self.assertTrue(state['archive']['locations'][0].endswith(footage().device_directory))
-        text = json.dumps(status_content(state), ensure_ascii=False)
+        text = json.dumps(detail_content(state), ensure_ascii=False)
         self.assertTrue(any(f['remote_path'] == path for f in state['files']))
         self.assertNotIn(ENV['DESTINATION_PASSWORD'], text)
         self.assertEqual(0, state['batch']['completed_files'])
@@ -229,8 +229,8 @@ class CacheStatusTests(unittest.TestCase):
         self.assertEqual(0, state['batch']['completed_files'])
         self.assertNotIn('recent_result', state)
         self.assertFalse(state['archive']['locations'])
-        text = json.dumps(status_content(state), ensure_ascii=False)
-        self.assertIn('已完成 **0 / 1**', text)
+        text = json.dumps(detail_content(state), ensure_ascii=False)
+        self.assertIn('0 / 1', text)
         self.assertIn('smb://192.0.2.20:445/media/media/HERO9-', text)
 
     def test_unverified_leftover_never_reverses_archive_or_hides_pending_cleanup(self):

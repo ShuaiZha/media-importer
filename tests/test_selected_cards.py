@@ -77,7 +77,7 @@ class SelectionCardTests(unittest.TestCase):
         self.assertEqual(12, len(select['options']))
         self.assertFalse(select['required'])
         self.assertNotIn('clip-12.MP4', text(result))
-        self.assertIn('已保存选择 3 组', text(result))
+        self.assertIn('已选 3 组', text(result))
         next_page = next(b for b in buttons(result) if b['text']['content'] == '保存并到下一页')
         self.assertEqual('form_submit', next_page['action_type'])
         self.assertEqual({'version': 1, 'action': 'choose', 'id': op['id'], 'page': 0,
@@ -211,7 +211,7 @@ class SelectionCardTests(unittest.TestCase):
                 with self.subTest(state=state, action=b):
                     self.assertEqual({'selected_import'}, set(b['value']))
                     self.assertTrue(cards.supported(b['value']['selected_import']))
-            self.assertIn('保留全部相机原片', text(cards.render(self.bot, op)))
+            self.assertNotIn('确认清理原片', text(cards.render(self.bot, op)))
         self.assertTrue(cards.supported({'version': 1, 'action': 'drain', 'id': 'a' * 32}))
 
     def test_action_schema_rejects_forgery_or_unscoped_commands(self):
@@ -233,7 +233,8 @@ class SelectionCardTests(unittest.TestCase):
         self.assertIn('归档范围 2 个文件', text(result))
         self.assertIn('已有归档 1 个', text(result))
         self.assertIn('不归档关联预览文件 2 个', text(result))
-        self.assertIn('首个文件导入完成后即开始上传', text(result))
+        self.assertNotIn('首个文件', text(result))
+        self.assertIn('原片策略：保留', text(result))
         self.assertIn('clip-0.MP4', text(result))
         self.assertIn('clip-1.MP4', text(result))
         self.assertNotIn('.LRV', text(result))
@@ -248,8 +249,10 @@ class SelectionCardTests(unittest.TestCase):
         plan['groups'][0]['members'][0]['path'] = 'DCIM/**fake**<at id=all>.MP4'
         op['plan'] = json.dumps(plan)
         result = cards.render(self.bot, op, 0, details=True)
-        self.assertEqual('plain_text', result['elements'][0]['text']['tag'])
-        self.assertIn('**fake**<at id=all>', result['elements'][0]['text']['content'])
+        self.assertEqual('plain_text', next(e['text']['tag'] for e in result['elements'] if 'clip-' in text(e)))
+        path = next(e['text'] for e in result['elements'] if 'DCIM/**fake**' in text(e))
+        self.assertEqual('plain_text', path['tag'])
+        self.assertIn('**fake**<at id=all>', path['content'])
         self.assertNotIn('clip-12.MP4', text(result))
         self.assertNotIn('.LRV', text(result))
         last = cards.render(self.bot, op, 1, details=True)
@@ -263,11 +266,13 @@ class SelectionCardTests(unittest.TestCase):
             'stages': {'upload': {'current_file': 'DCIM/clip-1.MP4', 'speed_bytes_per_second': 512,
                                   'eta_seconds': 2}}})
         rendered = text(cards.render(self.bot, op))
-        self.assertIn('本地导入　100.0%', rendered)
-        self.assertIn('远端归档　99.9%', rendered)
-        self.assertIn('1 / 2 个', rendered)
-        self.assertIn('clip-1.MP4', rendered)
-        self.assertIn('本文件预计剩余', rendered)
+        self.assertIn('**导入**', rendered)
+        self.assertIn('**99.9%**', rendered)
+        self.assertIn('1 / 2', rendered)
+        self.assertNotIn('clip-1.MP4', rendered)
+        detail = text(cards.render(self.bot, op, details=True))
+        self.assertIn('clip-1.MP4', detail)
+        self.assertIn('预计剩余 2 秒', detail)
 
     def test_paused_and_failure_are_not_displayed_as_success(self):
         op = operation(state='paused', selected=[0])
@@ -288,7 +293,7 @@ class SelectionCardTests(unittest.TestCase):
         op['cancelled'] = 1
         rendered = text(cards.render(self.bot, op))
         self.assertNotIn('继续本次任务', rendered)
-        self.assertIn('重新选择素材', rendered)
+        self.assertIn('重新选择文件', rendered)
 
     def test_completed_archive_reports_cleanup_separately(self):
         op = operation(state='done', selected=[0])
@@ -296,8 +301,8 @@ class SelectionCardTests(unittest.TestCase):
                                   'uploaded_files': 1, 'cache_cleanup_pending': 1})
         result = cards.render(self.bot, op)
         self.assertEqual('选择导入已完成', result['header']['title']['content'])
-        self.assertIn('已归档，缓存待清理 1 个', text(result))
-        self.assertEqual(2, text(result).count('100.0%'))
+        self.assertIn('缓存待清理 1 个', text(result))
+        self.assertIn('**1 个文件**', text(result))
 
     def test_waiting_archive_verification_shows_quantity_and_first_plain_text_failure(self):
         op = operation(state='waiting', selected=[0, 1])
@@ -310,10 +315,12 @@ class SelectionCardTests(unittest.TestCase):
         self.assertIn('归档待核验：2 个文件', text(result))
         self.assertIn('暂不计为完成', text(result))
         self.assertNotIn('another.MP4', text(result))
-        detail = next(e for e in result['elements'] if '文件身份与记录不一致' in text(e))
+        self.assertNotIn('文件身份与记录不一致', text(result))
+        details = cards.render(self.bot, op, details=True)
+        detail = next(e for e in details['elements'] if '文件身份与记录不一致' in text(e))
         self.assertEqual('plain_text', detail['text']['tag'])
         self.assertEqual('orange', result['header']['template'])
-        self.assertNotIn('远端归档　100.0%', text(result))
+        self.assertNotIn('远端归档　100%', text(result))
 
     def test_sparse_queued_or_empty_scan_have_no_false_zero_progress(self):
         op = operation(state='queued')
@@ -381,7 +388,7 @@ class SelectionCallbackTests(unittest.TestCase):
         self.assertTrue(self.bot.process_one())
         finished = self.updater.call_args.args[2]
         self.assertIn('选择导入已完成', text(finished))
-        self.assertEqual(2, text(finished).count('100.0%'))
+        self.assertIn('**1 个文件**', text(finished))
 
     def test_real_callback_saves_pages_previews_and_deduplicates_delivery(self):
         before = self.path.read_bytes()
@@ -394,14 +401,14 @@ class SelectionCallbackTests(unittest.TestCase):
         self.assertTrue(self.bot.process_one())
         self.assertFalse(self.bot.process_one())
         second = self.updater.call_args.args[2]
-        self.assertIn('选择素材 · 2/2', text(second))
+        self.assertIn('选择文件 · 2/2', text(second))
         preview_button = next(b for b in buttons(second) if b['text']['content'] == '保存并预览')
         event = self.callback(preview_button['value'], event_id='review', fields={'groups': ['12']})
         event['event']['context'] = {'open_message_id': 'om_selected_test'}
         self.bot.receive_card(event)
         self.assertTrue(self.bot.process_one())
         result = self.updater.call_args.args[2]
-        self.assertEqual('选择导入预览', result['header']['title']['content'])
+        self.assertEqual('确认导入', result['header']['title']['content'])
         with self.bot.db() as db:
             row = dict(db.execute('SELECT * FROM selected_imports').fetchone())
         self.assertEqual([0, 1, 12], json.loads(row['plan'])['selected'])
@@ -491,7 +498,7 @@ class SelectionCallbackTests(unittest.TestCase):
         with self.bot.db() as db:
             row = dict(db.execute('SELECT * FROM selected_imports').fetchone())
             self.assertEqual(1, row['choice_revision'])
-        self.assertEqual('选择导入预览', self.updater.call_args.args[2]['header']['title']['content'])
+        self.assertEqual('确认导入', self.updater.call_args.args[2]['header']['title']['content'])
 
     def test_old_preview_confirmation_cannot_start_a_newer_selection(self):
         service, first = self.browse()

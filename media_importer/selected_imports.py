@@ -267,7 +267,9 @@ def _scan(service, op, settings):
     archived = {row['asset_id'] for row in service.store.db.execute(
         "SELECT asset_id FROM source_index WHERE destination=? AND state='uploaded'", (service.destination_id,))}
     archived.update(row['asset_id'] for row in service.rows() if row['state'] == 'uploaded')
-    plan = {'groups': [{**{k: v for k, v in group.items() if k != 'members'},
+    from .paths import archive_location
+    plan = {'destination_name': service.config.destination.get('name', 'SMB'),
+            'archive_location': archive_location(service.config.destination, ''), 'groups': [{**{k: v for k, v in group.items() if k != 'members'},
                         'members': [asset.to_dict() for asset in group['members']]}
                        for group in groups],
             'selection_mode': 'files', 'selected': [],

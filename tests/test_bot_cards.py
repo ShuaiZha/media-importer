@@ -3,7 +3,7 @@ import json
 import unittest
 
 from media_importer.bot_cards import (settings_result,
-                                      status_content, progress_bar, progress_card, event_card, format_time)
+                                      status_content, detail_content, progress_bar, progress_card, event_card, format_time)
 
 
 def view():
@@ -25,7 +25,7 @@ class CommandCardTests(unittest.TestCase):
         for value in ('2026-10-16T16:58:23+00:00', '2026-10-16T16:58:23Z',
                       '2026-10-17T00:58:23+08:00', '2026-10-16T09:58:23-07:00'):
             with self.subTest(value=value):
-                self.assertEqual('10-17 00:58:23 北京时间', format_time(value))
+                self.assertEqual('10-17 00:58', format_time(value))
 
     def test_message_time_does_not_guess_missing_or_invalid_timezone(self):
         for value in (None, '', 'invalid', 0, '2026-10-16T16:58:23',
@@ -34,24 +34,17 @@ class CommandCardTests(unittest.TestCase):
                 self.assertEqual('时间未知', format_time(value))
 
     def test_all_message_views_display_beijing_time_without_changing_snapshot(self):
-        state = view()
-        stamp = state['observed_at'] = '2026-10-16T16:58:23+00:00'
-        for name in ('source', 'destination'):
-            state['health'][name]['checked_at'] = stamp
-        state['preflight'] = {'state': 'ok', 'finished_at': stamp}
-        state['recent_result'] = {'complete': True, 'total_files': 2, 'archived_files': 2,
-                                 'pending_files': 0, 'failed_files': 0, 'source_deleted': 0,
-                                 'cache_cleanup_pending': 0, 'tasks': [], 'finished_at': stamp}
+        state = view(); stamp = state['observed_at'] = '2026-10-16T16:58:23+00:00'
         before = copy.deepcopy(state)
-        messages = [status_content(state),
-                    progress_card(state, 300)]
-        messages += [event_card(kind, kind, '示例', state) for kind in
-                     ('connected', 'disconnected', 'imported', 'completed', 'failed', 'backlog', 'recovered', 'test')]
-        for message in messages:
+        for message in (status_content(state), progress_card(state, 300)):
             text = json.dumps(message, ensure_ascii=False)
-            self.assertIn('10-17 00:58:23 北京时间', text)
-            self.assertNotIn('UTC', text)
-            self.assertNotIn(stamp, text)
+            self.assertIn('更新 10-17 00:58', text)
+            self.assertEqual(1, text.count('更新 '))
+            self.assertNotIn('北京时间', text)
+        for kind in ('connected','disconnected','imported','completed','failed','backlog','recovered','test'):
+            text = json.dumps(event_card(kind, kind, '示例', state), ensure_ascii=False)
+            self.assertNotIn('10-17 00:58', text)
+            self.assertNotIn('北京时间', text)
         self.assertEqual(before, state)
 
     def test_paused_card_keeps_completed_counts_but_hides_old_live_speed(self):
@@ -74,8 +67,8 @@ class CommandCardTests(unittest.TestCase):
         state['health']['destination'].update(online=None)
         state['disk']['free_bytes']=None
         text=json.dumps(status_content(state),ensure_ascii=False)
-        self.assertIn('相机：待确认',text)
-        self.assertIn('SMB：待确认',text)
+        self.assertIn('相机状态已过期',text)
+        self.assertIn('存储未知',text)
         self.assertNotIn('磁盘可用 0',text)
 
     def test_upload_bytes_are_not_mistaken_for_committed_archive(self):
@@ -85,12 +78,12 @@ class CommandCardTests(unittest.TestCase):
         text=json.dumps(elements,ensure_ascii=False)
         self.assertNotIn('已归档',title)
         self.assertIn('0 / 2',text)
-        self.assertIn('确认归档',text)
+        self.assertIn('归档确认中',text)
 
     def test_unscanned_card_does_not_show_zero_of_zero(self):
         state=view(); state['batch'].update(total_files=0,scanned=False)
         text=json.dumps(status_content(state),ensure_ascii=False)
-        self.assertIn('尚未完成素材扫描',text)
+        self.assertIn('尚未扫描',text)
         self.assertNotIn('0 / 0',text)
 
     def test_file_names_and_errors_never_become_markdown(self):
@@ -98,9 +91,9 @@ class CommandCardTests(unittest.TestCase):
         payload='<at id=all>click</at> [fake](https://example.invalid)'
         state['stages']['upload']={'phase':'uploading','current_file':payload,'current_bytes':128,'current_total_bytes':512,'speed_bytes_per_second':64,'eta_seconds':6}
         state['issues']=[{'path':'a.mp4','error':payload}]
-        _,_,elements=status_content(state)
+        _,_,elements=detail_content(state)
         text=json.dumps(elements,ensure_ascii=False)
-        self.assertIn('本文件预计剩余',text)
+        self.assertIn('预计剩余',text)
         for element in elements:
             if payload in json.dumps(element,ensure_ascii=False):
                 self.assertEqual('plain_text',element['text']['tag'])
@@ -120,9 +113,9 @@ class CommandCardTests(unittest.TestCase):
             text = json.dumps(content, ensure_ascii=False)
             self.assertIn('█████░░░░░', text)
             self.assertIn('██░░░░░░░░', text)
-            self.assertIn('**本地导入　50.0%**', text)
-            self.assertIn('**远端归档　25.0%**', text)
-            self.assertIn('**0 / 2**', text)
+            self.assertIn('**50%**', text)
+            self.assertIn('**25%**', text)
+            self.assertIn('0 / 2', text)
         self.assertTrue(progress_card(state, 300)['config']['update_multi'])
 
     def test_bar_clamps_values_and_does_not_fill_early(self):
@@ -135,7 +128,7 @@ class CommandCardTests(unittest.TestCase):
         state = view(); state['configuration']['sync_enabled'] = False
         stopped = progress_card(state, 300)
         self.assertEqual('grey', stopped['header']['template'])
-        self.assertIn('自动进度更新已停止', json.dumps(stopped, ensure_ascii=False))
+        self.assertIn('同步已停止', json.dumps(stopped, ensure_ascii=False))
         state['configuration']['sync_enabled'] = True
         state['batch'].update(percent=100, completed_files=2)
         self.assertEqual('green', progress_card(state, 300)['header']['template'])
@@ -158,34 +151,30 @@ class CommandCardTests(unittest.TestCase):
         title, color, elements = status_content(state)
         self.assertEqual('blue', color)
         self.assertIn('远端归档进行中', title)
-        self.assertIn('可断开相机连接', json.dumps(elements, ensure_ascii=False))
+        self.assertIn('相机读取已结束', json.dumps(elements, ensure_ascii=False))
 
     def test_camera_values_expire_and_unknown_flags_are_not_presented_as_normal(self):
-        state = view()
+        from media_importer.camera_cards import _source
         telemetry = {'available': True, 'battery_percent': 80, 'charging': True,
                      'overheating': False, 'cold': False, 'recording': False, 'busy': False,
                      'ready': True, 'storage_status': 'ready'}
-        state['health']['source']['telemetry'] = telemetry
-        text = json.dumps(status_content(state), ensure_ascii=False)
-        self.assertIn('80%', text)
+        self.assertIn('80%', json.dumps(_source({'telemetry': telemetry})))
         telemetry.update(overheating=None, cold=None, recording=None, busy=None, storage_status='unknown')
-        text = json.dumps(status_content(state), ensure_ascii=False)
-        self.assertNotIn('无温度告警', text)
-        self.assertNotIn('存储卡 正常', text)
+        text = json.dumps(_source({'telemetry': telemetry}), ensure_ascii=False)
         self.assertNotIn('就绪', text)
         telemetry['stale'] = True
-        text = json.dumps(status_content(state), ensure_ascii=False)
+        text = json.dumps(_source({'telemetry': telemetry}), ensure_ascii=False)
         self.assertNotIn('80%', text)
-        self.assertNotIn('正在充电', text)
+        self.assertIn('未知', text)
 
     def test_missing_cache_disk_is_actionable_in_overview_and_does_not_show_old_space(self):
         state = view()
         state['health']['cache']['available'] = False
-        state['disk'].update(reason='缓存盘未挂载', action='请接回原缓存盘')
-        state['attention'] = {'required': True, 'message': '需要处理：请接回原缓存盘'}
-        self.assertIn('请接回原缓存盘', json.dumps(status_content(state), ensure_ascii=False))
+        state['disk'].update(reason='缓存盘未挂载', action='请连接原缓存盘')
+        state['attention'] = {'required': True, 'message': '需要处理：请连接原缓存盘'}
+        self.assertIn('请连接原缓存盘', json.dumps(status_content(state), ensure_ascii=False))
         details = json.dumps(status_content(state), ensure_ascii=False)
-        self.assertIn('本地缓存：不可用', details)
+        self.assertIn('缓存不可用', details)
         self.assertNotIn('磁盘可用', details)
 
 

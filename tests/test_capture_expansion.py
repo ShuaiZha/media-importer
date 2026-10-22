@@ -241,17 +241,14 @@ class RequestAndCardTests(unittest.TestCase):
         self.store.set_meta('camera_catalog', {**value, 'observed_at': '2000-01-01T00:00:00+00:00'})
         with self.assertRaises(ConfigError): capture_forms.parameter_panel(self.bot, self.store, action)
 
-    def test_catalog_is_fetched_at_menu_and_returns_form_in_same_message(self):
+    def test_legacy_settings_entry_opens_page_without_camera_command(self):
         self.connected()
-        self.sender.return_value = 'om_camera_settings'
+        before = self.path.read_bytes()
         self.bot.receive_card(self.callback(self.bot.action({'capture': {'version': 1, 'action': 'settings'}})))
-        with patch('media_importer.connections.wireless_supported', return_value=True):
-            self.assertTrue(self.bot.process_one())
-            with patch('media_importer.adapters.source_link', return_value=catalog()): capture.process_one(self.service(), self.settings)
-            with self.bot.db() as db: db.execute('UPDATE bot_jobs SET retry_at=0')
-            self.assertTrue(self.bot.process_one())
-        self.sender.assert_called_once()
-        self.assertEqual('拍摄设置', self.updater.call_args.args[-1]['header']['title']['content'])
+        self.assertTrue(self.bot.process_one())
+        self.assertEqual('相机页面', self.sender.call_args.args[1]['header']['title']['content'])
+        self.assertFalse(self.store.db.execute('SELECT 1 FROM capture_requests').fetchone())
+        self.assertEqual(before, self.path.read_bytes())
 
     def test_new_telemetry_overrides_start_receipt_and_no_fake_live_status(self):
         connection = self.connected()

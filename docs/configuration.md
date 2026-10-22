@@ -91,7 +91,7 @@ Open ID 必须属于本人在**当前应用**中的身份，不是群 ID 或其�
 | `PREVIEW_RTC_PORT` | `18555` | WebRTC 视频端口（TCP/UDP），仅绑定本机或本机 Tailscale 私有地址；不可用时回退兼容播放 |
 | JSON `preview.public_url` | 空 | Tailscale HTTPS 基础地址，例如 `https://media-node.example.ts.net:8443`，由飞书保存 |
 
-两个端口在 `.env` 配置，修改后重启。观看地址在飞书「设置 → 相机连接 → 预览设置」配置；也可从实时预览卡片打开。留空仅本机观看，非空须先在本机配置 Serve；「读取本机入口」只填写表单，检查并保存后生效，无需重启。修改前先结束预览，检查不会开启画面或改动系统网络。步骤见[远程预览](native.md#远程预览tailscale)。
+两个端口在 `.env` 配置，修改后重启。观看地址在飞书「设置 → 相机与预览 → 预览设置」配置；留空仅本机观看，非空须先在本机配置 Serve；「读取本机入口」只填写表单，检查并保存后生效，无需重启。修改前先结束预览，检查不会开启画面或改动系统网络。步骤见[远程预览](native.md#远程预览tailscale)。
 
 ## 日常偏好
 
@@ -134,11 +134,11 @@ LRV 为低分辨率预览视频，THM 为缩略图。关闭预览归档只排除
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `notifications.enabled` | `false` | 自动进度、完成及异常提醒 |
-| `notifications.connection_events` | `true` | 连接与断开提醒 |
+| `notifications.connection_events` | `false` | 连接与断开提醒 |
 | `notifications.progress_interval_seconds` | `300` | 进度更新间隔，60–86400 整数秒 |
 | `notifications.keyword` | `""` | 消息前缀，最多 100 字符 |
 
-关闭自动通知不影响手动查询、控制回执与设备确认。所有消息时间使用北京时间。
+关闭自动通知不影响手动查询、控制回执与设备确认。快照时间按 UTC+8 换算，事件回执使用飞书自带时间。
 
 ## 修改后生效
 

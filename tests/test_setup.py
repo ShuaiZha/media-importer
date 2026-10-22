@@ -43,7 +43,7 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(settings['backup']['delete_source_after_import'])
         self.assertFalse(settings['backup']['stop_after_current'])
         self.assertFalse(settings['notifications']['enabled'])
-        self.assertTrue(settings['notifications']['connection_events'])
+        self.assertFalse(settings['notifications']['connection_events'])
         self.assertEqual(str((self.root / 'my cache').resolve()), values['MEDIA_IMPORTER_CACHE_HOST_DIR'])
         self.assertEqual(0o600, (self.root / '.env').stat().st_mode & 0o777)
 

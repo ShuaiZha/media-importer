@@ -38,6 +38,7 @@ class ConnectionManager:
     def __init__(self, store, settings, stop):
         self.store, self.settings, self.stop = store, settings, stop
         self.scan_at = self.retry_at = 0
+        self.request_seen = None
 
     def publish(self, phase, reason=None):
         old = self.store.get_meta('source_link', {})
@@ -58,6 +59,11 @@ class ConnectionManager:
             self.publish('invalid_config', item['error'])
             return
         source, backup = item['config']['source'], item['config']['backup']
+        request = self.store.get_meta('source_connect_request', {})
+        request_key = request.get('id', request.get('until'))
+        if request.get('until', 0) > time.time() and request_key != self.request_seen:
+            self.request_seen = request_key
+            self.retry_at = self.scan_at = 0
         mode = backup['source_transport']
         hint = item.get('source_hint', source)
         state = self.store.get_meta(KEY, {})
@@ -96,7 +102,7 @@ class ConnectionManager:
         requested = requested_until > time.time()
         needed = bool(backup['enabled'] or requested)
         if mode == 'usb' or not needed:
-            self.publish('waiting_source', '等待相机连接' if mode == 'usb' else '同步关闭；可从相机控制卡连接无线相机')
+            self.publish('waiting_source', '等待相机连接' if mode == 'usb' else '同步关闭；可从「相机 → 连接相机」建立连接')
             return
         if not wireless_supported():
             self.publish('unsupported', '无线自动连接仅支持 Mac 原生版；此环境可继续使用 USB')

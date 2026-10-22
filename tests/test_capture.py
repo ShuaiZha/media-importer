@@ -111,7 +111,7 @@ class CaptureTests(unittest.TestCase):
         before = self.path.read_bytes()
         self.bot.receive_message(self.message('相机控制'))
         self.assertTrue(self.bot.process_one())
-        self.assertIn('相机控制', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn('相机页面', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.assertEqual(before, self.path.read_bytes())
 
 

@@ -24,13 +24,13 @@ docker compose ps
 
 Windows 将 `python3` 替换为 `py -3`。向导生成 `.env`、JSON 和目录，拉取正式镜像并检查连接，不覆盖已有配置。相机地址与序列号可留空自动发现。
 
-示例固定为 v0.11.0。选择其他版本时，先在 [Releases](https://github.com/ShuaiZha/media-importer/releases) 确认对应镜像已发布；`main` 可能包含尚未发布的版本，此时按[源码构建说明](../CONTRIBUTING.md#构建与发布)操作。
+示例固定为 v0.11.0。选择其他版本时，先在 [Releases](https://github.com/ShuaiZha/media-importer/releases) 确认对应镜像已发布。`main` 的程序和 Compose 镜像版本为 v0.11.2 开发版，尚无正式镜像，须按[源码构建说明](../CONTRIBUTING.md#docker)操作；不要直接拉取未发布的标签。
 
 配置示例须与程序版本对应。version 5 JSON 用于 v0.11.0+，不能直接套用到旧镜像；升级首次启动会[迁移旧配置](configuration.md#从旧配置升级)，保留原配置值、任务和缓存。
 
 检查完成后，继续[配置飞书订阅、菜单并发布](feishu.md#3-订阅与菜单)。首次同步前核对身份，保留原片，用少量素材验证。
 
-从旧版升级到 [v0.11.0](releases/v0.11.0.md) 后，按飞书指南添加菜单事件订阅并发布「同步、相机、设置」菜单，无需更换凭据。
+按所安装版本配置[飞书菜单事件](feishu.md#3-订阅与菜单)，无需更换凭据。v0.11.2 的「连接相机」在 Docker 中只检查 USB；自动蓝牙与 Wi-Fi 连接需 Mac 原生版。查询和确认相机不再开启同步。
 
 ### 手动配置
 
@@ -59,7 +59,7 @@ docker compose exec backup python3 -m media_importer check --json
 | 停止 / 启动后台 | `docker compose stop` / `docker compose up -d --no-build` |
 | 移除容器和网络 | `docker compose down` |
 
-`stop`、`down` 保留宿主机配置、任务与缓存，但机器人会离线。日常暂停传输使用飞书「同步 → 停止同步」；需等待当前文件完成时发送文字命令 `当前文件完成后停止`。
+`stop`、`down` 保留宿主机配置、任务与缓存，但机器人会离线。日常暂停传输使用飞书「同步 → 停止同步」；v0.11.2 运行卡片的停止选项提供「当前文件完成后停止」，旧文字命令仍可用。
 
 ## 更新稳定版
 

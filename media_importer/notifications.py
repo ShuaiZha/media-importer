@@ -29,24 +29,27 @@ DELIVERY_ERRORS = {
     "notification_card_unavailable": "原进度卡已撤回或超过可更新期限，下次进度通知将使用新卡片。",
 }
 PROBLEMS = {
-    'transfer_stalled': ('传输中断 · 自动重试', '传输长时间没有进展，程序正在重建连接。完整缓存和已归档文件保留。'),
-    "network": ("存储连接暂时不可用", "上传等待连接恢复，完整缓存保留。请检查存储网络，程序将自动重试。"),
-    "source_network": ("相机连接暂时不可用", "检查相机是否开机、当前连接链路是否可用。程序会自动重试，完整缓存继续上传。"),
-    "source_connection_mode": ("相机连接方式需要调整", "无线自动连接目前仅支持 Mac 原生版。请在「设置 → 相机连接」调整连接方式；其他环境使用 USB。"),
-    "authentication": ("目的地认证失败", "检查目的地账号和密码，修改后测试连接；完整缓存保留。"),
-    "permission": ("目的地权限不足", "检查共享目录的访问、写入和改名权限；完整缓存保留。"),
-    "destination_path": ("目的地目录不可用", "检查共享名和目标目录，修改后测试连接。"),
-    "destination_identity": ("目的地身份待核对", "新连接未能确认原归档，请恢复原连接或检查共享目录；完整缓存保留。"),
-    "destination_full": ("目的地空间不足", "释放目的地空间或调整配额；完整缓存会保留，程序会自动重试。"),
-    "cache_capacity": ("缓存空间或额度不足", "等待上传释放空间，或调整缓存额度及磁盘预留；暂停新导入。"),
-    "cache_unavailable": ("缓存盘不可用", "连接原缓存盘并检查挂载和读写权限；两路传输会等待恢复。"),
-    "source_state": ("相机暂时无法读取", "等待录像结束、设备就绪或温度告警解除；完整缓存可继续上传。"),
-    "source_file": ("源文件导入失败", "检查源设备和存储卡；失败文件会自动重试，其他可处理文件继续。"),
-    "file": ("文件传输失败", "失败文件会自动重试，其他文件继续；具体原因见本机日志。"),
-    "source_cleanup": ("本地导入完成 · 原片清理待处理", "完整缓存可继续上传。请检查相机连接，具体原因见本机日志。"),
-    "cache_cleanup": ("归档完成 · 缓存清理待处理", "已归档素材不会重复上传。请检查缓存盘连接和写入权限。"),
-    "cache_verification": ("完整缓存需要核验", "请检查原缓存盘；停止同步后按维护文档在本机核验。缺失文件需从原片或备份恢复。"),
+    'transfer_stalled': ('传输等待重试', '正在重新建立连接'),
+    'network': ('归档等待连接', '连接恢复后自动继续'),
+    'source_network': ('导入等待连接', '相机连接恢复后自动继续'),
+    'source_connection_mode': ('相机连接方式不可用', '请在相机连接设置中调整连接方式'),
+    'authentication': ('归档暂停', 'SMB 身份验证失败\n请检查归档账号和密码'),
+    'permission': ('归档暂停', 'SMB 权限不足\n请检查共享目录权限'),
+    'destination_path': ('归档暂停', '共享目录不可用\n请检查共享名和归档目录'),
+    'destination_identity': ('归档暂停', '存储身份不一致\n请核对归档位置'),
+    'destination_full': ('归档暂停', '目的地空间不足\n请释放存储空间'),
+    'cache_capacity': ('导入等待空间', '归档释放缓存后自动继续'),
+    'cache_unavailable': ('传输暂停', '缓存盘不可用\n请连接原缓存盘'),
+    'source_state': ('导入等待相机', '相机就绪后自动继续'),
+    'source_file': ('文件导入等待重试', '其他文件继续处理'),
+    'file': ('文件归档等待重试', '其他文件继续处理'),
+    'source_cleanup': ('原片清理未完成', '请检查相机连接及副本核验结果'),
+    'cache_cleanup': ('归档完成 · 缓存待清理', '请检查缓存盘写入权限'),
+    'cache_verification': ('缓存核验未通过', '请连接原缓存盘并核验副本'),
 }
+# These conditions recover automatically; they remain visible on progress cards.
+# A six-hour lack of progress still produces the existing backlog alert.
+RETRY_ONLY = {'network', 'source_network', 'source_state', 'transfer_stalled', 'cache_capacity', 'source_file', 'file'}
 
 BACKLOG_DELAY = 6 * 3600
 CONNECTION_KINDS = ('connected', 'disconnected')
@@ -105,7 +108,7 @@ def freeze_completion(db, config, run, rows, *, create):
     active_source = (run['source_type'], run['serial']) == (config.source['type'], config.source['serial'])
     view = {'policy': {'delete_source': active_source and deletion_enabled(config, _meta(db, 'source_selection', {}))},
             'files': [{**r, 'cache_state': 'missing'} for r in rows]}
-    result = NotificationWorker._completion_result(rows, view)
+    result = {**NotificationWorker._completion_result(rows, view), 'destination_name': config.destination['name']}
     text = NotificationWorker._completion(rows, view)
     locations = sorted({archive_location(config.destination, str(PurePosixPath(r['remote_path']).parent))
                         for r in rows if r['remote_path']})
@@ -411,6 +414,9 @@ class NotificationWorker:
             return
         content = progress_card(view, options['progress_interval_seconds'], options.get('keyword', ''),
                                 _stamp(stamp), notifications_enabled=options['enabled'])
+        if credentials.get('receive_id_type') == 'open_id':
+            from .bot import Bot
+            content['elements'] += Bot(self.settings, self.directory).progress_actions(view)
         adapter = notification_adapter('feishu')
         try:
             if pointer.get('message_id'):
@@ -590,7 +596,9 @@ class NotificationWorker:
                                   '素材导入助手 · 传输进度', '', stamp)
                 state["initialized"] = True
                 if not enabled:
-                    db.execute("UPDATE notification_events SET state='cancelled' WHERE state='pending' AND kind NOT IN ('connected','disconnected') AND (detached=0 OR ?=0)", (int(options['enabled']),))
+                    if not values['backup']['enabled']:
+                        db.execute("UPDATE notification_events SET state='cancelled' WHERE kind='requested_progress' AND state='pending'")
+                    db.execute("UPDATE notification_events SET state='cancelled' WHERE state='pending' AND kind NOT IN ('connected','disconnected','requested_progress') AND (detached=0 OR ?=0)", (int(options['enabled']),))
                     _put_meta(db, "notification_state", state)
                     delivery = _meta(db, "notification_delivery", {})
                     # Retain an explicit test result while automatic notification is disabled.
@@ -608,6 +616,8 @@ class NotificationWorker:
                         or view.get("status", {}).get("phase") == "applying_config"):
                     _put_meta(db, "notification_state", state)
                     self._reconcile_delivery(db, options, stamp)
+                    db.commit()
+                    self._send_pending(db, scope, options, stamp, view, starts_only=True)
                     return
                 for batch_id, rows in batches.items():
                     if rows[0]['historical']:
@@ -638,7 +648,7 @@ class NotificationWorker:
                     self._enqueue(db, "progress:" + scope + ":" + str(stamp), "progress", scope,
                                   "素材导入助手 · 传输进度", text, stamp, batch_id=view["batch"].get("id"))
                     state.update(progress_at=stamp, progress_signature=signature)
-                observed = self._problems(view)
+                observed = {key: value for key, value in self._problems(view).items() if value['code'] not in RETRY_ONLY}
                 previous = state.get("problems", {})
                 current = {}
                 for key, problem in observed.items():
@@ -646,7 +656,7 @@ class NotificationWorker:
                     current[key] = previous.get(key) or {"since": started, 'files': [f['id'] for f in view.get('files', [])
                         if f.get('error') or f.get('source_cleanup_error') or f.get('cache_cleanup_error') or
                         f.get('cache_state') == 'unverified' or f.get('state') in ('cached', 'staged', 'publishing') and f.get('cache_state') == 'missing']}
-                    delay = 120 if problem["code"] in ("network", "source_network", "source_state") else 0
+                    delay = 0
                     if stamp - started >= delay:
                         title, action = PROBLEMS[problem["code"]]
                         self._enqueue(db, "failed:" + scope + ":" + key + ":" + str(started), "failed", scope,
@@ -706,12 +716,12 @@ class NotificationWorker:
             return
         try:
             content = event_card('completed', '归档完成', text, view, keyword=options.get('keyword', ''),
-                                 updated_at=_stamp(stamp), locations=locations, result=self._completion_result(rows, view))
+                                 updated_at=_stamp(stamp), locations=locations, result={**self._completion_result(rows, view), 'destination_name': config.destination['name']})
             content['config']['update_multi'] = True
             if self.settings.notification_credentials().get('receive_id_type') == 'open_id':
                 from .bot import Bot
                 bot = Bot(self.settings, self.directory)
-                content['elements'].append(bot.buttons(bot.button('查看状态', {'panel': 'status'})))
+                content['elements'] += bot.result_actions(self._completion_result(rows, view), locations)
             adapter = notification_adapter('feishu')
             (self.updater or adapter.update_card)(self.settings.notification_credentials(), sent['id'], content)
             sent.update(signature=signature, retry_at=0)
@@ -794,10 +804,10 @@ class NotificationWorker:
             previous['event_id'] = event_id
         state['backlog'] = previous
 
-    def _send_pending(self, db, scope, options, stamp, view):
+    def _send_pending(self, db, scope, options, stamp, view, *, starts_only=False):
         # Send at most one message per tick; failure backoff is independent for each event.
         candidates = db.execute("""SELECT * FROM notification_events WHERE state='pending' AND scope=?
-            AND next_attempt_at<=? ORDER BY CASE kind WHEN 'connected' THEN -2 WHEN 'disconnected' THEN -2 WHEN 'started' THEN -1 WHEN 'failed' THEN 0 WHEN 'imported' THEN 1 WHEN 'completed' THEN 2 ELSE 3 END, created_at""",
+            AND next_attempt_at<=? ORDER BY CASE kind WHEN 'connected' THEN -2 WHEN 'disconnected' THEN -2 WHEN 'started' THEN -1 WHEN 'requested_progress' THEN -1 WHEN 'failed' THEN 0 WHEN 'imported' THEN 1 WHEN 'completed' THEN 2 ELSE 3 END, created_at""",
                          (scope, stamp)).fetchall()
         if not candidates or self.stop.is_set():
             return
@@ -815,6 +825,8 @@ class NotificationWorker:
         current_batches = None
         current = []
         for row in candidates:
+            if starts_only and row['kind'] not in ('started', 'requested_progress'):
+                continue
             if row['kind'] in CONNECTION_KINDS:
                 if not connection_enabled or not view.get('running') or view.get('configuration', {}).get('pending'):
                     continue
@@ -827,7 +839,7 @@ class NotificationWorker:
                 if (observation.get('stale') or observation.get('transport') != peer['transport']
                         or observation.get('online') is not (row['kind'] == 'connected')):
                     continue
-            elif not transfer_enabled and not (row['detached'] and latest['notifications']['enabled']):
+            elif not transfer_enabled and not (row['detached'] and latest['notifications']['enabled']) and not (row['kind'] == 'requested_progress' and latest['backup']['enabled']):
                 continue
             payload = json.loads(row["payload"])
             if row["kind"] == "completed" and not row['detached']:
@@ -852,16 +864,16 @@ class NotificationWorker:
                     with db:
                         db.execute("UPDATE notification_events SET state='cancelled' WHERE id=?", (row['id'],))
                     continue
-            elif row["kind"] in ("progress", "started"):
+            elif row["kind"] in ("progress", "started", "requested_progress"):
                 payload["text"] = self._progress(view)[1]
             break
         else:
             return
         try:
             adapter = notification_adapter("feishu")
-            if row['kind'] in ('progress', 'started'):
+            if row['kind'] in ('progress', 'started', 'requested_progress'):
                 progress_view = view
-                if row['kind'] == 'started':
+                if row['kind'] in ('started', 'requested_progress'):
                     key = self._card_key(scope, view, self.settings.notification_credentials())
                     if _meta(db, key, {}).get('finished'):
                         # The previous batch is final; this start awaits a new scan.
@@ -873,13 +885,16 @@ class NotificationWorker:
                 from pathlib import PurePosixPath
                 locations = payload['locations'] if row['detached'] else sorted({archive_location(latest['destination'], str(PurePosixPath(r['remote_path']).parent))
                                     for r in current if r.get('remote_path')})
+                if payload.get('result'):
+                    payload['result'].setdefault('destination_name', self.settings.read()['config']['destination']['name'])
                 content = event_card(row['kind'], payload['title'], payload['text'], view,
                                      keyword=options.get('keyword', ''), updated_at=_stamp(stamp), locations=locations,
                                      result=payload.get('result'))
                 if row['kind'] in ('completed', 'imported') and self.settings.notification_credentials().get('receive_id_type') == 'open_id':
                     from .bot import Bot
                     bot = Bot(self.settings, self.directory)
-                    content['elements'].append(bot.buttons(bot.button('查看状态', {'panel': 'status'})))
+                    content['elements'] += (bot.result_actions(payload.get('result'), locations) if row['kind'] == 'completed' else
+                                            [bot.buttons(bot.button('查看详情', {'panel': 'details'}))])
                     content['config']['update_multi'] = True
                 if row['kind'] in ('failed', 'backlog') and self.settings.notification_credentials().get('receive_id_type') == 'open_id':
                     from .bot import Bot

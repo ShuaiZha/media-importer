@@ -376,9 +376,11 @@ class CameraCardTests(unittest.TestCase):
         self.assertTrue(self.poll())
         self.updater.assert_called_once()
         body = json.dumps(self.updater.call_args.args[2], ensure_ascii=False)
-        self.assertIn('2 个', body)
+        self.assertIn('设备详情', body)
+        self.assertNotIn('相机文件：', body)
         self.assertIn('未知', body)
-        self.assertIn('北京时间', body)
+        self.assertIn('更新 ', body)
+        self.assertNotIn('北京时间', body)
         self.assertFalse(self.source.deletes)
 
     def test_failed_card_update_retries_without_repeating_camera_operation(self):

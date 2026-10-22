@@ -89,7 +89,7 @@ class ReportingRunTests(unittest.TestCase):
         self.assertEqual(100, view['batch']['percent'])
         self.assertEqual(0, view['batch']['completed_files'])
         self.assertEqual(1, view['batch']['imported_files'])
-        self.assertIn('确认归档', json.dumps(progress_card(view, 300), ensure_ascii=False))
+        self.assertIn('归档确认中', json.dumps(progress_card(view, 300), ensure_ascii=False))
         self.assertNotIn('本轮已归档', progress_card(view, 300)['header']['title']['content'])
         previous = self.path.stat().st_mtime_ns
         self.path.write_bytes(b'z' * 32)
@@ -126,6 +126,6 @@ class ReportingRunTests(unittest.TestCase):
         view = self.view()
         self.assertEqual(1, view['batch']['imported_files'])
         self.assertFalse(view['unplug']['can_disconnect'])
-        self.assertIn('相机正在执行读写操作', json.dumps(status_content(view), ensure_ascii=False))
+        self.assertIn('相机操作进行中', json.dumps(status_content(view), ensure_ascii=False))
         self.store.status(source_work=False, source={'online': True, 'checked_at': now()})
         self.assertTrue(self.view()['unplug']['ready'])

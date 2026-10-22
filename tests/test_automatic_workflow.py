@@ -121,7 +121,7 @@ class AutomaticPresentationTests(unittest.TestCase):
         for rendered in (status_content(state), progress_card(state, 300)):
             text = json.dumps(rendered, ensure_ascii=False)
             self.assertIn('正在连接相机', text)
-            self.assertIn('正在连接 Wi-Fi', text)
+            self.assertIn('相机连接中', text)
             self.assertNotIn('0 / 0', text)
         self.assertEqual(before, state)
         worker = object.__new__(NotificationWorker)
@@ -139,7 +139,7 @@ class AutomaticPresentationTests(unittest.TestCase):
         state['stages']['upload'] = {'phase': 'uploading'}
         title, _, elements = status_content(state)
         self.assertEqual('远端归档进行中', title)
-        self.assertIn('正在连接 Wi-Fi', json.dumps(elements, ensure_ascii=False))
+        self.assertIn('相机连接中', json.dumps(elements, ensure_ascii=False))
 
     def test_connection_failure_stays_one_episode_across_retry_attempts(self):
         state = view(); state['queues'] = {}; state['stages'] = {}

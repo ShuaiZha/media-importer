@@ -4,7 +4,7 @@ import math
 import re
 import time
 
-from .bot_cards import card, markdown, note, paragraph, plain, progress_bar
+from .bot_cards import card, markdown, note, paragraph, plain, progress_bar, progress_elements
 from .media import category
 from .model import Asset, ConfigError
 from .notifications import _size, _duration
@@ -13,7 +13,7 @@ from .store import Store
 
 PAGE_SIZE = 12
 ACTIVE = {'queued', 'scanning', 'queued_transfer', 'running', 'waiting'}
-PRESERVATION = '本次保留全部相机原片，不改变全量同步与自动删除设置。'
+PRESERVATION = '原片策略：保留'
 
 
 def supported(action):
@@ -121,17 +121,15 @@ def _chooser(bot, op, plan, page):
     start = page * PAGE_SIZE
     file_selection = plan.get('selection_mode') == 'files'
     unit = '项' if file_selection else '组'
-    elements = [markdown(f'**已保存选择 {len(selected)} {unit}** · 共 {len(groups)} {unit}素材'),
-                note('选择需要上传的文件，可多选。'
-                     if file_selection else '此清单保留原有分组范围；按文件选择请重新打开「选择素材」。')]
+    elements = [markdown(f'**已选 {len(selected)} {unit}** · {_size(sum(i.get("size", 0) for i in _members(plan, True)))}')]
     if not groups:
-        return card('没有可选择的素材', [paragraph('本次扫描没有发现相机文件。'), note(PRESERVATION),
+        return card('没有可选择的素材', [paragraph('相机清单为空'),
                     bot.buttons(button(bot, '重新扫描', 'browse'))], shared=True)
     visible = list(enumerate(groups[start:start + PAGE_SIZE], start))
     # JSON 1.0 multi_select_static is form-only. selected_values are strings;
     # the callback sends form_value.groups as an array, never comma-separated text.
     # https://open.feishu.cn/document/feishu-cards/card-components/interactive-components/multi-select-dropdown-menu
-    field = {'tag': 'multi_select_static', 'name': 'groups', 'placeholder': plain('选择本页素材（可多选）'),
+    field = {'tag': 'multi_select_static', 'name': 'groups', 'placeholder': plain('选择文件（可多选）'),
              'width': 'fill', 'required': False,
              'selected_values': [str(index) for index, _ in visible if index in selected],
              'options': [{'text': plain(_group_label(index, group, plan.get('archive_previews', False),
@@ -151,9 +149,8 @@ def _chooser(bot, op, plan, page):
                        type='primary' if review else 'default')
         controls.append(control)
     elements += [{'tag': 'form', 'name': 'selected_import_form', 'elements': [field, *controls]},
-                 note('关联预览文件：' + ('随主文件归档。' if plan.get('archive_previews') else '不归档已确认关联的 LRV、THM。')),
-                 note(PRESERVATION), bot.buttons(button(bot, '取消选择', 'cancel', id=op['id']))]
-    return card(f'选择素材 · {page + 1}/{pages}', elements, shared=True)
+                 bot.buttons(button(bot, '取消选择', 'cancel', id=op['id']))]
+    return card(f'选择文件 · {page + 1}/{pages}', elements, shared=True)
 
 
 def _summary(result):
@@ -170,44 +167,9 @@ def _file_list(members):
                                for item in members) or '没有待归档文件')
 
 
-def _progress(result, state):
-    total = _count(result, 'total_files')
-    total_bytes = _count(result, 'total_bytes')
-    elements = []
-    for name, label, count_key, bytes_key in (
-            ('import', '本地导入', 'imported_files', 'import_bytes'),
-            ('upload', '远端归档', 'uploaded_files', 'upload_bytes')):
-        done = min(total, _count(result, count_key))
-        stage = result.get('stages', {}).get(name, {})
-        percent = 100 * _count(result, bytes_key) / total_bytes if total_bytes else 0
-        if total and done == total:
-            bar, percent = progress_bar(100)
-            phase = '已完成'
-        else:
-            bar, percent = progress_bar(min(percent, 99.9))
-            phase = {'paused': '已停止', 'done': '未完成', 'queued_transfer': '等待执行'}.get(state)
-            if phase is None:
-                phase = {'downloading': '导入中', 'uploading': '上传中', 'publishing': '确认归档',
-                         'scanning': '核对清单', 'verifying': '核验中', 'waiting_source': '等待相机',
-                         'waiting_destination': '等待存储', 'waiting_cache': '等待缓存盘',
-                         'waiting_space': '等待可用空间', 'waiting_retry': '等待重试',
-                         'draining': '正在停止'}.get(stage.get('phase'), '等待恢复' if state == 'waiting' else '')
-        elements.append(markdown(f'**{label}　{percent:.1f}%**' + (' · ' + phase if phase else '') +
-                                 f'\n{bar}　{done} / {total} 个'))
-        if state not in ('paused', 'done') and stage.get('current_file'):
-            elements.append(paragraph(str(stage['current_file']).rsplit('/', 1)[-1]))
-            speed = stage.get('speed_bytes_per_second')
-            if speed:
-                detail = _size(speed) + '/s'
-                if stage.get('eta_seconds') is not None:
-                    detail += ' · 本文件预计剩余 ' + _duration(stage['eta_seconds'])
-                elements.append(note(detail))
-        if state not in ('paused', 'done') and str(stage.get('phase', '')).startswith('waiting'):
-            reason = stage.get('issue', {}) or {}
-            reason = reason.get('action') or stage.get('message')
-            if reason:
-                elements.append(paragraph(reason))
-    return elements
+def _progress(result, state, *, details=False):
+    from .message_facts import selected_view
+    return progress_elements(selected_view(result, state), details=details)
 
 
 def render(bot, op, page=None, *, details=False):
@@ -217,7 +179,10 @@ def render(bot, op, page=None, *, details=False):
         members = _members(plan, selected_only=True)
         pages = max(1, math.ceil(len(members) / PAGE_SIZE))
         page = min(max(0, page or 0), pages - 1)
-        elements = [_file_list(members[page * PAGE_SIZE:(page + 1) * PAGE_SIZE])]
+        elements = _summary(result) + _progress(result, state, details=True) + [_file_list(members[page * PAGE_SIZE:(page + 1) * PAGE_SIZE])]
+        if plan.get('archive_location'): elements.append(paragraph(plan['archive_location']))
+        for error in result.get('archive_errors', [])[:4]:
+            elements.append(paragraph(str(error.get('file', '')) + '\n' + str(error.get('reason', ''))))
         buttons = []
         if page:
             buttons.append(button(bot, '上一页', 'details', id=identifier, page=page - 1))
@@ -230,8 +195,7 @@ def render(bot, op, page=None, *, details=False):
     if state in ('queued', 'scanning'):
         return card('正在停止素材扫描' if op['cancelled'] else '正在读取相机素材',
                     [paragraph('正在结束扫描。' if op['cancelled'] else
-                               '正在核对相机身份和读取文件清单，完成后在本卡片选择素材。'),
-                     note(PRESERVATION),
+                               '正在读取文件清单'),
                      bot.buttons(button(bot, '停止本次任务', 'cancel', id=identifier))], shared=True)
     if state == 'ready' and not op['cancelled']:
         elements = _summary(result)
@@ -239,7 +203,7 @@ def render(bot, op, page=None, *, details=False):
         elements += [markdown('**归档文件**'), _file_list(members[:PAGE_SIZE])]
         if len(members) > PAGE_SIZE:
             elements.append(note(f'已展示前 {PAGE_SIZE} 个文件，完整清单共 {len(members)} 个。'))
-        elements.append(note('导入与上传并行，首个文件导入完成后即开始上传。'))
+        if plan.get('archive_location'): elements.append(paragraph('目的地：' + plan['archive_location']))
         elements.append(note(PRESERVATION))
         confirm = button(bot, '确认导入并上传', 'confirm', id=identifier,
                          choice_revision=op['choice_revision'])
@@ -247,7 +211,7 @@ def render(bot, op, page=None, *, details=False):
         choices = ([button(bot, '查看完整清单', 'details', id=identifier, page=0)]
                    if len(members) > PAGE_SIZE else [])
         choices.append(button(bot, '修改选择', 'edit', id=identifier, page=0))
-        return card('选择导入预览', elements + [
+        return card('确认导入', elements + [
             bot.buttons(*choices),
             bot.buttons(confirm, button(bot, '取消', 'cancel', id=identifier))], shared=True)
     titles = {'queued_transfer': '选择导入已排队', 'running': '选择导入进行中',
@@ -255,7 +219,7 @@ def render(bot, op, page=None, *, details=False):
     title = titles.get(state, '选择导入')
     if state in ACTIVE and op['cancelled']:
         title = '正在停止选择导入'
-    elements = _summary(result) if 'total_files' in result else []
+    elements = []
     if 'total_files' in result:
         elements += _progress(result, state)
     error = result.get('error') or result.get('reason')
@@ -267,10 +231,6 @@ def render(bot, op, page=None, *, details=False):
     verification_pending = _count(result, 'archive_verification_pending')
     if verification_pending:
         elements.append(markdown(f'**归档待核验：{verification_pending} 个文件**'))
-        if result.get('archive_errors'):
-            first = result['archive_errors'][0]
-            elements.append(paragraph(str(first.get('file') or '未确认的归档文件') +
-                                      '\n' + str(first.get('reason') or '等待存储连接恢复后复查。')))
     complete = bool(result.get('total_files') and not verification_pending and
                     _count(result, 'uploaded_files') == _count(result, 'total_files'))
     if state == 'done' and not complete:
@@ -281,16 +241,20 @@ def render(bot, op, page=None, *, details=False):
     cleanup = result.get('cache_cleanup_pending') or result.get('cleanup_pending') or 0
     if cleanup:
         elements.append(paragraph(f'已归档，缓存待清理 {int(cleanup)} 个。'))
-    elements.append(note(PRESERVATION))
+    if complete and state == 'done':
+        elements = [markdown(f"**{_count(result, 'uploaded_files')} 个文件** · {_size(result.get('total_bytes'))}")] + ([paragraph(error)] if error else [])
+        elements.append(paragraph((f'缓存待清理 {int(cleanup)} 个' if cleanup else '缓存已清理') + ' · 原片保留'))
+        if plan.get('destination_name'): elements.append(paragraph('目的地：' + plan['destination_name']))
     buttons = []
     if state in ACTIVE:
         buttons.append(button(bot, '停止本次任务', 'cancel', id=identifier))
+        buttons.append(button(bot, '当前文件完成后停止', 'drain', id=identifier))
     if state == 'paused' and plan.get('confirmed'):
         buttons.append(button(bot, '继续本次任务', 'resume', id=identifier))
     if plan.get('selected'):
-        buttons.append(button(bot, '查看选中清单', 'details', id=identifier, page=0))
+        buttons.append(button(bot, '查看详情', 'details', id=identifier, page=0))
     if state == 'done' or state == 'paused' and not plan.get('confirmed'):
-        buttons.append(button(bot, '重新选择素材', 'browse'))
+        buttons.append(button(bot, '重新选择文件', 'browse'))
     if buttons:
         elements.append(bot.buttons(*buttons))
     color = 'orange' if error or cleanup or verification_pending or state in ('paused', 'waiting') else 'green' if state == 'done' and complete else 'blue'

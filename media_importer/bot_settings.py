@@ -4,8 +4,8 @@ import math
 from .bot_cards import card, markdown, note, paragraph, plain
 from .config import ConfigError, runtime_config
 
-FORMS = {'preview_settings', 'transfer_settings', 'notification_settings', 'destination_settings', 'source_settings', 'advanced_settings'}
-PAGES = FORMS | {'settings', 'media_settings', 'local_storage', 'preview_check', 'preview_detect'}
+FORMS = {'preview_settings', 'transfer_settings', 'notification_settings', 'notification_advanced', 'destination_settings', 'source_settings', 'advanced_settings'}
+PAGES = FORMS | {'settings', 'media_settings', 'local_storage', 'preview_check', 'preview_check_details', 'preview_detect', 'camera_settings'}
 LIMIT_FIELDS = {'upload_mib_per_second', 'max_cache_gib', 'min_free_disk_gib'}
 INTERVAL_FIELDS = {'poll_seconds', 'retry_seconds', 'stability_seconds'}
 
@@ -22,7 +22,7 @@ def select(name, label, value, options):
 
 
 def form(bot, name, fields, revision, **extra):
-    payload = {'settings_form': name, 'settings_version': 3 if name == 'transfer_settings' else 2, **extra}
+    payload = {'settings_form': name, 'settings_version': 4 if name in ('notification_settings', 'notification_advanced') else 2, **extra}
     button = bot.button('检查归档位置' if name == 'destination_settings' else '检查并保存' if name == 'preview_settings' else '保存设置', payload, revision)
     button.update(name='save_' + name, action_type='form_submit', type='primary')
     return {'tag': 'form', 'name': name, 'elements': fields + [button]}
@@ -30,15 +30,13 @@ def form(bot, name, fields, revision, **extra):
 
 def panel(bot, page, item):
     values, revision = item['config'], item['revision']
-    if page == 'advanced_settings':
-        page = 'transfer_settings'  # Existing cards open the consolidated form.
     if page == 'settings':
-        return card('菜单使用说明', [
-            markdown('**同步**：运行状态、开启同步、停止同步、选择素材、清理原片\n'
-                     '**相机**：相机概览、实时预览、拍摄控制\n'
-                     '**设置**：素材与清理、传输与缓存、消息通知、相机连接、归档存储'),
-            note('从底部菜单打开功能，卡片中填写参数并保存。扫描与重试间隔位于「传输与缓存」。\n'
-                 '其他入口可发送文字：本机目录、当前文件完成后停止。')], shared=True)
+        from .bot_routes import COMMANDS, MENUS
+        return card('设置', [bot.buttons(bot.button(COMMANDS[key][0], COMMANDS[key][1]))
+                            for key in MENUS[2][1]], shared=True)
+    if page == 'camera_settings':
+        return card('相机与预览', [bot.buttons(bot.button('相机连接', {'panel': 'source_settings'}),
+                                              bot.button('观看入口', {'panel': 'preview_settings'}))], shared=True)
     if page == 'media_settings':
         from .media import MEDIA_SCOPES
         backup = values['backup']
@@ -55,23 +53,29 @@ def panel(bot, page, item):
                 input_field('upload_mib_per_second', '上传限速（MiB/s，0 为不限速）', f"{limits['upload_mib_per_second']:g}"),
                 input_field('max_cache_gib', '缓存额度（GiB，0 为不限额）', f"{limits['max_cache_gib']:g}"),
                 input_field('min_free_disk_gib', '磁盘预留（GiB）', f"{limits['min_free_disk_gib']:g}"),
-                input_field('poll_seconds', '空闲扫描（秒，1–3600）', f"{backup['poll_seconds']:g}"),
-                input_field('retry_seconds', '失败重试（秒，1–3600）', f"{backup['retry_seconds']:g}"),
-                input_field('stability_seconds', '清单复查（秒，0–60）', f"{backup['stability_seconds']:g}"),
             ], revision),
-            note('当前文件完成后应用。降低缓存额度不删除已有缓存；较短间隔会增加设备与存储请求。')], shared=True)
-    if page == 'notification_settings':
+            bot.buttons(bot.button('高级间隔', {'panel': 'advanced_settings'}),
+                        bot.button('本机目录', {'panel': 'local_storage'}))], shared=True)
+    if page == 'advanced_settings':
+        backup = values['backup']
+        return card('运行间隔', [form(bot, page, [
+            input_field('poll_seconds', '空闲扫描（秒，1–3600）', f"{backup['poll_seconds']:g}"),
+            input_field('retry_seconds', '失败重试（秒，1–3600）', f"{backup['retry_seconds']:g}"),
+            input_field('stability_seconds', '清单复查（秒，0–60）', f"{backup['stability_seconds']:g}"),
+        ], revision)], shared=True)
+    if page in ('notification_settings', 'notification_advanced'):
         notes = values['notifications']
-        return card('消息通知', [
-            form(bot, page, [
-                select('enabled', '自动通知', 'on' if notes['enabled'] else 'off',
-                       [('on', '自动通知：开启'), ('off', '自动通知：关闭')]),
-                select('connection_events', '连接提醒', 'on' if notes['connection_events'] else 'off',
-                       [('on', '连接与断开提醒：开启'), ('off', '连接与断开提醒：关闭')]),
-                input_field('progress_interval_seconds', '进度更新间隔（秒，60–86400）', notes['progress_interval_seconds']),
-                input_field('keyword', '通知前缀（可留空）', notes['keyword'], required=False, maximum=100),
-            ], revision),
-            note('进度更新同一张卡片，完成与异常单独提醒。设备确认和控制回执不受通知开关影响。')], shared=True)
+        fields = ([select('enabled', '自动通知', 'on' if notes['enabled'] else 'off',
+                          [('on', '自动通知：开启'), ('off', '自动通知：关闭')]),
+                   input_field('progress_interval_seconds', '进度间隔（秒，60–86400）', notes['progress_interval_seconds'])]
+                  if page == 'notification_settings' else [
+                   select('connection_events', '连接提醒', 'on' if notes['connection_events'] else 'off',
+                          [('on', '连接与断开提醒：开启'), ('off', '连接与断开提醒：关闭')]),
+                   input_field('keyword', '通知前缀（可留空）', notes['keyword'], required=False, maximum=100)])
+        elements = [form(bot, page, fields, revision)]
+        if page == 'notification_settings':
+            elements.append(bot.buttons(bot.button('高级通知', {'panel': 'notification_advanced'})))
+        return card('消息通知' if page == 'notification_settings' else '高级通知', elements, shared=True)
     if page == 'destination_settings':
         from .archive_settings import connection_revision
         target = values['destination']
@@ -91,9 +95,8 @@ def panel(bot, page, item):
                 input_field('domain', '认证域（可留空）', target['domain'], required=False, maximum=255),
                 password,
             ], revision, connection_revision=connection_revision(values)),
-            note('先停止同步。检查会写入并清理一个小测试文件，成功后仍需确认保存。'),
-            note('密码通过飞书提交，仅保存到本机凭据文件，不回显、不写入任务和日志。'),
-            note('已有归档不移动。新位置须等待旧任务与缓存收尾。')], shared=True)
+            note('停止同步后修改；检查会创建并清理测试文件。'),
+            note('密码经飞书提交，保存到本机，不回显。')], shared=True)
     if page == 'source_settings':
         source = item.get('source_hint', values['source'])
         return card('相机连接', [
@@ -108,11 +111,8 @@ def panel(bot, page, item):
                 input_field('timeout_seconds', '相机请求超时（秒，1–300）', source['timeout_seconds']),
                 input_field('request_attempts', '请求尝试次数（1–5）', source['request_attempts']),
             ], revision),
-            note('先停止同步再修改。已确认相机可在 USB／无线间切换；其他相机仍需确认。'),
-            note('配置一次后，从「同步 → 开启同步」启动自动连接和备份；相机暂时离线也可以开启，重连后自动继续。'),
-            note('无线自动连接仅支持 Mac 原生版，需要相机开启无线连接及 Mac 有线上网；首次配对可能需在相机选择 Quik 配对入口。'),
-            bot.buttons(bot.button('预览设置', {'panel': 'preview_settings'}), bot.button('打开相机控制', {'capture': {'version': 1, 'action': 'panel'}}))], shared=True)
-    if page in ('preview_settings', 'preview_check', 'preview_detect'):
+            note('停止同步后修改。')], shared=True)
+    if page in ('preview_settings', 'preview_check', 'preview_check_details', 'preview_detect'):
         from .preview_access import configuration
         from .preview_settings import discover, inspect
         config = configuration(values)
@@ -124,22 +124,23 @@ def panel(bot, page, item):
                 elements.append(paragraph('已读取本机 Tailscale 入口，尚未保存。'))
             except ConfigError as exc:
                 elements.append(paragraph(str(exc)))
-        elif page == 'preview_check':
+        elif page in ('preview_check', 'preview_check_details'):
             report = inspect(public, config['port'])
-            elements.append(markdown('**' + ('入口检查通过' if report['ok'] else '入口检查未通过') + '**'))
-            elements.append(paragraph('\n'.join(('✓ ' if c['ok'] else '⚠ ') + c['label'] + '：' + c['detail'] for c in report['checks'])))
+            checks = report['checks'] if page == 'preview_check_details' else [c for c in report['checks'] if not c['ok']]
+            elements = [paragraph(c['label'] + '：' + c['detail']) for c in checks]
+            actions = [bot.button('修改入口', {'panel': 'preview_settings'})]
+            if page == 'preview_check': actions.append(bot.button('查看详情', {'panel': 'preview_check_details'}))
+            return card('连接检查通过' if report['ok'] else '连接检查未通过', elements + [bot.buttons(*actions)],
+                        'green' if report['ok'] else 'orange', shared=True)
         elements += [
-            paragraph('当前观看范围：' + ('Tailscale 远程访问' if config['public'] else '仅本机') +
-                      '\n本机入口：' + config['local']),
+            paragraph('观看范围：' + ('Tailscale' if config['public'] else '仅本机')),
             form(bot, 'preview_settings', [
                 input_field('public_url', 'Tailscale HTTPS 地址（留空仅本机）', public, required=False, maximum=512)
             ], revision),
             bot.buttons(bot.button('读取本机入口', {'panel': 'preview_detect'}),
                         bot.button('检查当前连接', {'panel': 'preview_check'})),
-            note('先结束预览再保存；检查不会开启预览或修改 Tailscale。设置保存在本机 JSON。'),
-            note('观看设备需登录同一 Tailnet 或已获授权。此处核验本机入口；外网播放还取决于观看端网络和访问权限。'),
-            note('低延迟视频使用本机 PREVIEW_RTC_PORT（默认 18555，TCP/UDP）；Tailscale 登录、Serve、端口和防火墙在本机管理。')]
-        return card('预览设置', elements, shared=True)
+            note('结束预览后修改。远程观看设备需连接 Tailscale。')]
+        return card('观看入口', elements, shared=True)
     if page == 'local_storage':
         import os
         from .deployment import cache_path
@@ -147,7 +148,7 @@ def panel(bot, page, item):
             paragraph('配置：' + os.environ.get('MEDIA_IMPORTER_CONFIG_HOST_DIR', str(bot.settings.path.parent)) +
                       '\n任务：' + os.environ.get('MEDIA_IMPORTER_DATA_HOST_DIR', str(bot.directory)) +
                       '\n缓存：' + os.environ.get('MEDIA_IMPORTER_CACHE_HOST_DIR', str(cache_path(bot.directory)))),
-            note('换盘需要迁移未归档素材和任务，并重新登记挂载；此处不直接切换路径。飞书首次连接凭据由本机安装向导管理。'),
+            note('目录迁移需在本机执行。'),
             bot.buttons({'tag': 'button', 'text': plain('查看迁移步骤'), 'type': 'default',
                          'url': 'https://github.com/ShuaiZha/media-importer/blob/main/docs/recovery.md'})], shared=True)
     raise ConfigError('设置页面不存在')
@@ -163,10 +164,13 @@ def parse(name, fields, version=2):
         'preview_settings': {'public_url'},
         'transfer_settings': LIMIT_FIELDS,
         'notification_settings': {'enabled', 'connection_events', 'progress_interval_seconds', 'keyword'},
+        'notification_advanced': {'connection_events', 'keyword'},
         'destination_settings': {'host', 'port', 'share', 'directory', 'mode'},
         'source_settings': {'url', 'serial', 'timeout_seconds', 'request_attempts'},
         'advanced_settings': INTERVAL_FIELDS,
     }[name].copy()
+    if name == 'notification_settings' and version == 4:
+        expected = {'enabled', 'progress_interval_seconds'}
     if name == 'transfer_settings' and version == 3:
         expected |= INTERVAL_FIELDS
     if name == 'destination_settings' and version == 2:
@@ -188,15 +192,16 @@ def parse(name, fields, version=2):
             if version == 3:
                 result.update(parse('advanced_settings', {k: fields[k] for k in INTERVAL_FIELDS}, 2))
             return result
-        if name == 'notification_settings':
-            if fields['enabled'] not in ('on', 'off') or fields['connection_events'] not in ('on', 'off'):
-                raise ValueError()
-            result = {'notifications': {**fields, 'enabled': fields['enabled'] == 'on',
-                                       'connection_events': fields['connection_events'] == 'on',
-                                       'progress_interval_seconds': int(fields['progress_interval_seconds'])}}
+        if name in ('notification_settings', 'notification_advanced'):
+            for key in ('enabled', 'connection_events'):
+                if key in fields:
+                    if fields[key] not in ('on', 'off'): raise ValueError()
+                    fields[key] = fields[key] == 'on'
+            if 'progress_interval_seconds' in fields:
+                fields['progress_interval_seconds'] = int(fields['progress_interval_seconds'])
             from .config import DEFAULTS
-            runtime_config({**DEFAULTS, **result})
-            return result
+            runtime_config({**DEFAULTS, 'notifications': {**DEFAULTS['notifications'], **fields}})
+            return {'notifications': fields}
         if name == 'source_settings':
             fields['timeout_seconds'] = float(fields['timeout_seconds'])
             fields['request_attempts'] = int(fields['request_attempts'])
@@ -220,7 +225,7 @@ def parse(name, fields, version=2):
 
 def confirm_archive(bot, item, fields, mode, base, change_id):
     return card('确认归档位置', [
-        markdown('**连接、写入与改名检查通过，尚未保存。**'),
+        markdown('**检查通过，尚未保存**'),
         paragraph('当前：' + location(item['config']['destination']) + '\n修改为：' + location(fields)),
         paragraph('保留任务和存储身份，仅更新连接。' if mode == 'connection' else
                   '后续素材归档到新位置；已有归档不移动。相机中保留的素材可能再次归档。'),

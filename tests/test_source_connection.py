@@ -138,7 +138,6 @@ class ConnectionTests(unittest.TestCase):
         environment = dict(os.environ)
         state = self.confirmed()
         saved = json.loads(self.path.read_text())
-        original['backup']['enabled'] = True
         self.assertEqual(original, saved)
         self.assertEqual(environment, dict(os.environ))
         self.assertIsNone(reason(self.store, self.config()))
@@ -299,6 +298,7 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual([], self.store.files())
 
     def test_verified_model_small_group_only_deletes_after_confirmation_and_cache(self):
+        self.settings.set_enabled(True)
         self.settings.update_preferences({'backup': {'delete_source_after_import': True}})
         state = observe(self.store, device())
         source = FakeSource([footage(), footage(primary=False)])
@@ -326,6 +326,7 @@ class ConnectionTests(unittest.TestCase):
         self.assertFalse(list(self.store.cache.glob('*.bin')))
 
     def test_complete_cache_uploads_while_current_camera_is_unconfirmed(self):
+        self.settings.set_enabled(True)
         self.confirmed()
         source, target = FakeSource([footage()]), FakeDestination()
         service = Service(self.config(), self.store, source, target, threading.Event())
@@ -341,6 +342,7 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual([], source.deletes)
 
     def test_unverified_model_imports_small_file_without_deleting_or_stuck_cleanup(self):
+        self.settings.set_enabled(True)
         self.settings.update_preferences({'backup': {'delete_source_after_import': True}})
         self.confirmed(device(model='HERO12 Black', firmware='1'))
         source, target = FakeSource([replace(footage(), device_name='HERO12')]), FakeDestination()
@@ -387,12 +389,12 @@ class ConnectionTests(unittest.TestCase):
         self.sender.assert_called_once()
         response = self.sender.call_args.args[1]
         actions = [b for e in response['elements'] if e['tag'] == 'action' for b in e['actions']]
-        accept = next(b['value'] for b in actions if b['text']['content'] == '确认并备份')
+        accept = next(b['value'] for b in actions if b['text']['content'] == '确认相机')
         self.assertEqual('error', self.bot.receive_card(self.callback(accept, owner='ou_other'))['toast']['type'])
         self.assertFalse(self.config().backup['enabled'])
         self.bot.receive_card(self.callback(accept))
         self.assertTrue(self.bot.process_one())
-        self.assertTrue(self.config().backup['enabled'])
+        self.assertFalse(self.config().backup['enabled'])
         self.assertEqual('approved', self.store.get_meta(KEY)['state'])
         self.assertEqual(state['id'], self.store.get_meta(KEY)['id'])
 

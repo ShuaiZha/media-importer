@@ -19,58 +19,36 @@ CREDENTIALS = {"app_id": "cli_test12345678", "app_secret": "only-test-secret",
 
 
 class WorkerTests(unittest.TestCase):
-    def test_auto_connect_failure_warns_once_and_recovers_on_the_same_notice(self):
+    def test_auto_connect_failure_is_quiet_before_and_after_recovery(self):
         self.view['stages'] = {'import': {'phase': 'idle'}, 'upload': {'phase': 'idle'}}
         self.view['queues'] = {}
         self.view['health']['source'] = {'online': False}
         self.view['source_link'] = {'phase': 'waiting_retry', 'failure': 'fixture offline'}
-        self.tick(); self.tick(119)
-        self.sender.assert_not_called()
-        self.view['source_link']['phase'] = 'connecting'
-        self.tick(1)
-        self.assertEqual(1, self.sender.call_count)
-        self.assertIn('相机连接暂时不可用', str(self.sender.call_args))
-        self.view['source_link']['phase'] = 'waiting_retry'
-        self.tick(180)
-        self.assertEqual(1, self.sender.call_count)
+        for seconds in (0, 119, 1, 180): self.tick(seconds)
         self.view['source_link'] = {'phase': 'connected'}
         self.view['health']['source'] = {'online': True}
         self.tick(1)
-        self.assertTrue(any('相机连接已恢复' in str(c) for c in self.updater.call_args_list))
-
-    def test_source_network_failure_is_delayed_and_recovers_as_a_connection_issue(self):
-        from media_importer.issues import describe
-        from media_importer.model import SourceConnectionError
-        issue = describe(SourceConnectionError('timeout'), 'import')
-        self.view['stages'] = {'import': {'phase': 'waiting_source', 'issue': issue},
-                               'upload': {'phase': 'idle'}}
-        self.view['health']['source'] = {'online': False, 'issue': issue}
-        self.tick()
-        self.tick(119)
         self.sender.assert_not_called()
-        self.tick(1)
-        self.assertEqual(1, self.sender.call_count)
-        message = json.dumps(self.sender.call_args.args[1], ensure_ascii=False)
-        self.assertIn('相机连接暂时不可用', message)
-        self.assertIn('完整缓存继续上传', message)
-        self.assertNotIn('文件传输失败', message)
-        self.tick(30)
-        self.assertEqual(1, self.sender.call_count)
+
+    def test_source_network_failure_and_recovery_only_update_status(self):
+        self.view['stages'] = {'import': {'phase': 'waiting_source', 'issue': {'code': 'source_network'}}, 'upload': {'phase': 'idle'}}
+        self.view['health']['source'] = {'online': False}
+        self.tick(); self.tick(300)
         self.view['health']['source'] = {'online': True}
         self.view['stages']['import'] = {'phase': 'idle'}
         self.tick(1)
-        self.assertTrue(any('已恢复' in str(call) for call in self.updater.call_args_list))
+        self.sender.assert_not_called()
 
     def test_missing_or_unverified_complete_cache_is_actionable(self):
         self.view['files'] = [{'id': self.rows[0]['id'], 'state': 'cached', 'cache_state': 'unverified'}]
         self.tick()
-        self.assertIn('完整缓存需要核验', str(self.sender.call_args))
+        self.assertIn('缓存核验未通过', str(self.sender.call_args))
         self.view['files'][0].update(cache_state='verified', cache_available=True)
         self.tick(1)
         self.assertTrue(any('缓存核验已通过' in str(call) for call in self.updater.call_args_list))
 
     def test_recovery_never_patches_a_different_recipients_message(self):
-        self.view['health']['destination'] = {'online': False, 'issue': {'code': 'network'}}
+        self.view['health']['destination'] = {'online': False, 'issue': {'code': 'authentication'}}
         self.tick()
         self.tick(121)
         self.assertEqual(1, self.sender.call_count)
@@ -88,7 +66,7 @@ class WorkerTests(unittest.TestCase):
         self.tick()
         self.tick(6 * 3600)
         self.assertEqual(1, self.sender.call_count)
-        self.assertIn('归档进度长时间未更新', str(self.sender.call_args))
+        self.assertIn('归档长时间无进展', str(self.sender.call_args))
         self.tick(3600)
         self.assertEqual(1, self.sender.call_count)
         self.worker = self.make_worker()
@@ -109,7 +87,7 @@ class WorkerTests(unittest.TestCase):
         self.view['stages']['upload']['current_bytes'] = 8
         self.tick(3 * 3600)
         self.tick(1)
-        self.assertTrue(any('归档进度长时间未更新' in str(call) for call in self.sender.call_args_list))
+        self.assertTrue(any('归档长时间无进展' in str(call) for call in self.sender.call_args_list))
         self.values['backup']['enabled'] = False
         self.sender.reset_mock()
         self.tick(24 * 3600)
@@ -126,7 +104,7 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(any('已恢复' in str(call) for call in self.updater.call_args_list))
         item['state'] = 'uploaded'
         self.tick(1)
-        self.assertTrue(any('相关文件已处理成功' in str(call) for call in self.updater.call_args_list))
+        self.assertFalse(any('相关文件已处理成功' in str(call) for call in self.updater.call_args_list))
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -215,7 +193,7 @@ class WorkerTests(unittest.TestCase):
         self.tick(2)
         self.assertEqual(1, self.sender.call_count)
         self.assertIn("归档完成", self.sender.call_args.args[1]["header"]["title"]["content"])
-        self.assertIn("未执行删除 2 个", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn("原片保留 2 个", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.worker = self.make_worker()
         self.tick(2)
         self.assertEqual(1, self.sender.call_count)
@@ -256,8 +234,8 @@ class WorkerTests(unittest.TestCase):
         self.tick(1)
         self.tick(1)
         self.assertIn("归档完成", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
-        self.assertIn("原片：待清理 2", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
-        self.assertIn("缓存：已清理 1 个；待清理 1", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn("原片待清理 2", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn("缓存待清理 1", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
 
     def test_progress_requires_interval_change_and_active_transfer(self):
         self.tick()
@@ -269,7 +247,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(1, self.sender.call_count)
         self.assertIn("1 / 2", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.assertIn("0 / 2", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
-        self.assertIn("25.0%", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn("25%", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.tick(301)
         self.assertEqual(1, self.sender.call_count)
         self.view["stages"]["upload"].update(current_bytes=20, phase="paused")
@@ -277,30 +255,20 @@ class WorkerTests(unittest.TestCase):
         self.tick(1)
         self.assertEqual(1, self.sender.call_count)
 
-    def test_network_alert_delayed_and_deduplicated_until_recovery(self):
-        self.tick()
-        self.view["health"]["destination"] = {"online": False, "issue": {"code": "network"}}
-        self.view["stages"]["upload"]["phase"] = "waiting_destination"
+    def test_temporary_network_wait_does_not_send_a_separate_alert(self):
+        self.view['stages'] = {'import': {'phase': 'idle'}, 'upload': {'phase': 'waiting_destination', 'issue': {'code': 'network'}}}
+        self.view['health']['destination'] = {'online': False, 'issue': {'code': 'network'}}
+        self.tick(); self.tick(600)
+        self.view['health']['destination'] = {'online': True}
+        self.view['stages']['upload'] = {'phase': 'idle'}
         self.tick(1)
-        self.tick(119)
         self.sender.assert_not_called()
-        self.tick(1)
-        self.assertEqual(1, self.sender.call_count)
-        self.worker = self.make_worker()
-        self.tick(120)
-        self.assertEqual(1, self.sender.call_count)
-        self.view["health"]["destination"]["online"] = True
-        self.tick(1)
-        self.view["health"]["destination"]["online"] = False
-        self.tick(1)
-        self.tick(120)
-        self.assertEqual(2, self.sender.call_count)
 
     def test_authentication_alert_is_immediate_and_does_not_expose_raw_error(self):
         self.tick()
         self.view["stages"]["upload"].update(phase="waiting_destination", issue={"code": "authentication", "scope": "destination", "message": CREDENTIALS["app_secret"]})
         self.tick(1)
-        self.assertIn("认证失败", self.sender.call_args.args[1]["header"]["title"]["content"])
+        self.assertIn('身份验证失败', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.assertNotIn(CREDENTIALS["app_secret"], str(self.sender.call_args.args[1:]))
 
     def test_paused_stage_and_configuration_switch_are_not_failure(self):
@@ -332,8 +300,7 @@ class WorkerTests(unittest.TestCase):
         self.sender.assert_not_called()
         self.view["files"].append({"id": self.rows[1]["id"], "state": "cached", "error": "other file still failed", "error_stage": "upload"})
         self.tick(1)
-        self.assertEqual(1, self.sender.call_count)
-        self.assertIn("文件传输失败", self.sender.call_args.args[1]["header"]["title"]["content"])
+        self.sender.assert_not_called()
 
     def test_delivery_failure_is_safe_backed_off_and_persistent(self):
         self.tick()
@@ -373,7 +340,7 @@ class WorkerTests(unittest.TestCase):
         self.view['stages'] = {'import': {'phase': 'waiting_source'}, 'upload': {'phase': 'idle'}}
         self.tick()
         self.assertEqual(1, self.sender.call_count)
-        self.assertIn('尚未完成素材扫描', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn('已登记任务', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.tick(5)
         self.assertEqual(1, self.sender.call_count)
         self.view['batch'] = {'id': self.batch, 'scanned': True, 'total_files': 2, 'completed_files': 0, 'imported_files': 0}
@@ -402,14 +369,16 @@ class WorkerTests(unittest.TestCase):
         self.tick(301)
         self.sender.assert_not_called()
 
-    def test_initial_card_waits_for_configuration_application_without_being_lost(self):
+    def test_initial_card_reports_pending_then_updates_when_settings_apply(self):
         self.store.set_meta('notification_state', {})
         self.view['configuration']['pending'] = True
         self.tick()
-        self.sender.assert_not_called()
+        self.sender.assert_called_once()
+        self.assertIn('设置等待生效', str(self.sender.call_args))
         self.view['configuration']['pending'] = False
         self.tick(5)
         self.sender.assert_called_once()
+        self.assertNotIn('设置等待生效', str(self.updater.call_args))
 
     def test_unknown_initial_send_keeps_deduplication_id_after_scan(self):
         self.store.set_meta('notification_state', {})
@@ -458,7 +427,7 @@ class WorkerTests(unittest.TestCase):
         self.view["policy"]["delete_source"] = True
         self.sender.side_effect = RuntimeError("offline")
         self.tick(1)
-        self.assertIn("原片：待清理", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn("原片待清理", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.store.update(self.rows[0]["id"], state="pending")
         self.sender.side_effect = None
         self.tick(31)
@@ -466,8 +435,8 @@ class WorkerTests(unittest.TestCase):
         self.archive(cleanup="deleted")
         self.tick(5)
         self.assertEqual(2, self.sender.call_count)
-        self.assertIn("原片：已删除 2 个", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
-        self.assertNotIn("原片：待清理", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertIn("原片已删除 2 个", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
+        self.assertNotIn("原片待清理", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
 
     def test_completion_waiting_for_rearchive_does_not_block_progress_delivery(self):
         self.tick()
@@ -513,7 +482,7 @@ class WorkerTests(unittest.TestCase):
         self.store.import_completed(self.batch)
         self.tick(5)
         self.assertEqual(1,self.sender.call_count)
-        self.assertEqual('本地导入完成',self.sender.call_args.args[1]["header"]["title"]["content"])
+        self.assertEqual('导入完成',self.sender.call_args.args[1]["header"]["title"]["content"])
         self.worker=self.make_worker();self.tick(5);self.assertEqual(1,self.sender.call_count)
         self.archive();self.tick(5);self.assertEqual(2,self.sender.call_count)
         self.assertIn('归档完成',self.sender.call_args.args[1]["header"]["title"]["content"])
@@ -533,7 +502,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(1, self.sender.call_count)
         self.assertEqual(1, self.updater.call_count)
         self.assertEqual('om_testprogress', self.updater.call_args.args[1])
-        self.assertIn('75.0%', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
+        self.assertIn('75%', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
 
     def test_patch_network_failure_retries_patch_without_a_new_message(self):
         self.start_progress()
@@ -580,7 +549,7 @@ class WorkerTests(unittest.TestCase):
         self.view['stages']['upload'].update(phase='waiting_destination', issue={'code':'authentication','scope':'destination'})
         self.tick(1)
         self.assertEqual(2, self.sender.call_count)
-        self.assertIn('认证失败', self.sender.call_args.args[1]['header']['title']['content'])
+        self.assertIn('身份验证失败', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.assertEqual('om_testprogress', self.updater.call_args.args[1])
 
     def test_explicitly_obsolete_card_replaced_once_but_permission_error_does_not_replace(self):
@@ -600,7 +569,7 @@ class WorkerTests(unittest.TestCase):
         self.values['notifications']['enabled'] = False
         self.tick(1)
         self.assertEqual(1, self.sender.call_count)
-        self.assertIn('自动进度更新已关闭', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
+        self.assertNotIn('自动进度更新', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
         self.tick(5)
         self.assertEqual(1, self.updater.call_count)
 
@@ -619,8 +588,11 @@ class WorkerTests(unittest.TestCase):
         self.archive()
         self.tick(1)
         content = json.dumps(self.sender.call_args.args[1], ensure_ascii=False)
-        self.assertIn('归档位置', content)
-        self.assertIn('Camera-serial', content)
+        self.assertIn('目的地：SMB 存储', content)
+        self.assertNotIn('smb://', content)
+        from media_importer.notifications import _meta
+        events = self.store.db.execute("SELECT payload FROM notification_events WHERE kind='completed'").fetchall()
+        self.assertTrue(events)
 
     def test_completion_button_opens_supported_read_only_status(self):
         from media_importer.bot import Bot
@@ -631,10 +603,11 @@ class WorkerTests(unittest.TestCase):
         self.tick(1)
         content = self.sender.call_args.args[1]
         button = content['elements'][-1]['actions'][0]
-        self.assertEqual('查看状态', button['text']['content'])
+        self.assertEqual('查看详情', button['text']['content'])
         payload = json.loads(self.store.db.execute('SELECT payload FROM bot_actions WHERE token=?',
                                                   (button['value']['token'],)).fetchone()[0])
-        self.assertEqual({'panel': 'status'}, payload)
+        self.assertEqual('event_details', payload['panel'])
+        self.assertEqual(2, payload['result_detail']['result']['file_count'])
         self.assertTrue(Bot.supported(payload))
 
     def test_finished_progress_card_does_not_follow_later_camera_changes(self):
@@ -670,7 +643,7 @@ class WorkerTests(unittest.TestCase):
         self.tick(5)
         self.assertEqual(1, self.sender.call_count)
         self.assertEqual('om_testprogress', self.updater.call_args.args[1])
-        self.assertIn('缓存：已清理 2 个', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
+        self.assertIn('缓存已清理', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
         self.tick(5)
         self.assertEqual(1, self.updater.call_count)
 
@@ -686,7 +659,7 @@ class WorkerTests(unittest.TestCase):
         self.view['status']['source_work'] = False
         self.view['unplug']['can_disconnect'] = True
         self.tick(1)
-        self.assertEqual('本地导入完成', self.sender.call_args.args[1]['header']['title']['content'])
+        self.assertEqual('导入完成', self.sender.call_args.args[1]['header']['title']['content'])
 
     def test_import_ready_retry_is_cancelled_when_a_new_round_supersedes_it(self):
         self.tick()
