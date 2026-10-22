@@ -15,7 +15,7 @@ Docker 仅支持 USB，不负责宿主机蓝牙与 Wi-Fi 切换；无线连接�
 ## 首次部署
 
 ```sh
-git clone --branch v0.11.0 https://github.com/ShuaiZha/media-importer.git
+git clone --branch v0.11.2 https://github.com/ShuaiZha/media-importer.git
 cd media-importer
 python3 scripts/setup.py
 docker compose up -d --no-build
@@ -24,7 +24,7 @@ docker compose ps
 
 Windows 将 `python3` 替换为 `py -3`。向导生成 `.env`、JSON 和目录，拉取正式镜像并检查连接，不覆盖已有配置。相机地址与序列号可留空自动发现。
 
-示例固定为 v0.11.0。选择其他版本时，先在 [Releases](https://github.com/ShuaiZha/media-importer/releases) 确认对应镜像已发布。`main` 的程序和 Compose 镜像版本为 v0.11.2 开发版，尚无正式镜像，须按[源码构建说明](../CONTRIBUTING.md#docker)操作；不要直接拉取未发布的标签。
+示例固定为 v0.11.2，对应镜像 `ghcr.io/shuaizha/media-importer:0.11.2`，支持 Linux AMD64 / ARM64。选择其他版本时，先在 [Releases](https://github.com/ShuaiZha/media-importer/releases) 确认对应镜像已发布；未发布源码须按[构建说明](../CONTRIBUTING.md#docker)操作。
 
 配置示例须与程序版本对应。version 5 JSON 用于 v0.11.0+，不能直接套用到旧镜像；升级首次启动会[迁移旧配置](configuration.md#从旧配置升级)，保留原配置值、任务和缓存。
 
@@ -69,7 +69,7 @@ docker compose exec backup python3 -m media_importer check --json
 python3 scripts/manage.py update
 ```
 
-指定版本可加 `--version 0.11.0`。更新器核对 Release、标签和镜像摘要，下载镜像后停止服务，保存一致快照、快进源码，再恢复原来运行的服务。配置、开关、未完成任务与完整缓存保留。
+指定版本可加 `--version 0.11.2`。更新器核对 Release、标签和镜像摘要，下载镜像后停止服务，保存一致快照、快进源码，再恢复原来运行的服务。配置、开关、未完成任务与完整缓存保留。
 
 - 本地源码修改、分叉或自定义 Compose 覆盖可能阻止更新，先按错误提示处理。
 - `backups/update-*/` 不含完整视频；迁移应使用[完整备份](recovery.md)。

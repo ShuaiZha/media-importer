@@ -56,7 +56,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 飞书「设置」提供素材、传输、通知与归档配置。v0.10.25 起也可修改 SMB 账号密码、相机连接和运行间隔；连接修改前须停止同步，SMB 检查通过后确认保存。首次飞书凭据由安装向导填写，目录迁移仍在本机进行。见[参数设置](feishu.md#参数设置)与[配置来源](configuration.md#文件与目录)；升级程序后还需在飞书后台[更新并发布菜单](feishu.md#3-订阅与菜单)。
 
-按所安装版本配置[飞书菜单事件](feishu.md#3-订阅与菜单)，无需更换凭据。当前 `main` 为 v0.11.2 开发版，新增菜单需先从源码构建并更新本机，再发布菜单；正式安装命令仍获取 v0.11.0。USB 平台仍可使用相机状态、选择文件和清理原片。
+按所安装版本配置[飞书菜单事件](feishu.md#3-订阅与菜单)，无需更换凭据。升级到 v0.11.2 后，新增「相机 → 连接相机」菜单并发布。USB 平台仍可使用相机状态、选择文件和清理原片。
 
 ## 无线连接与相机控制
 
@@ -76,7 +76,7 @@ Mac 包同时内置 go2rtc 预览组件，随安装、更新和卸载统一管�
 media-importer update
 ```
 
-指定版本使用 `media-importer update --version 0.11.0`；离线更新使用 `media-importer update --bundle /path/to/package/media-importer`。
+指定版本使用 `media-importer update --version 0.11.2`；离线更新使用 `media-importer update --bundle /path/to/package/media-importer`。
 
 更新按“下载与核验 → 停止后台 → 配置与 SQLite 一致快照 → 切换程序 → 恢复运行状态”执行。配置、开关、未完成任务和完整缓存保留。已是目标版本则不替换、不重启；拉取源码也不会更新已安装程序。
 
@@ -117,7 +117,7 @@ Windows 请使用安装生成的 `.cmd` 入口。彻底卸载等待文件占用�
 
 ## 远程预览：Tailscale
 
-本节仅适用于已集成预览的 v0.11.0 Mac 原生版。运行程序的 Mac 和观看设备均需连接 Tailscale，且访问策略允许该端口；Mac 仍需有独立的有线上网链路。
+本节适用于 v0.11.0 及以上的 Mac 原生版。运行程序的 Mac 和观看设备均需连接 Tailscale，且访问策略允许该端口；Mac 仍需有独立的有线上网链路。
 
 1. 在本机执行 `tailscale status` 确认登录，找到这台 Mac 的 MagicDNS 名称。
 2. 本机播放端口默认 `18765`，低延迟视频端口默认 `18555` TCP/UDP；仅需修改端口时，在 `.env` 设置 `PREVIEW_LOCAL_PORT` / `PREVIEW_RTC_PORT` 并重启后台。

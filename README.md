@@ -18,7 +18,7 @@
 
 Mac 原生拍摄控制支持录像、拍照、延时摄影、常用参数、定长录像和 HiLight；从卡片「打开相机页面」统一取景、控制拍摄及浏览缩略图、回放单个视频。拍摄后可确认导入本次新增素材，详见[使用说明](docs/feishu.md#拍摄控制)。
 
-`main` 当前为 **[v0.11.2 开发版](docs/releases/v0.11.2.md)**：飞书按「同步、相机、设置」整理入口，进度与操作结果更新原卡，新增只连接、不启动同步的「相机 → 连接相机」。下方安装命令仍获取正式版 v0.11.0；新菜单须配合新版程序使用。
+**[v0.11.2](docs/releases/v0.11.2.md)** 将飞书入口整理为「同步、相机、设置」，进度与操作结果更新原卡；新增「相机 → 连接相机」，可单独连接而不启动同步。升级程序后请按[飞书指南](docs/feishu.md#3-订阅与菜单)更新菜单。
 
 ![并行传输：文件 A 完整导入本地后开始上传，同时继续导入文件 B、C](docs/assets/parallel-transfer.svg)
 
@@ -55,7 +55,7 @@ curl -fsSL https://github.com/ShuaiZha/media-importer/releases/latest/download/i
 适合已有 Docker 环境的用户。需要 Git、Python 3.9+ 和运行中的 Docker Compose。
 
 ```sh
-git clone --branch v0.11.0 https://github.com/ShuaiZha/media-importer.git
+git clone --branch v0.11.2 https://github.com/ShuaiZha/media-importer.git
 cd media-importer
 python3 scripts/setup.py
 docker compose up -d --no-build
