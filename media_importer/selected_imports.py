@@ -263,21 +263,68 @@ def _scan(service, op, settings):
     assets = service.source_snapshot()
     from .adapters import source_selection_groups
     groups = source_selection_groups(service.source, assets)
+    plan = plan_for_groups(service.config, service.store, service.destination_id, identity, groups)
+    return plan, {'source_files': len(assets), 'source_bytes': sum(a.size for a in assets),
+                  'observed_at': now(), **_summary(plan)}
+
+
+def plan_for_groups(config, store, destination, identity, groups):
+    """The same frozen scope for Feishu selection and the camera library."""
     # Read receipts; browsing must not prune dedupe entries or create file tasks.
-    archived = {row['asset_id'] for row in service.store.db.execute(
-        "SELECT asset_id FROM source_index WHERE destination=? AND state='uploaded'", (service.destination_id,))}
-    archived.update(row['asset_id'] for row in service.rows() if row['state'] == 'uploaded')
+    archived = {row['asset_id'] for row in store.db.execute(
+        "SELECT asset_id FROM source_index WHERE destination=? AND state='uploaded'", (destination,))}
+    archived.update(row['asset_id'] for row in store.files(destination=destination) if row['state'] == 'uploaded')
     from .paths import archive_location
-    plan = {'destination_name': service.config.destination.get('name', 'SMB'),
-            'archive_location': archive_location(service.config.destination, ''), 'groups': [{**{k: v for k, v in group.items() if k != 'members'},
+    return {'destination_name': config.destination.get('name', 'SMB'),
+            'archive_location': archive_location(config.destination, ''), 'groups': [{**{k: v for k, v in group.items() if k != 'members'},
                         'members': [asset.to_dict() for asset in group['members']]}
                        for group in groups],
             'selection_mode': 'files', 'selected': [],
-            'archive_previews': service.config.backup['archive_previews'],
-            'serial': service.config.source['serial'], 'source_type': service.config.source['type'],
+            'archive_previews': config.backup['archive_previews'],
+            'serial': config.source['serial'], 'source_type': config.source['type'],
             'archived_ids': sorted(archived), 'identity': identity}
-    return plan, {'source_files': len(assets), 'source_bytes': sum(a.size for a in assets),
-                  'observed_at': now(), **_summary(plan)}
+
+
+def review_library(store, settings, library, owner, session, catalog, identifiers, key):
+    """Create a normal selection draft from a server-owned library snapshot.
+
+    The client supplies identities only. No task, transfer or deletion is started
+    until the existing confirm() path accepts this exact preview revision.
+    """
+    identifier = uuid.uuid5(uuid.NAMESPACE_URL, 'selected:' + owner + ':workspace:' + key).hex
+    with settings.lock(), store.db:
+        store.db.execute('BEGIN IMMEDIATE')
+        existing = get(store.db, identifier, owner)
+        if existing:
+            plan = json.loads(existing['plan'])
+            if plan.get('catalog') != catalog or plan.get('requested_ids') != identifiers:
+                raise ConfigError('本次选择已变化，请重新确认备份范围')
+            return existing
+        item = _settings(settings)
+        connection = store.get_meta('source_connection', {})
+        if (not fresh(connection) or connection.get('state') != 'approved'
+                or connection.get('id') != session):
+            raise ConfigError('相机连接已变化，请刷新素材')
+        if active(store.db):
+            raise ConfigError('已有选定任务正在处理，请先完成或停止该任务')
+        groups = library.selection(session, catalog, identifiers)
+        config = Config.from_values(item['config'])
+        if any((a.source_type, a.serial) != (config.source['type'], config.source['serial'])
+               for group in groups for a in group['members']):
+            raise ConfigError('相机身份已变化，请刷新素材')
+        destination = _binding(store, item)
+        plan = plan_for_groups(config, store, destination, connection['device'], groups)
+        plan.update(selected=list(range(len(groups))), origin='camera_workspace',
+                    catalog=catalog, requested_ids=identifiers)
+        result = _summary(plan)
+        if not result['total_files']:
+            raise ConfigError('请至少选择一个需要备份的文件')
+        stamp = time.time()
+        store.db.execute("""INSERT INTO selected_imports
+            (id,owner,state,revision,session_id,destination,created,updated,plan,result)
+            VALUES (?,?,'ready',?,?,?,?,?,?,?)""", (identifier, owner, item['revision'], session,
+                destination, stamp, stamp, json.dumps(plan, ensure_ascii=False), json.dumps(result)))
+    return get(store.db, identifier, owner)
 
 
 def _save(store, op, state, result, plan=None, retry_at=0):

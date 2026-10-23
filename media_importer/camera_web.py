@@ -14,6 +14,36 @@ from .store import Store
 KEY = 'camera_workspace_access'
 
 
+def backup_snapshot(store, op):
+    """Expose selection facts, never the serialized source/credential records."""
+    if not op:
+        return None
+    from .selected_imports import progress, archive_members
+    from .message_facts import progress_rows, selected_view
+    op = progress(store, op)
+    plan, result = json.loads(op['plan'] or '{}'), json.loads(op['result'])
+    complete = bool(result.get('total_files') and
+                    result.get('uploaded_files') == result['total_files'] and
+                    not result.get('archive_verification_pending'))
+    reason = result.get('error') or result.get('reason') or ''
+    reason = {'pending_files': '部分文件尚未完成，等待重试',
+              'cache_cleanup': '归档已完成，缓存清理待重试',
+              'archive_verification': '已有归档待核验'}.get(reason, reason)
+    return {'id': op['id'], 'state': op['state'], 'choice_revision': op['choice_revision'],
+            'confirmed': bool(plan.get('confirmed')), 'stopping': bool(op['cancelled'] or op['drain']),
+            'complete': complete, 'reason': reason,
+            'total_files': result.get('total_files', 0), 'total_bytes': result.get('total_bytes', 0),
+            'already_archived': result.get('already_archived', 0),
+            'excluded_preview_files': result.get('excluded_preview_files', 0),
+            'cache_cleanup_pending': result.get('cache_cleanup_pending') or result.get('cleanup_pending') or 0,
+            'destination': plan.get('archive_location', ''),
+            'progress': progress_rows(selected_view(result, op['state'])),
+            'files': [{'name': a['path'].rsplit('/', 1)[-1], 'path': a['path'], 'size': a['size']}
+                      for i in plan.get('selected', [])
+                      for a in archive_members(plan['groups'][i], plan['archive_previews'])]
+                       if op['state'] == 'ready' else []}
+
+
 def issue(store, owner):
     binding = store.get_meta('source_selection', {})
     if not binding.get('serial_number') or not binding.get('type'):
@@ -73,6 +103,8 @@ class Workspace:
                 catalog = None
         except ConfigError:
             catalog = None
+        selected = store.db.execute("""SELECT * FROM selected_imports WHERE owner=?
+            AND json_extract(plan,'$.origin')='camera_workspace' ORDER BY created DESC LIMIT 1""", (owner,)).fetchone()
         # Never expose component URLs, network credentials or identity internals.
         return {'device': {'name': device.get('model_name', '未连接相机'), 'transport': device.get('transport'),
                            'online': camera['connection']['state'] == 'connected'},
@@ -86,6 +118,7 @@ class Workspace:
                             'reason': preview.get('reason'), 'cleanup_pending': bool(preview.get('cleanup_pending')),
                             'path': '/view/' + preview['viewer_token'] + '/' if preview.get('state') == 'ready'
                             and not preview.get('stop_requested') and preview.get('owner') == owner else None},
+                'backup': backup_snapshot(store, dict(selected)) if selected else None,
                 'sync_enabled': bool(self.settings.read()['config']['backup']['enabled'])}
 
     async def dispatch(self, token, value):
@@ -95,11 +128,20 @@ class Workspace:
         shapes = {'status': {'action'}, 'capture': {'action', 'command', 'session_id', 'nonce', 'parameters'},
                   'result': {'action', 'id'}, 'preview_start': {'action', 'nonce'}, 'live_start': {'action', 'nonce'}, 'preview_stop': {'action', 'id'},
                   'library_list': {'action', 'session_id'}, 'library_touch': {'action', 'session_id'},
-                  'library_release': {'action', 'session_id'}}
+                  'library_release': {'action', 'session_id'},
+                  'backup_review': {'action', 'session_id', 'catalog', 'identifiers', 'nonce'},
+                  'backup_confirm': {'action', 'id', 'choice_revision'},
+                  'backup_status': {'action', 'id'}, 'backup_cancel': {'action', 'id'},
+                  'backup_resume': {'action', 'id'}}
         if action not in shapes or set(value) != shapes[action]: raise ConfigError('请求参数无效')
         if 'nonce' in value and (not isinstance(value['nonce'], str) or not re.fullmatch('[0-9a-f]{32}', value['nonce'])):
             raise ConfigError('操作标识无效')
-        db = Store(self.directory, readonly=action in ('status', 'result'))
+        if action.startswith('backup_'):
+            for key in ('id', 'catalog'):
+                if key in value and (not isinstance(value[key], str) or not re.fullmatch('[0-9a-f]{32}', value[key])):
+                    raise ConfigError('备份操作已失效，请重新选择文件')
+        readonly = action in ('status', 'result', 'backup_status')
+        db = Store(self.directory, readonly=readonly)
         future = None
         try:
             access = authorize(db, token)
@@ -114,7 +156,28 @@ class Workspace:
                 if not result: raise ConfigError('未找到此操作，请核对相机状态')
                 return {'state': result['state'], 'result': json.loads(result['result'])}
             from .camera_library import touch
-            if action.startswith('library_'):
+            if action.startswith('backup_'):
+                from . import selected_imports
+                if action == 'backup_review':
+                    op = selected_imports.review_library(db, self.settings, self.control.library, owner,
+                        value['session_id'], value['catalog'], value['identifiers'], value['nonce'])
+                else:
+                    op = selected_imports.get(db.db, value['id'], owner)
+                    if not op or json.loads(op['plan'] or '{}').get('origin') != 'camera_workspace':
+                        raise ConfigError('未找到本次备份，请重新选择文件')
+                    if action == 'backup_confirm':
+                        op = selected_imports.confirm(db, self.settings, op['id'], owner, value['choice_revision'])
+                    elif action == 'backup_cancel':
+                        with db.db:
+                            selected_imports.cancel(db.db, op['id'], owner)
+                        op = selected_imports.get(db.db, op['id'], owner)
+                    elif action == 'backup_resume':
+                        op = selected_imports.resume(db, self.settings, op['id'], owner)
+                    if action in ('backup_confirm', 'backup_resume') and op['state'] in selected_imports.ACTIVE:
+                        touch(db, connection.get('id'), release=True)
+                        self.control.source_interrupt.set()
+                return backup_snapshot(db, op)
+            elif action.startswith('library_'):
                 if value['session_id'] != connection.get('id') or not fresh(connection) or connection.get('state') != 'approved':
                     raise ConfigError('相机连接已变化，请刷新页面')
                 from .camera_coordinator import operation_reason
@@ -142,7 +205,7 @@ class Workspace:
                 result = stop_request(db, owner, value['id'])
                 return {'id': result['id'], 'state': result['state']}
         finally:
-            if action not in ('status', 'result'):
+            if not readonly:
                 self.control.changed.set()
             db.close()
         if future:

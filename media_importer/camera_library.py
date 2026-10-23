@@ -6,6 +6,7 @@ pauses source import/cleanup while browsing; the independent uploader continues.
 import queue
 import threading
 import time
+import uuid
 from concurrent.futures import Future
 from pathlib import PurePosixPath
 
@@ -45,6 +46,21 @@ class Library:
         self.lock = threading.Lock()
         self.session = None
         self.assets = {}
+        self.choices = {}
+        self.catalog = None
+        self.observed_at = 0
+
+    def selection(self, session, catalog, identifiers):
+        with self.lock:
+            if (session != self.session or catalog != self.catalog or not catalog
+                    or time.monotonic() - self.observed_at > 1800):
+                raise ConfigError('素材清单已失效，请刷新后重新选择')
+            if (not isinstance(identifiers, list) or not identifiers or len(identifiers) > 1000
+                    or any(not isinstance(value, str) for value in identifiers)
+                    or len(set(identifiers)) != len(identifiers)
+                    or not set(identifiers) <= self.choices.keys()):
+                raise ConfigError('请选择当前清单中的文件')
+            return [self.choices[value] for value in identifiers]
 
     def submit(self, session, action, identifier=None, header=None):
         future = Future()
@@ -76,7 +92,7 @@ class Library:
             if action == 'list':
                 assets = service.source_snapshot(source)
                 from .adapters import source_selection_groups
-                result, mapping = [], {}
+                result, mapping, choices = [], {}, {}
                 for group in source_selection_groups(source, assets):
                     primary = next((a for a in group['members'] if a.metadata.get('primary')), None)
                     if not primary or PurePosixPath(primary.path).suffix.lower() not in ('.mp4', '.jpg', '.jpeg'):
@@ -85,6 +101,7 @@ class Library:
                                 and PurePosixPath(a.path).suffix.lower() == '.lrv']
                     playback = previews[0] if len(previews) == 1 else primary
                     mapping[primary.identity] = (primary, playback)
+                    choices[primary.identity] = group
                     result.append({'id': primary.identity, 'name': PurePosixPath(primary.path).name,
                                    'size': primary.size, 'created': primary.created,
                                    'kind': 'video' if primary.path.lower().endswith('.mp4') else 'photo',
@@ -92,7 +109,10 @@ class Library:
                                    'quality': '预览副本' if playback != primary else '原文件'})
                 with self.lock:
                     self.session, self.assets = session, mapping
-                future.set_result({'files': result, 'session_id': session})
+                    self.choices, self.catalog = choices, uuid.uuid4().hex
+                    self.observed_at = time.monotonic()
+                    catalog = self.catalog
+                future.set_result({'files': result, 'session_id': session, 'catalog': catalog})
             else:
                 with self.lock:
                     pair = self.assets.get(identifier) if session == self.session else None
