@@ -14,11 +14,12 @@ from .model import (BackupError, SourceError, SourceBlocked, CacheUnavailable, C
 from .store import Store, fsync_directory
 from .runtime import Reconfigure, SyncDisabled
 from .storage import (require_cache, file_identity, unlink_cache, cache_evidence,
-                      inspect_cached_file, sample_ranges, sampled_evidence)
+                      inspect_cached_file, sample_ranges, sampled_evidence, CacheGuard)
 from .issues import describe
 from .contracts import MediaSource, ArchiveDestination
 from .media import MEDIA_SCOPES, select_groups, selected_file_ids
 from .source_connection import ConfirmationRequired
+from .task_facts import archive_complete
 
 
 LOG = logging.getLogger("media_importer")
@@ -44,7 +45,7 @@ class Service:
         self._samples = deque()
         self.stage = stage
         self.pipeline_stop = None
-        self.cache_guard = threading.RLock()
+        self.cache_guard = CacheGuard()
         self.activity = None
 
     def transfer_task(self, store, source, destination, stage):
@@ -78,8 +79,8 @@ class Service:
 
     def allowed(self, policy=None):
         if policy == 'delete_source_after_import':
-            from .camera_coordinator import source_wait_reason
-            if source_wait_reason(self.store):
+            from .camera_coordinator import operation_reason
+            if operation_reason(self.store, 'delete'):
                 return False
             from .capture import pending
             if pending(self.store.db):
@@ -98,22 +99,24 @@ class Service:
         elif not self.allowed():
             raise SyncDisabled("同步已关闭，任务与缓存已保留")
 
-    def observe_source(self, source=None):
+    def observe_source(self, source=None, *, store=None):
         source = source or self.source
+        store = store or self.store
         try:
             identity = source.identify()
-            result = {"online": True, "checked_at": now(), **identity}
+            result = {"online": True, "checked_at": now(), **identity,
+                      "transport": getattr(source, "transport", self.config.source.get("transport", "usb"))}
             if hasattr(source, "telemetry"):
                 try:
                     result["telemetry"] = source.telemetry()
                 except SourceError as exc:
                     result["telemetry"] = {"available": False, "error": str(exc), "observed_at": now()}
-            self.store.status(source=result)
+            store.status(source=result)
             return result
         except SourceError as exc:
-            self.store.status(source={"online": False, "checked_at": now(), "reason": str(exc),
+            store.status(source={"online": False, "checked_at": now(), "reason": str(exc),
                                      "transport": getattr(source, "transport", self.config.source.get("transport", "usb"))})
-            self.store.invalidate_inventory("相机连接或身份变化，需重新核对清单")
+            store.invalidate_inventory("相机连接或身份变化，需重新核对清单")
             raise
 
     def observe_destination(self):
@@ -145,7 +148,8 @@ class Service:
             try:
                 while not finished.is_set() and not self.stop.is_set():
                     from .source_connection import reason
-                    if reason(store, self.config):
+                    from .camera_coordinator import operation_reason
+                    if reason(store, self.config) or operation_reason(store, 'connect'):
                         # Discovery owns identity-only observations until approved.
                         finished.wait(min(5, self.config.backup['poll_seconds']))
                         continue
@@ -154,23 +158,13 @@ class Service:
                         self.allowed() or state.get("maintenance_running") or
                         state.get("selected_import", {}).get("state") == "running")
                     try:
-                        identity = source.identify()
-                        result = {"online": True, "checked_at": now(), **identity,
-                                  "transport": getattr(source, "transport", self.config.source.get("transport", "usb"))}
-                        if hasattr(source, "telemetry"):
-                            try:
-                                result["telemetry"] = source.telemetry()
-                            except SourceError as exc:
-                                result["telemetry"] = {"available": False, "error": str(exc), "observed_at": now()}
-                        store.status(source=result)
+                        result = self.observe_source(source, store=store)
                         telemetry = result.get("telemetry")
                         if telemetry:
                             if not telemetry.get("available") or source.idle_reason(telemetry):
                                 store.invalidate_inventory("相机状态变化，需重新核对清单")
-                    except SourceError as exc:
-                        store.status(source={"online": False, "checked_at": now(), "reason": str(exc),
-                                             "transport": getattr(source, "transport", self.config.source.get("transport", "usb"))})
-                        store.invalidate_inventory("相机断开，连接后需重新核对清单")
+                    except SourceError:
+                        pass  # The shared observation already recorded the failure.
                     except Cancelled:
                         break
                     watching = store.get_meta('capture_card_watch', {}).get('until', 0) > time.time()
@@ -380,13 +374,17 @@ class Service:
         return result
 
     def clean_cache(self, row):
-        if row["state"] != "uploaded" or row.get('cache_cleared_at') or not self.allowed():
-            return
+        if row["state"] != "uploaded" or not self.allowed():
+            return False
+        if row.get('cache_cleared_at'):
+            return True
         with self.cache_lock():
+            if self.cache_guard.protected(row['id']):
+                return False  # The uploader can continue with unrelated files.
             try:
                 require_cache(self.store)
                 if not self.allowed():
-                    return
+                    return False
                 path = self.store.cached_path(row)
                 if path.exists():
                     if not self.cache_valid(row):
@@ -399,6 +397,7 @@ class Service:
             except (OSError, CacheUnavailable, ValueError) as exc:
                 self.store.update(row["id"], cache_cleanup_error=str(exc))
                 LOG.warning("已归档，缓存待清理: %s", self.store.asset(row).path)
+        return True
 
     def verify_archived(self, row):
         """Optional per-operation metadata check before handling old archives."""
@@ -732,7 +731,7 @@ class Service:
                     self.store.update(row["id"], cleanup="blocked", source_cleanup_error=group["reason"])
                 continue
             try:
-                with self.cache_lock():
+                with self.cache_guard.protect(r['id'] for r in rows):
                     self.boundary()
                     if not self.allowed("delete_source_after_import"):
                         return
@@ -995,7 +994,7 @@ class Service:
         result["cleanup"] = "归档完成；相机原片按导入清理设置处理"
         current = self.store.files(batch_id=batch_id)
         result["cleanup_pending"] = sum(r["cleanup"] not in ("deleted", "absent") for r in current)
-        result["complete"] = all(r["state"] in ("uploaded", "excluded") for r in current)
+        result["complete"] = archive_complete(current, require_files=False)
         import_state = self.store.get_meta("status", {}).get("stages", {}).get("import", {})
         waiting_import = import_state.get("phase", "").startswith("waiting")
         self.report(import_state["phase"] if waiting_import else "completed" if result["complete"] else "waiting_retry",

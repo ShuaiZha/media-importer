@@ -129,7 +129,7 @@ class Bot:
             group, updates = next(iter(changes.items()))
             if group == 'backup' and isinstance(updates, dict) and set(updates) == {'stop_after_current'}:
                 return payload['settings_version'] == 2 and type(updates['stop_after_current']) is bool
-            allowed = {'preview': {'public_url'}, 'limits': {'upload_mib_per_second', 'max_cache_gib', 'min_free_disk_gib'},
+            allowed = {'livestream': {'ssid', 'credential_id', 'port'}, 'preview': {'public_url'}, 'limits': {'upload_mib_per_second', 'max_cache_gib', 'min_free_disk_gib'},
                        'notifications': {'enabled', 'connection_events', 'progress_interval_seconds', 'keyword'},
                        'source_options': {'url', 'serial', 'timeout_seconds', 'request_attempts'},
                        'backup': {'poll_seconds', 'retry_seconds', 'stability_seconds'}}
@@ -386,7 +386,11 @@ class Bot:
                 name = payload.pop('settings_form')
                 parsed = parse(name, event.get('action', {}).get('form_value'), payload['settings_version'])
                 payload['page'] = name
-                if name == 'destination_settings':
+                if name == 'livestream_settings':
+                    from .livestream_settings import draft
+                    identifier = uuid.uuid5(uuid.NAMESPACE_URL, self.scope + ':live-network:' + event_id).hex
+                    payload['changes'] = {'livestream': draft(self.settings, parsed, identifier, row['revision'])}
+                elif name == 'destination_settings':
                     # Passwords bypass SQLite entirely. The durable request contains
                     # only a random local-file reference, checked again before commit.
                     password = parsed.pop('password', '')
@@ -670,7 +674,8 @@ def serve(settings, directory):
     item = settings.read()
     if not item['error']:
         try:
-            prune(settings.path.parent, item['config'].get('archive', {}).get('credential_id'))
+            prune(settings.path.parent, [item['config'].get('archive', {}).get('credential_id'),
+                                        item['config'].get('livestream', {}).get('credential_id')])
         except (ConfigError, OSError):
             logging.warning('过期凭据草稿暂未清理，当前配置保持不变')
     def message(event):

@@ -27,13 +27,17 @@ def button(bot, label, action, identifier=None):
 
 def panel(bot, state):
     phase = state.get('state', 'stopped')
+    live = state.get('mode') == 'rtmp'
     title = {'queued': '正在准备预览', 'connecting': '正在连接相机', 'starting': '正在准备画面',
              'ready': '实时预览进行中', 'stopping': '正在结束预览', 'error': '实时预览异常'}.get(phase, '实时预览已结束')
     elements = []
+    if live:
+        title = {'queued': '正在准备直播', 'connecting': '正在连接相机', 'starting': '正在准备有声画面',
+                 'ready': '有声直播进行中', 'stopping': '正在结束直播', 'error': '有声直播异常'}.get(phase, '有声直播已结束')
     if phase == 'error': elements.append(paragraph(state.get('reason') or '请检查相机连接'))
     buttons = []
     if phase in ACTIVE or state.get('cleanup_pending'):
-        buttons.append(button(bot, '结束预览', 'stop', state['id']))
+        buttons.append(button(bot, '结束直播' if live else '结束预览', 'stop', state['id']))
     from .camera_web import button as workspace_button
     store = Store(bot.directory)
     try:

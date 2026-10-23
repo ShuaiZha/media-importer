@@ -133,7 +133,13 @@ def main():
                 if time.monotonic() - heartbeat['at'] > 15: stop.set()
         threading.Thread(target=owner, daemon=True).start()
         threading.Thread(target=watchdog, daemon=True).start()
-        run(payload['source'], stop, cleanup_only=bool(payload.get('cleanup_only')), public_url=payload.get('public_url', ''))
+        if payload.get('mode') == 'rtmp':
+            from .livestream_worker import run as live
+            source = payload.pop('source')
+            payload.pop('mode')
+            live(source, stop, emit, **payload)
+        else:
+            run(payload['source'], stop, cleanup_only=bool(payload.get('cleanup_only')), public_url=payload.get('public_url', ''))
         return 0
     except Exception as exc:
         emit('error', message=str(exc) if isinstance(exc, BackupError) else '预览组件无法启动，请检查连接或安装包')

@@ -22,7 +22,7 @@ button:hover{background:#33465e}button:focus-visible{outline:2px solid #93c5fd;o
 @media(max-width:520px){body{padding:12px}.playback-bar{flex-direction:column;align-items:stretch;gap:8px}.playback-status{flex-direction:row;align-items:center;flex-wrap:wrap;gap:4px 10px}nav button{flex:1;min-height:44px}.embedded .playback-bar{padding:10px 12px}}
 </style><body><header class="page-heading"><h1>实时预览</h1></header>
 <div id="screen"></div><div class="playback-bar"><div class="playback-status"><span id="state" role="status" aria-live="polite">正在连接画面</span><span id="mode"></span></div>
-<nav aria-label="播放控制"><button id="retry" type="button">播放／重新连接</button><button id="compat" type="button">兼容播放</button></nav></div>
+<nav aria-label="播放控制"><button id="retry" type="button">播放／重新连接</button><button id="compat" type="button">兼容播放</button><button id="sound" type="button" hidden>开启声音</button></nav></div>
 <p id="detail">关闭页面不会结束预览。请在相机页面结束预览。</p>
 <script type="module">
 import {VideoRTC} from './player.js';
@@ -30,7 +30,7 @@ customElements.define('viewer-video', VideoRTC);
 const screen=document.querySelector('#screen'), label=document.querySelector('#state'), detail=document.querySelector('#detail'), modeLabel=document.querySelector('#mode');
 const native=!!document.createElement('video').canPlayType('application/vnd.apple.mpegurl');
 const url=new URL('socket', location.href).href.replace(/^http/,'ws');
-let player,socket,pc,ended=false,generation=0,mode='',rtcAvailable=false;
+let player,socket,pc,ended=false,generation=0,mode='',rtcAvailable=false,audioAvailable=false,soundOn=false;
 let lastTime=0,lastFrames=0,unchanged=0,started=0,hiddenAt=0,checking=false;
 function video(){return mode==='mse'?player?.video:player;}
 function dispose(){
@@ -52,10 +52,10 @@ function connect(preferRTC=true,failed=false,forceMSE=false){
  modeLabel.textContent=mode==='webrtc'?'WebRTC · 低延迟模式':
   (mode==='hls'?'HLS':'MSE')+' · 兼容模式'+(failed?' · 低延迟连接未成功，已自动切换':'');
  if(mode==='mse'){
-  player=document.createElement('viewer-video');player.mode='mse';player.media='video';player.background=false;
-  screen.replaceChildren(player);player.src=url;return;
+  player=document.createElement('viewer-video');player.mode='mse';player.media=audioAvailable?'video,audio':'video';player.background=false;
+  screen.replaceChildren(player);if(player.video){player.video.muted=!soundOn;player.video.volume=1;}player.src=url;return;
  }
- player=document.createElement('video');player.controls=true;player.muted=true;player.playsInline=true;player.autoplay=true;
+ player=document.createElement('video');player.controls=true;player.muted=!soundOn;player.playsInline=true;player.autoplay=true;
  screen.replaceChildren(player);socket=new WebSocket(url);
  if(mode==='hls'){
   player.onerror=()=>{
@@ -69,8 +69,8 @@ function connect(preferRTC=true,failed=false,forceMSE=false){
  try{
   const peer=pc=new RTCPeerConnection({iceServers:[],bundlePolicy:'max-bundle'});
   const candidates=[];
-  peer.addTransceiver('video',{direction:'recvonly'});
-  peer.ontrack=event=>{if(generation!==id)return;current.srcObject=event.streams[0]||new MediaStream([event.track]);play();};
+  peer.addTransceiver('video',{direction:'recvonly'});if(audioAvailable)peer.addTransceiver('audio',{direction:'recvonly'});
+  peer.ontrack=event=>{if(generation!==id)return;if(event.streams[0])current.srcObject=event.streams[0];else{if(!current.srcObject)current.srcObject=new MediaStream();current.srcObject.addTrack(event.track);}play();};
   peer.onicecandidate=event=>{if(generation===id && ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'webrtc/candidate',value:event.candidate?.candidate||''}));};
   peer.onconnectionstatechange=()=>{if(peer.connectionState==='failed')fallback(id);};
   ws.onopen=async()=>{
@@ -103,10 +103,11 @@ async function start(){
   if(response.status===410){finish();return;}
   if(!response.ok)throw Error();
   const status=await response.json();if(id!==generation || ended)return;
-  rtcAvailable=!!status.webrtc;connect(true);
+  rtcAvailable=!!status.webrtc;audioAvailable=!!status.audio;document.querySelector('#sound').hidden=!audioAvailable;connect(true);
  }catch{if(id===generation && !ended){rtcAvailable=false;connect(false);}}
 }
 document.querySelector('#retry').onclick=()=>{if(ended)return;if(video()?.paused && video()?.readyState>=2 && !video()?.error)play();else start();};
+document.querySelector('#sound').onclick=()=>{soundOn=!soundOn;const v=video();if(v){v.muted=!soundOn;v.volume=1;play();}document.querySelector('#sound').textContent=soundOn?'静音':'开启声音';};
 document.querySelector('#compat').onclick=()=>connect(false);
 document.addEventListener('visibilitychange',()=>{
  if(document.hidden){hiddenAt=Date.now();return;}

@@ -44,5 +44,10 @@
     "serial": "",
     "timeout_seconds": 20.0,
     "request_attempts": 3
+  },
+  "livestream": {
+    "ssid": "",
+    "credential_id": "",
+    "port": 1935
   }
 }

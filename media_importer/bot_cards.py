@@ -47,7 +47,7 @@ def settings_result(changes, applied, stopping):
                 'detail': '', 'level': 'warning' if stopping else 'success'}
     if 'stop_after_current' in backup:
         return {'title': '当前文件完成后停止', 'detail': '不再开始新文件。', 'level': 'success'}
-    titles = {'preview': '预览入口已保存', 'source_options': '相机连接已生效',
+    titles = {'livestream': '直播网络已保存', 'preview': '预览入口已保存', 'source_options': '相机连接已生效',
               'limits': '传输与缓存已生效', 'archive': '归档存储已生效', 'notifications': '通知设置已生效'}
     labels = {'upload_mib_per_second': '上传限速', 'max_cache_gib': '缓存额度', 'min_free_disk_gib': '磁盘预留',
               'poll_seconds': '扫描间隔', 'retry_seconds': '重试间隔', 'stability_seconds': '清单复查间隔',

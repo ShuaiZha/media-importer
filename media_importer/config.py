@@ -49,6 +49,7 @@ DEFAULTS = {
                "poll_seconds": 10, "retry_seconds": 30, "stability_seconds": 2},
     "limits": {"upload_mib_per_second": 0, "min_free_disk_gib": 10, "max_cache_gib": 50},
     "preview": {"public_url": ""},
+    "livestream": {"ssid": "", "credential_id": "", "port": 1935},
     "notifications": {"enabled": False, "connection_events": False, "progress_interval_seconds": 300, "keyword": ""},
 }
 
@@ -99,6 +100,8 @@ def runtime_config(raw):
         raise ConfigError("通知前缀最多 100 字符，不能包含控制字符")
     from .preview_settings import normalize_url
     values["preview"]["public_url"] = normalize_url(values["preview"]["public_url"])
+    from .livestream_settings import validate
+    validate(values['livestream'])
     return values
 
 

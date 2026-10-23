@@ -61,35 +61,8 @@ def transfer(service):
                         if source_interrupt and source_interrupt.is_set():
                             source_interrupt.clear()
                             inventory, verified = None, False
-                        from .live_preview import process_one as process_preview
-                        with activity.waiting(stage):
-                            previewed = process_preview(task, task.control.settings)
-                        if previewed:
-                            inventory, verified = None, False
-                            changed = True
-                            continue
-                        from .capture import process_one as process_capture
-                        if process_capture(task, task.control.settings):
-                            if source_interrupt:
-                                source_interrupt.clear()
-                            inventory, verified = None, False
-                            changed = True
-                            continue
-                        from .camera_coordinator import source_wait_reason
-                        from .camera_library import process_one as process_library
-                        with activity.waiting(stage):
-                            process_library(task)
-                        reason = source_wait_reason(db)
-                        if reason:
-                            raise SourceBlocked(reason)
-                    if stage == 'import' and task.control and task.process_camera_operations:
-                        from .camera_operations import process_one
-                        if process_one(task, task.control.settings):
-                            inventory, verified = None, False
-                            changed = True
-                            continue
-                        from .selected_imports import process_one as process_selected
-                        if process_selected(task, task.control.settings, browsing_only=True):
+                        from .camera_coordinator import dispatch
+                        if dispatch(task, task.control.settings, import_lane=True).handled:
                             inventory, verified = None, False
                             changed = True
                             continue
@@ -152,7 +125,8 @@ def transfer(service):
                         for saved in work:
                             if saved["state"] == "uploaded" and saved["id"] not in cleaned:
                                 if task.verify_archived(saved):
-                                    task.clean_cache(saved)
+                                    if task.clean_cache(saved) is False:
+                                        continue
                                 cleaned.add(saved["id"])
                         row = next((r for r in work if r["state"] in ("cached", "staged", "publishing")
                                     and r["id"] not in failed and r.get('retry_at', 0) <= time.time()), None)

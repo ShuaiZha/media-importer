@@ -4,3 +4,4 @@ certifi==2026.7.22
 
 # Native macOS radio support; container core does not need host radio packages.
 bleak==3.0.2; sys_platform == "darwin"
+imageio-ffmpeg==0.6.0; sys_platform == "darwin"

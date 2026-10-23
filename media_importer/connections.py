@@ -25,6 +25,10 @@ class ConnectionAttempt:
         stamp = time.monotonic()
         if stamp >= self.checked_at:
             self.checked_at = stamp + .5
+            from .camera_coordinator import live_radio_owned
+            if live_radio_owned(self.manager.store):
+                self.cancelled = True
+                return True
             item = self.manager.settings.read()
             backup = (item.get('config') or {}).get('backup', {})
             self.cancelled = bool(item.get('error') or backup.get('source_transport') != self.mode or
@@ -54,6 +58,11 @@ class ConnectionManager:
         self.retry_at = 0
 
     def tick(self):
+        from .camera_coordinator import operation_reason
+        blocked = operation_reason(self.store, 'connect')
+        if blocked:
+            self.publish('livestream', blocked)
+            return
         item = self.settings.read()
         if item.get('error'):
             self.publish('invalid_config', item['error'])

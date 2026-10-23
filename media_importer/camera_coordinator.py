@@ -1,5 +1,7 @@
 """Camera resource policy. Archiving complete cache never needs this resource."""
 import threading
+from contextlib import nullcontext
+from dataclasses import dataclass
 
 
 def preview_state(store):
@@ -11,16 +13,78 @@ def preview_active(store):
     return state.get('state') in {'queued', 'connecting', 'starting', 'ready', 'stopping'} or bool(state.get('cleanup_pending'))
 
 
-def source_wait_reason(store):
+def live_radio_owned(store):
+    return preview_state(store).get('mode') == 'rtmp' and preview_active(store)
+
+
+def operation_reason(store, operation):
+    """One resource policy; connection health and user preferences stay separate."""
     state = preview_state(store)
+    if operation in ('connect', 'capture'):
+        if live_radio_owned(store):
+            return '请先结束有声直播，再进行拍摄控制' if operation == 'capture' else '有声直播使用蓝牙会话；结束后恢复媒体连接'
+        return None
+    if operation not in ('import', 'delete', 'browse'):
+        raise ValueError('Unknown camera operation')
     if state.get('cleanup_pending'):
         return '相机预览停止结果待核验；完整缓存可继续归档'
     if preview_active(store):
         return '实时预览进行中，本地导入与原片清理等待；完整缓存可继续归档'
     from .camera_library import active
-    if active(store):
+    if operation != 'browse' and active(store):
         return '正在浏览或回放相机素材，本地导入与原片清理等待；完整缓存可继续归档'
     return None
+
+
+def source_wait_reason(store):
+    return operation_reason(store, 'import')
+
+
+@dataclass(frozen=True)
+class DispatchResult:
+    handled: bool = False
+    selection: bool = False
+
+
+def dispatch(service, settings, *, import_lane=False):
+    """Use the same priority order both while idle and at an import boundary.
+
+    Only the outer loop may start a selected transfer. The import lane may
+    prepare its selection, but cannot recursively start another pipeline.
+    """
+    from .live_preview import process_one as preview
+    from .capture import process_one as capture
+    from .camera_library import process_one as library
+    from .camera_operations import process_one as operation
+    from .selected_imports import process_one as selection
+    from .model import SourceBlocked
+
+    def waiting():
+        return service.activity.waiting('import') if import_lane and service.activity else nullcontext()
+
+    with waiting():
+        handled = bool(preview(service, settings))
+    if import_lane and handled:
+        return DispatchResult(True)
+    captured = bool(capture(service, settings))
+    if import_lane and captured:
+        interrupt = getattr(service.control, 'source_interrupt', None)
+        if interrupt:
+            interrupt.clear()
+        return DispatchResult(True)
+    with waiting():
+        library(service)
+    if import_lane:
+        reason = operation_reason(service.store, 'import')
+        if reason:
+            raise SourceBlocked(reason)
+    if import_lane and not service.process_camera_operations:
+        return DispatchResult(handled or captured)
+    operated = bool(operation(service, settings))
+    if import_lane and operated:
+        return DispatchResult(True)
+    selected = bool(selection(service, settings, browsing_only=import_lane))
+    return DispatchResult(handled or captured or operated or selected, selected)
 
 
 class CameraCoordinator:

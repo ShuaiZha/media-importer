@@ -11,6 +11,28 @@ from pathlib import Path
 
 from .adapters import notification_adapter
 from .model import BackupError, ConfigError
+from .task_facts import archive_complete
+
+
+def retire_references(db, runs, file_ids):
+    """Drop only message tracking whose durable task scope has been retired."""
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='notification_events'").fetchone():
+        return
+    db.executemany('DELETE FROM notification_events WHERE batch_id=? AND detached=0', ((key,) for key in runs))
+    for entry in db.execute("SELECT key,value FROM meta WHERE key LIKE 'notification_progress_card:%' OR key LIKE 'event_message:completed:%'").fetchall():
+        value = json.loads(entry['value'])
+        if value.get('batch_id') in runs or any(entry['key'].endswith(':' + key) for key in runs):
+            db.execute('DELETE FROM meta WHERE key=?', (entry['key'],))
+    notice_row = db.execute("SELECT value FROM meta WHERE key='notification_state'").fetchone()
+    if notice_row:
+        notice = json.loads(notice_row[0])
+        for key, episode in list(notice.get('problems', {}).items()):
+            if episode.get('files') and set(episode['files']) <= file_ids:
+                notice['problems'].pop(key)
+                event_id = 'failed:' + notice.get('scope', '') + ':' + key + ':' + str(episode['since'])
+                db.execute('DELETE FROM notification_events WHERE id=?', (event_id,))
+                db.execute('DELETE FROM meta WHERE key=?', ('event_message:' + event_id,))
+        db.execute("UPDATE meta SET value=? WHERE key='notification_state'", (json.dumps(notice),))
 
 
 DELIVERY_ERRORS = {
@@ -228,7 +250,7 @@ class NotificationWorker:
 
     @staticmethod
     def _complete(rows):
-        return any(row['state'] == 'uploaded' for row in rows) and all(row['state'] in ('uploaded', 'excluded') for row in rows)
+        return archive_complete(rows)
 
     @staticmethod
     def _cleaning(view, batch_id):

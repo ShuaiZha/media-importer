@@ -7,11 +7,53 @@ import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
+from contextlib import contextmanager
 
 from .model import CacheUnavailable, now
 
 
 MARKER = ".media-importer-cache-id"
+
+
+class CacheGuard:
+    """Short cache mutations plus per-file protection across camera IO."""
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.pins = {}
+
+    def acquire(self, *args, **kwargs):
+        return self.lock.acquire(*args, **kwargs)
+
+    def release(self):
+        self.lock.release()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *args):
+        self.release()
+
+    def protected(self, identifier):
+        with self.lock:
+            return bool(self.pins.get(identifier))
+
+    @contextmanager
+    def protect(self, identifiers):
+        identifiers = set(identifiers)
+        with self.lock:
+            for key in identifiers:
+                self.pins[key] = self.pins.get(key, 0) + 1
+        try:
+            yield
+        finally:
+            with self.lock:
+                for key in identifiers:
+                    remaining = self.pins[key] - 1
+                    if remaining:
+                        self.pins[key] = remaining
+                    else:
+                        del self.pins[key]
 
 
 def requires_mount():

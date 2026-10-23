@@ -77,6 +77,7 @@ class Workspace:
                 'commands': allowed_commands(store, connection),
                 'catalog': {k: catalog[k] for k in ('preset', 'presets', 'parameters', 'observed_at') if k in catalog} if catalog else None,
                 'preview': {'state': preview.get('state', 'stopped'), 'id': preview.get('id'),
+                            'mode': preview.get('mode', 'preview'),
                             'reason': preview.get('reason'), 'cleanup_pending': bool(preview.get('cleanup_pending')),
                             'path': '/view/' + preview['viewer_token'] + '/' if preview.get('state') == 'ready'
                             and not preview.get('stop_requested') and preview.get('owner') == owner else None},
@@ -87,7 +88,7 @@ class Workspace:
             raise ConfigError('请求格式无效')
         action = value['action']
         shapes = {'status': {'action'}, 'capture': {'action', 'command', 'session_id', 'nonce', 'parameters'},
-                  'result': {'action', 'id'}, 'preview_start': {'action', 'nonce'}, 'preview_stop': {'action', 'id'},
+                  'result': {'action', 'id'}, 'preview_start': {'action', 'nonce'}, 'live_start': {'action', 'nonce'}, 'preview_stop': {'action', 'id'},
                   'library_list': {'action', 'session_id'}, 'library_touch': {'action', 'session_id'},
                   'library_release': {'action', 'session_id'}}
         if action not in shapes or set(value) != shapes[action]: raise ConfigError('请求参数无效')
@@ -111,8 +112,8 @@ class Workspace:
             if action.startswith('library_'):
                 if value['session_id'] != connection.get('id') or not fresh(connection) or connection.get('state') != 'approved':
                     raise ConfigError('相机连接已变化，请刷新页面')
-                from .camera_coordinator import preview_active
-                if action != 'library_release' and preview_active(db):
+                from .camera_coordinator import operation_reason
+                if action != 'library_release' and operation_reason(db, 'browse'):
                     raise ConfigError('请先结束实时预览，再浏览素材')
                 was_active = db.get_meta('camera_library', {}).get('until', 0) > time.time()
                 touch(db, value['session_id'], release=action == 'library_release')
@@ -125,10 +126,10 @@ class Workspace:
                 if command not in READ_COMMANDS: touch(db, connection.get('id'), release=True)
                 result = enqueue(db, owner, 'workspace:' + value['nonce'], command, value['session_id'], value['parameters'])
                 return {'id': result['id'], 'state': result['state']}
-            elif action == 'preview_start':
+            elif action in ('preview_start', 'live_start'):
                 from .live_preview import request
                 touch(db, connection.get('id'), release=True)
-                result = request(db, self.settings, owner, 'workspace:' + value['nonce'])
+                result = request(db, self.settings, owner, 'workspace:' + value['nonce'], mode='rtmp' if action == 'live_start' else 'preview')
                 return {'id': result['id'], 'state': result['state']}
             elif action == 'preview_stop':
                 from .live_preview import stop_request

@@ -96,6 +96,8 @@ def capabilities(device):
 
 
 def allowed_commands(store, state):
+    from .camera_coordinator import operation_reason
+    if operation_reason(store, 'capture'): return []
     device = state.get('device', {})
     commands = capabilities(device)['commands']
     if state.get('state') == 'approved' and fresh(state):
@@ -111,6 +113,10 @@ def allowed_commands(store, state):
 
 
 def enqueue(store, owner, key, command, session_id, parameters=None):
+    from .camera_coordinator import operation_reason
+    reason = operation_reason(store, 'capture')
+    if reason:
+        raise ConfigError(reason)
     if command not in COMMANDS:
         raise ConfigError('相机操作不存在')
     from .live_preview import active

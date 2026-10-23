@@ -46,16 +46,22 @@ def endpoint(public_url=""):
             'candidates': [f'{host}:{port}'], 'filters': {'candidates': [host]}}
 
 
-def signaling(kind, value):
+def signaling(kind, value, *, audio=False):
     if not isinstance(value, str): raise ValueError('Invalid signaling')
     if kind == 'webrtc/offer':
         if len(value) > 24000 or not value.startswith('v=0\r\n'):
             raise ValueError('Invalid offer')
         lines = value.splitlines()
         media = [line for line in lines if line.startswith('m=')]
-        # A viewer cannot publish, request audio/microphone, or open a data channel.
-        if (len(media) != 1 or not re.fullmatch(r'm=video [0-9]+ UDP/TLS/RTP/SAVPF(?: [0-9]+)+', media[0]) or
-                lines.count('a=recvonly') != 1 or any(line in ('a=sendrecv', 'a=sendonly', 'a=inactive') for line in lines)):
+        expected = ['video', 'audio'] if audio else ['video']
+        kinds = []
+        for section in media:
+            match = re.fullmatch(r'm=(video|audio) [0-9]+ UDP/TLS/RTP/SAVPF(?: [0-9]+)+', section)
+            if not match: raise ValueError('Invalid media section')
+            kinds.append(match[1])
+        # Audio is receive-only and only allowed for an audio-enabled session.
+        if (sorted(kinds) != sorted(expected) or lines.count('a=recvonly') != len(expected) or
+                any(line in ('a=sendrecv', 'a=sendonly', 'a=inactive') for line in lines)):
             raise ValueError('Only receive-only video is allowed')
     elif kind == 'webrtc/candidate':
         if value == '': return

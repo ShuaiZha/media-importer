@@ -3,6 +3,9 @@ import json
 import os
 import tempfile
 import uuid
+import copy
+import threading
+from time import monotonic
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -40,6 +43,9 @@ class Settings:
     def __init__(self, path, directory=None):
         self.path = Path(path)
         self.directory = Path(directory or os.environ.get('MEDIA_IMPORTER_DATA_DIR', '/data'))
+        self._read_lock = threading.RLock()
+        self._document_key = self._document = None
+        self._document_read_at = 0
 
     @contextmanager
     def lock(self):
@@ -48,13 +54,31 @@ class Settings:
             yield
 
     def read(self):
-        text = self.path.read_text(encoding="utf-8")
-        result = {"document": text, "revision": revision(text), "config": None, "error": None}
+        # Stat every time: a removed disk, in-place edit or atomic replacement
+        # invalidates the cache. Bounded rereads handle coarse external-volume
+        # timestamps. Runtime selection is never cached here.
+        def key():
+            stat = self.path.stat()
+            return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        with self._read_lock:
+            before = key()
+            stamp = monotonic()
+            if self._document is None or before != self._document_key or stamp - self._document_read_at >= 1:
+                text = self.path.read_text(encoding="utf-8")
+                result = {"document": text, "revision": revision(text), "config": None, "error": None}
+                try:
+                    result['config'] = Config.from_dict(json.loads(text, object_pairs_hook=_unique_object), self.path.parent).values
+                    result['source_hint'] = dict(result['config']['source'])
+                except (ConfigError, ValueError) as exc:
+                    result['error'] = str(exc)
+                self._document = result
+                self._document_key = before if key() == before else None
+                self._document_read_at = stamp
+            result = copy.deepcopy(self._document)
         try:
-            result["config"] = Config.from_dict(json.loads(text, object_pairs_hook=_unique_object), self.path.parent).values
-            result['source_hint'] = dict(result['config']['source'])
             from .source_connection import selected
-            result['config']['source'] = selected(self.directory, result['config']['source'])
+            if result['config']:
+                result['config']['source'] = selected(self.directory, result['config']['source'])
         except (ConfigError, ValueError) as exc:
             result["error"] = str(exc)
         return result
@@ -68,6 +92,9 @@ class Settings:
         return self.update_preferences({"backup": {"enabled": enabled}})
 
     def update_preferences(self, changes, expected=None):
+        if isinstance(changes, dict) and set(changes) == {'livestream'}:
+            from .livestream_settings import save
+            return save(self, changes['livestream'], expected)
         if isinstance(changes, dict) and set(changes) == {'preview'}:
             from .preview_settings import save
             return save(self, changes['preview'], expected)
@@ -130,6 +157,7 @@ class Settings:
         if structural:
             structural.pop("notifications", None)
             structural.pop("preview", None)
+            structural.pop("livestream", None)
             for key in ("enabled", "delete_source_after_import", "stop_after_current"):
                 structural["backup"].pop(key, None)
         return item, revision(json.dumps(structural, sort_keys=True))

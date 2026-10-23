@@ -4,7 +4,7 @@ import math
 from .bot_cards import card, markdown, note, paragraph, plain
 from .config import ConfigError, runtime_config
 
-FORMS = {'preview_settings', 'transfer_settings', 'notification_settings', 'notification_advanced', 'destination_settings', 'source_settings', 'advanced_settings'}
+FORMS = {'livestream_settings', 'preview_settings', 'transfer_settings', 'notification_settings', 'notification_advanced', 'destination_settings', 'source_settings', 'advanced_settings'}
 PAGES = FORMS | {'settings', 'media_settings', 'local_storage', 'preview_check', 'preview_check_details', 'preview_detect', 'camera_settings'}
 LIMIT_FIELDS = {'upload_mib_per_second', 'max_cache_gib', 'min_free_disk_gib'}
 INTERVAL_FIELDS = {'poll_seconds', 'retry_seconds', 'stability_seconds'}
@@ -36,7 +36,17 @@ def panel(bot, page, item):
                             for key in MENUS[2][1]], shared=True)
     if page == 'camera_settings':
         return card('相机与预览', [bot.buttons(bot.button('相机连接', {'panel': 'source_settings'}),
-                                              bot.button('观看入口', {'panel': 'preview_settings'}))], shared=True)
+                                              bot.button('观看入口', {'panel': 'preview_settings'}),
+                                              bot.button('直播网络', {'panel': 'livestream_settings'}))], shared=True)
+    if page == 'livestream_settings':
+        live = values['livestream']
+        secret = input_field('password', 'Wi-Fi 密码（留空沿用）', '', required=False, maximum=63)
+        secret['input_type'] = 'password'
+        return card('直播网络', [form(bot, page, [
+            input_field('ssid', 'Wi-Fi 名称', live['ssid'], maximum=32), secret,
+            input_field('port', 'RTMP 接收端口', live['port'], maximum=5)], revision),
+            note('相机加入此 Wi-Fi，Mac 接收地址自动识别。Mac 热点需先在系统中开启。'),
+            note('密码经飞书提交，仅保存至本机，不回显。')], shared=True)
     if page == 'media_settings':
         from .media import MEDIA_SCOPES
         backup = values['backup']
@@ -161,6 +171,7 @@ def location(target):
 
 def parse(name, fields, version=2):
     expected = {
+        'livestream_settings': {'ssid', 'password', 'port'},
         'preview_settings': {'public_url'},
         'transfer_settings': LIMIT_FIELDS,
         'notification_settings': {'enabled', 'connection_events', 'progress_interval_seconds', 'keyword'},
@@ -179,8 +190,13 @@ def parse(name, fields, version=2):
         raise ConfigError('表单内容不完整，请重新打开设置')
     if any(not isinstance(v, str) or len(v) > 1024 or any(ord(c) < 32 for c in v) for v in fields.values()):
         raise ConfigError('表单格式无效，请检查输入内容')
-    fields = {k: v if k == 'password' else v.strip() for k, v in fields.items()}
+    fields = {k: v if k in ('password', 'ssid') else v.strip() for k, v in fields.items()}
     try:
+        if name == 'livestream_settings':
+            from .livestream_settings import validate
+            fields['port'] = int(fields['port'])
+            validate({k: v for k, v in {**fields, 'credential_id': ''}.items() if k != 'password'})
+            return fields
         if name == 'preview_settings':
             from .preview_settings import normalize_url
             return {'preview': {'public_url': normalize_url(fields['public_url'])}}

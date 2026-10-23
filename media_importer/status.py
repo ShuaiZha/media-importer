@@ -12,6 +12,7 @@ from .store import cache_bytes
 from .storage import inspect_cache, observe_cached_file
 from .paths import archive_location
 from .media import MEDIA_SCOPES, selected_file_ids
+from .task_facts import file_facts
 
 
 def age(stamp):
@@ -216,9 +217,8 @@ def snapshot(directory, settings):
             evidence = observe_cached_file(cache / (row['id'] + '.bin'), json.loads(row['cache_identity'] or 'null'),
                                            row['asset_id'], meta.get('cache_identity'))
         cached = evidence['valid']
-        archived = row['state'] == 'uploaded' and (not selected_import or row['id'] in verified_archives)
-        archive_pending = row['state'] == 'uploaded' and not archived
-        stored = archived or cached
+        facts = file_facts(row, cached=cached, archive_verified=not selected_import or row['id'] in verified_archives)
+        archived, archive_pending, stored = facts['archived'], facts['archive_pending'], facts['imported']
         member = row['id'] in reporting_ids and row['state'] != 'excluded'
         if member:
             total += size

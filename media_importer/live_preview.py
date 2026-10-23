@@ -17,10 +17,12 @@ KEY = 'live_preview'
 ACTIVE = {'queued', 'connecting', 'starting', 'ready', 'stopping'}
 
 
-def component():
+def component(name='go2rtc'):
     base = Path(sys.executable).parent / 'components' if getattr(sys, 'frozen', False) else (
         Path(__file__).resolve().parents[1] / '.build/components')
-    path = base / 'go2rtc'
+    if name not in ('go2rtc', 'ffmpeg'):
+        raise ConfigError('未知播放组件')
+    path = base / name
     if not path.is_file():
         raise ConfigError('安装包缺少预览组件，请更新 Mac 原生版；源码运行请先执行 python scripts/preview_bundle.py')
     return path
@@ -42,13 +44,21 @@ def requested(store):
     return store.get_meta(KEY, {}).get('state') == 'queued'
 
 
-def request(store, settings, owner, key):
+def request(store, settings, owner, key, mode='preview'):
     available()
+    if mode not in ('preview', 'rtmp'):
+        raise ConfigError('未知画面模式')
     item = settings.read()
     if item.get('error'):
         raise ConfigError('配置不可用，请先检查配置')
     if item['config']['backup']['source_transport'] == 'usb':
         raise ConfigError('请先在「相机连接」选择自动或无线，使用独立供电连接相机 Wi-Fi')
+    if mode == 'rtmp':
+        component('ffmpeg')
+        from .livestream_settings import password
+        if not item['config']['livestream']['ssid']:
+            raise ConfigError('请先在「设置 → 相机与预览 → 直播网络」配置 Wi-Fi')
+        password(settings, item['config']['livestream'])
     identifier = uuid.uuid5(uuid.NAMESPACE_URL, owner + ':preview:' + key).hex
     with store.db:
         store.db.execute('BEGIN IMMEDIATE')
@@ -57,6 +67,8 @@ def request(store, settings, owner, key):
             previous.update(state='queued', stop_requested=True)
             store.db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', (KEY, json.dumps(previous)))
             return previous
+        if active(store) and previous.get('mode', 'preview') != mode:
+            raise ConfigError('请先结束当前画面，再切换预览或有声直播')
         if active(store) or previous.get('id') == identifier:
             return previous
         device = store.get_meta('source_selection', {})
@@ -66,7 +78,7 @@ def request(store, settings, owner, key):
         support = source_preview_support({**device, 'transport': 'wifi'})
         if not support['supported']:
             raise ConfigError(support['reason'])
-        state = {'id': identifier, 'owner': owner, 'state': 'queued', 'created': time.time(),
+        state = {'id': identifier, 'owner': owner, 'state': 'queued', 'mode': mode, 'created': time.time(),
                  'serial': device['serial_number'], 'type': device['type'], 'observed_at': now(),
                  'viewer_token': uuid.uuid4().hex + uuid.uuid4().hex}
         # Do not use Store.set_meta inside this transaction (it commits).
@@ -127,6 +139,7 @@ def _run_session(service, settings):
         if service.allowed() or selection and selection['state'] in ('queued_transfer', 'running', 'waiting'):
             return False
     identifier = state['id']
+    is_live = state.get('mode') == 'rtmp'
     process, reader, error, final = None, None, None, None
     started = False
     try:
@@ -140,7 +153,7 @@ def _run_session(service, settings):
         # A cancelled request without a started stream returned above already.
         store.set_meta('source_connect_request', {'until': until, 'preview_id': identifier})
         connection = {}
-        while not service.stop.is_set():
+        while not service.stop.is_set() and not is_live:
             current = store.get_meta(KEY, {})
             if current.get('stop_requested') and not state.get('cleanup_pending'):
                 break
@@ -156,12 +169,26 @@ def _run_session(service, settings):
         if service.stop.is_set() or (current.get('stop_requested') and not state.get('cleanup_pending')):
             update(store, identifier, state='stopped', reason='预览已结束', url=None)
             return True
-        device = connection['device']
+        if is_live:
+            # A Mac hotspot cannot simultaneously associate with the camera AP.
+            # The worker freshly verifies the full serial over BLE instead.
+            device = {**store.get_meta('source_selection', {}), 'transport': 'wifi'}
+            connection = store.get_meta('source_connection', {})
+            until = time.monotonic() + 35
+            while (store.get_meta('source_link', {}).get('phase') == 'connecting' or
+                   store.get_meta('status', {}).get('capture_work')):
+                if store.get_meta(KEY, {}).get('stop_requested') and not state.get('cleanup_pending'):
+                    update(store, identifier, state='stopped', reason='直播已取消', url=None)
+                    return True
+                if service.stop.wait(.25) or time.monotonic() >= until:
+                    raise ConfigError('相机连接操作尚未结束，请稍后重试直播')
+        else:
+            device = connection['device']
         from .adapters import source_preview_support
         support = source_preview_support(device)
         if not support['supported']:
             raise ConfigError(support['reason'])
-        source = {**settings.read()['config']['source'], 'url': device['url'], 'transport': device['transport'],
+        source = {**settings.read()['config']['source'], 'url': device.get('url', settings.read()['config']['source']['url']), 'transport': device['transport'],
                   'serial': state['serial'], 'timeout_seconds': 3, 'request_attempts': 1}
         update(store, identifier, state='starting', source=source, reason='正在准备实时画面')
         store.status(preview_work=True)
@@ -171,7 +198,14 @@ def _run_session(service, settings):
                    [sys.executable, '-m', 'media_importer.preview_worker'])
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, text=True, start_new_session=True)
-        process.stdin.write(json.dumps({'source': source, 'cleanup_only': bool(state.get('cleanup_pending')), 'public_url': settings.read()['config']['preview']['public_url']}) + '\n')
+        payload = {'source': source, 'cleanup_only': bool(state.get('cleanup_pending')), 'public_url': settings.read()['config']['preview']['public_url']}
+        if is_live:
+            from .livestream_settings import password
+            config = settings.read()['config']['livestream']
+            payload.update(mode='rtmp', network=config, secret=password(settings, config) if not state.get('cleanup_pending') else '',
+                           recovery_path=str(store.directory / ('live-recovery-' + identifier + '.json')))
+        process.stdin.write(json.dumps(payload) + '\n')
+        payload.clear()
         process.stdin.flush()
         started = True
         events = queue.Queue()
@@ -188,14 +222,14 @@ def _run_session(service, settings):
             current = store.get_meta(KEY, {})
             live_connection = store.get_meta('source_connection', {})
             stopping = (service.stop.is_set() or current.get('stop_requested') or
-                        live_connection.get('id') != connection.get('id') or not fresh(live_connection))
+                        (not is_live and (live_connection.get('id') != connection.get('id') or not fresh(live_connection))))
             if stopping and process.stdin and not process.stdin.closed:
                 stopping_at = time.monotonic()
-                update(store, identifier, state='stopping', reason='正在结束预览', url=None)
+                update(store, identifier, state='stopping', reason='正在结束直播' if is_live else '正在结束预览', url=None)
                 process.stdin.close()  # EOF also stops the child after a parent crash.
             elif process.poll() is None and time.monotonic() - heartbeat >= 2 and process.stdin and not process.stdin.closed:
                 process.stdin.write('ping\n'); process.stdin.flush(); heartbeat = time.monotonic()
-            if stopping_at and time.monotonic() - stopping_at > 20:
+            if stopping_at and time.monotonic() - stopping_at > (350 if is_live else 20):
                 raise ConfigError('预览组件未及时退出，正在回收；相机停止状态待核验')
             try: event = events.get(timeout=.25)
             except queue.Empty: continue
@@ -204,7 +238,12 @@ def _run_session(service, settings):
                 from .preview_access import links
                 urls = links(current, settings.read()['config'])
                 update(store, identifier, state='ready', reason='实时画面已就绪',
-                       upstream=event['url'], webrtc=bool(event.get('webrtc')), **urls)
+                       upstream=event['url'], stream=event.get('stream', 'preview'),
+                       webrtc=bool(event.get('webrtc')), audio=bool(event.get('audio')), **urls)
+            elif event.get('event') == 'phase':
+                update(store, identifier, reason=event['reason'])
+            elif event.get('event') == 'diagnostic':
+                update(store, identifier, diagnostic={'phase': event.get('phase'), 'type': event.get('error_type')})
             elif event.get('event') == 'closed':
                 final = event
             elif event.get('event') == 'error':
@@ -215,6 +254,8 @@ def _run_session(service, settings):
         clean = bool(final and final.get('camera_stopped'))
         update(store, identifier, state='error' if error or not clean else 'stopped', url=None, local_url=None,
                reason=error or (final or {}).get('reason') or '预览已结束', cleanup_pending=not clean)
+        if is_live and clean:
+            store.set_meta('source_connect_request', {'until': time.time() + 180, 'id': 'live-restore-' + identifier})
     except (BackupError, OSError, ValueError, KeyError) as exc:
         safe = str(exc) if isinstance(exc, BackupError) else '预览组件暂不可用，请检查连接后重新打开'
         update(store, identifier, state='error', url=None, local_url=None, reason=safe,

@@ -12,6 +12,7 @@ import uuid
 from .model import Asset, BackupError, ConfigError, SourceError, now
 from .service import Service
 from .storage import initialize_cache, require_cache
+from .task_facts import file_facts
 
 
 class SelectedService(Service):
@@ -131,76 +132,19 @@ class SelectedService(Service):
         return  # Manual cleanup has its own separately confirmed operation.
 
     def settle(self):
-        """Retire only complete members of this request, without deleting media.
-
-        The caller first persists result() in its operation receipt. Other runs
-        may share these same file tasks, but their remaining members, caches and
-        pending work are kept exactly as they are.
-        """
+        """Retire only this confirmed scope after its result has been saved."""
+        from .lifecycle import retirement_ready, retire_rows
         require_cache(self.store)
         rows = self.rows()
         if not rows or not self.result()['complete']:
             return 0
-        pending = {item['file_id'] for item in self.store.temporary_items(self.destination_id)}
-        for row in rows:
-            cache = self.store.cached_path(row)
-            if (row['id'] in pending or row['cleanup'] == 'deleting' or row['cache_cleanup_error'] or
-                    row['state'] == 'uploaded' and not all(row[key] for key in
-                    ('remote_path', 'remote_identity', 'cache_cleared_at')) or
-                    any(path.exists() or path.is_symlink() for path in
-                        (cache, cache.with_suffix('.download'),
-                         self.store.cache / '.receipts' / (row['id'] + '.json')))):
-                return 0
-        ids = {row['id'] for row in rows}
-        db = self.store.db
-        with db:
-            db.execute('BEGIN IMMEDIATE')
-            affected_runs, affected_batches, affected_groups = set(), set(), set()
-            for row in rows:
-                key = row['id']
-                affected_runs.update(r[0] for r in db.execute(
-                    'SELECT run_id FROM transfer_run_files WHERE file_id=?', (key,)))
-                affected_batches.update(r[0] for r in db.execute(
-                    'SELECT batch_id FROM batch_files WHERE file_id=?', (key,)))
-                if row['group_id']:
-                    affected_groups.add(row['group_id'])
-                asset = self.store.asset(row)
-                if row['cleanup'] not in ('deleted', 'absent'):
-                    db.execute('''INSERT OR REPLACE INTO source_index VALUES (?,?,?,?,?,?,?,?,?)''',
-                               (self.destination_id, asset.identity, asset.source_type, asset.serial,
-                                row['state'], row['role'], asset.size, row['remote_path'], row['remote_identity']))
-                else:
-                    db.execute('DELETE FROM source_index WHERE destination=? AND asset_id=?',
-                               (self.destination_id, asset.identity))
-                if row['state'] == 'uploaded':
-                    db.execute("INSERT OR REPLACE INTO meta VALUES ('destination_anchor',?)",
-                               (json.dumps({'destination': self.destination_id, 'path': row['remote_path'],
-                                            'identity': json.loads(row['remote_identity']), 'size': asset.size}),))
-            for table, column in (('cache_receipts', 'file_id'), ('batch_files', 'file_id'),
-                                  ('transfer_run_files', 'file_id'), ('temporary_cleanup', 'file_id'), ('files', 'id')):
-                db.executemany(f'DELETE FROM {table} WHERE {column}=?', ((key,) for key in ids))
-            for key in affected_groups:
-                saved = db.execute('SELECT members FROM source_groups WHERE id=?', (key,)).fetchone()
-                if saved and not any(db.execute('SELECT 1 FROM files WHERE id=?', (member,)).fetchone()
-                                     for member in json.loads(saved[0])):
-                    db.execute('DELETE FROM source_groups WHERE id=?', (key,))
-            for key in affected_batches:
-                if not db.execute('SELECT 1 FROM batch_files WHERE batch_id=?', (key,)).fetchone():
-                    db.execute('DELETE FROM batches WHERE id=?', (key,))
-                    if self.store.get_meta('last_batch') == key:
-                        db.execute("DELETE FROM meta WHERE key='last_batch'")
-            notifications = db.execute(
-                "SELECT 1 FROM sqlite_master WHERE name='notification_events'").fetchone()
-            for key in affected_runs:
-                if not db.execute('SELECT 1 FROM transfer_run_files WHERE run_id=?', (key,)).fetchone():
-                    db.execute('DELETE FROM transfer_runs WHERE id=?', (key,))
-                    if notifications:
-                        db.execute('DELETE FROM notification_events WHERE batch_id=? AND detached=0', (key,))
-                    db.execute("DELETE FROM meta WHERE key IN (?,?)",
-                               ('notification_progress_card:' + key, 'event_message:completed:' + key))
-            db.execute("INSERT OR REPLACE INTO meta VALUES ('metadata_backup_reset',?)",
-                       (json.dumps(time.time_ns()),))
-        return len(ids)
+        blocked = {item['file_id'] for item in self.store.temporary_items(self.destination_id)}
+        if not all(retirement_ready(self.store, row, blocked=blocked) for row in rows):
+            return 0
+        with self.store.db:
+            self.store.db.execute('BEGIN IMMEDIATE')
+            retire_rows(self.store, self.destination_id, rows)
+        return len(rows)
 
     def initialize_selection(self):
         """Create only frozen members, preserving known tasks and compact dedupe."""
@@ -315,21 +259,24 @@ class SelectedService(Service):
         with self.archive_checks_lock:
             verified = self._verified()
             checks = dict(self.archive_checks)
-        pending = [row for row in archives if row['state'] != 'uploaded' or row['id'] not in verified]
+        outcomes = {row['id']: file_facts(row, archive_verified=row['id'] in verified,
+                    cached=not (row['state'] == 'uploaded' and row['id'] in verified) and
+                    row['state'] in ('cached', 'staged', 'publishing', 'uploaded') and self.cache_valid(row))
+                    for row in archives}
+        pending = [row for row in archives if not outcomes[row['id']]['archived']]
         cleanup = [row for row in archives
                    if row['state'] == 'uploaded' and not row.get('cache_cleared_at')]
-        imported = [row for row in archives if row['state'] == 'uploaded' and row['id'] in verified or
-                    row['state'] in ('cached', 'staged', 'publishing', 'uploaded') and self.cache_valid(row)]
-        unresolved = [row for row in archives if row['state'] == 'uploaded' and row['id'] not in verified]
+        imported = [row for row in archives if outcomes[row['id']]['imported']]
+        unresolved = [row for row in archives if outcomes[row['id']]['archive_pending']]
         errors = [{'file': self.store.asset(row).path, 'reason':
                    checks.get(row['id'], {}).get('error', '既有归档尚未核验')}
                   for row in unresolved]
         return {'complete': bool(rows) and not pending and not cleanup, 'run_id': self.run_id,
                 'files': len(archives), 'bytes': sum(self.store.asset(row).size for row in archives),
-                'uploaded_files': sum(row['state'] == 'uploaded' and row['id'] in verified for row in archives),
+                'uploaded_files': sum(outcomes[row['id']]['archived'] for row in archives),
                 'imported_files': len(imported), 'import_verified': bool(rows) and len(imported) == len(archives),
                 'uploaded_bytes': sum(self.store.asset(row).size for row in archives
-                                      if row['state'] == 'uploaded' and row['id'] in verified),
+                                      if outcomes[row['id']]['archived']),
                 'imported_bytes': sum(self.store.asset(row).size for row in imported),
                 'file_ids': [row['id'] for row in rows],
                 'archive_verified_ids': sorted(verified), 'archive_verification_pending': len(unresolved),

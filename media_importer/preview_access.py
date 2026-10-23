@@ -53,7 +53,14 @@ def upstream_base(state):
     return f'http://127.0.0.1:{parsed.port}' + parsed.path.rsplit('/', 1)[0]
 
 
-def media_request(message, *, webrtc=False):
+def upstream_stream(state):
+    value = state.get('stream', 'preview')
+    if not isinstance(value, str) or not re.fullmatch(r'preview|[0-9a-f]{32}', value):
+        raise ValueError('Invalid internal stream name')
+    return value
+
+
+def media_request(message, *, webrtc=False, audio=False):
     """Never pass arbitrary go2rtc WS commands, source names or URLs upstream."""
     if not isinstance(message, str) or len(message) > 32768:
         raise ValueError('Invalid message')
@@ -65,7 +72,7 @@ def media_request(message, *, webrtc=False):
             raise ValueError('Invalid codec')
     elif webrtc:
         from .preview_rtc import signaling
-        signaling(value['type'], value['value'])
+        signaling(value['type'], value['value'], audio=audio)
     else:
         raise ValueError('Unsupported media command')
     return json.dumps(value)
@@ -148,11 +155,11 @@ class Gateway:
         if not resource:
             return self.response(200, PAGE, 'text/html; charset=utf-8', frame=True)
         if resource == 'status':
-            return self.response(200, json.dumps({'state': 'ready', 'webrtc': bool(state.get('webrtc'))}), 'application/json')
+            return self.response(200, json.dumps({'state': 'ready', 'webrtc': bool(state.get('webrtc')), 'audio': bool(state.get('audio'))}), 'application/json')
         base = upstream_base(state)
         if resource.startswith('hls/'):
             try:
-                data, content_type = await asyncio.to_thread(self.hls.load, base, token, resource)
+                data, content_type = await asyncio.to_thread(self.hls.load, base, token, resource, upstream_stream(state))
             except ValueError:
                 return self.response(404, '播放片段不可用')
             except OSError:
@@ -186,7 +193,7 @@ class Gateway:
         try:
             # A fixed local upstream; no URL or stream selector from the client.
             base = upstream_base(state)
-            async with connect('ws' + base[4:] + '/api/ws?src=preview', proxy=None,
+            async with connect('ws' + base[4:] + '/api/ws?src=' + upstream_stream(state), proxy=None,
                                max_size=8 * 1024 * 1024, max_queue=4, compression=None,
                                open_timeout=5, close_timeout=1) as upstream:
                 async def incoming():
@@ -213,7 +220,7 @@ class Gateway:
                                 finally: db.close()
                                 reported = time.monotonic()
                             continue
-                        command = media_request(message, webrtc=bool(state.get('webrtc')))
+                        command = media_request(message, webrtc=bool(state.get('webrtc')), audio=bool(state.get('audio')))
                         if value['type'] in ('mse', 'webrtc/offer'):
                             if negotiated: raise ValueError('Already negotiated')
                             negotiated = True

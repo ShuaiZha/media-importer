@@ -47,7 +47,19 @@ def bundle(destination, key=None):
     target = Path(destination) / 'components/go2rtc'
     unpack(cached.read_bytes(), digest, target)
     shutil.copyfile(ROOT / 'docs/licenses/go2rtc-LICENSE', target.with_name('go2rtc-LICENSE'))
-    return {'go2rtc': VERSION, 'sha256': hashlib.sha256(target.read_bytes()).hexdigest()}
+    import imageio_ffmpeg
+    if imageio_ffmpeg.__version__ != '0.6.0':
+        raise ValueError('请安装固定版本的原生构建依赖')
+    # Select only the package's pinned binary, never an environment/PATH override.
+    binaries = [p for p in (Path(imageio_ffmpeg.__file__).parent / 'binaries').glob('ffmpeg-*') if p.is_file()]
+    if len(binaries) != 1:
+        raise ValueError('安装包缺少固定的 FFmpeg 二进制组件')
+    audio = target.with_name('ffmpeg')
+    shutil.copyfile(binaries[0], audio); audio.chmod(0o755)
+    for name in ('ffmpeg-NOTICE.md', 'ffmpeg-COPYING.GPLv3'):
+        shutil.copyfile(ROOT / 'docs/licenses' / name, target.with_name(name))
+    return {'go2rtc': VERSION, 'sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
+            'ffmpeg_bundle': 'imageio-ffmpeg-0.6.0', 'ffmpeg_sha256': hashlib.sha256(audio.read_bytes()).hexdigest()}
 
 
 if __name__ == '__main__':

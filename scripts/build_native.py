@@ -10,11 +10,18 @@ import tarfile
 import tempfile
 import shutil
 import uuid
+import ssl
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from media_importer import __version__
 from media_importer.native.releases import platform_key, executable
+
+
+def runtime_data():
+    # Some managed Python distributions need an adjacent CA rejection store.
+    # Preserve that distribution's trust policy in frozen bundles as well.
+    return sorted(Path(ssl.__file__).parent.glob('*-rejected-cas.pem'))
 
 
 def build(output):
@@ -29,6 +36,7 @@ def build(output):
         '--name', 'media-importer', '--distpath', str(work / 'dist'), '--workpath', str(work / 'work'),
         '--specpath', str(work), '--paths', str(ROOT), '--collect-submodules', 'media_importer',
         '--hidden-import', 'scripts.setup', '--collect-data', 'certifi',
+        *(arg for path in runtime_data() for arg in ('--add-data', str(path) + os.pathsep + '.')),
         *(['--collect-submodules', 'bleak'] if sys.platform == 'darwin' else []),
         '--exclude-module', 'tkinter', str(ROOT / 'scripts/native_entry.py')], cwd=ROOT, env=env, check=True)
     bundle = work / 'dist/media-importer'

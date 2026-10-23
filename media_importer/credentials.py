@@ -68,9 +68,10 @@ def copy_credentials(config_directory, target):
 def prune(directory, active):
     """Discard only our expired, unreferenced drafts after cards/jobs have expired."""
     root = Path(directory) / 'credentials'
+    active = {active} if isinstance(active, str) or active is None else set(active)
     if root.is_symlink():
         raise ConfigError('凭据目录不能是符号链接')
     for path in root.glob('*.json'):
-        if (re.fullmatch(r'[0-9a-f]{32}\.json', path.name) and path.stem != active
+        if (re.fullmatch(r'[0-9a-f]{32}\.json', path.name) and path.stem not in active
                 and not path.is_symlink() and time.time() - path.stat().st_mtime > 7 * 86400):
             path.unlink()

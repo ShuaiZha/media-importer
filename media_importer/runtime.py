@@ -193,16 +193,9 @@ def daemon(config_path, directory, stop):
                         control.adopt()
                         try:
                             with control.work_guard:
-                                from .live_preview import process_one as process_preview
-                                process_preview(service, control.settings)
-                                from .capture import process_one as process_capture
-                                process_capture(service, control.settings)
-                                from .camera_library import process_one as process_library
-                                process_library(service)
-                                from .camera_operations import process_one
-                                process_one(service, control.settings)
-                                from .selected_imports import process_one as process_selected, active
-                                selected = process_selected(service, control.settings)
+                                from .camera_coordinator import dispatch
+                                from .selected_imports import active
+                                selected = dispatch(service, control.settings).selection
                                 if selected or active(store.db):
                                     result = {"complete": False, "reason": "selected_import"}
                                 else:

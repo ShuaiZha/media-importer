@@ -37,7 +37,7 @@ const intervals=[],timers=[];
 const context=vm.createContext({document,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},MediaSource:class{},
  VideoRTC:class{},customElements:{define(){}},URL,location:{href:'https://preview.example/view/session/'},
  Date:{now:()=>clock},setInterval(fn,delay){intervals.push({fn,delay});},setTimeout(fn,delay){timers.push({fn,delay});},
- fetch:async()=>({ok:true,status:200,json:async()=>({webrtc:input.rtc})}),assert,
+ fetch:async()=>({ok:true,status:200,json:async()=>({webrtc:input.rtc,audio:input.audio})}),assert,
  advance(ms){clock+=ms;},intervals,timers});
 vm.runInContext(input.script,context);
 (async()=>{for(let i=0;i<8;i++)await Promise.resolve();await vm.runInContext(input.test,context);})()
@@ -47,13 +47,25 @@ vm.runInContext(input.script,context);
 
 @unittest.skipUnless(shutil.which('node'), 'Node.js is required for browser-side playback tests')
 class PlaybackTests(unittest.TestCase):
-    def run_js(self, code, native=True, rtc=True):
+    def run_js(self, code, native=True, rtc=True, audio=False):
         script=PAGE.split('<script type="module">',1)[1].split('</script>',1)[0]
         script=re.sub(r'^import .*;$','',script,flags=re.M)
         result=subprocess.run([shutil.which('node'),'-e',HARNESS],
-                              input=json.dumps({'script':script,'test':code,'native':native,'rtc':rtc}),
+                              input=json.dumps({'script':script,'test':code,'native':native,'rtc':rtc,'audio':audio}),
                               text=True,capture_output=True,timeout=10)
         self.assertEqual(0,result.returncode,result.stderr)
+
+    def test_live_audio_is_receive_only_and_requires_explicit_unmute(self):
+        self.run_js('''(async()=>{
+          assert.equal(pc.transceivers.length,2);
+          assert.equal(pc.transceivers[1].kind,'audio');
+          assert.equal(pc.transceivers[1].direction,'recvonly');
+          assert.equal(player.muted,true);
+          assert.equal(document.querySelector('#sound').hidden,false);
+          document.querySelector('#sound').onclick();
+          assert.equal(player.muted,false);assert.equal(player.volume,1);
+          document.querySelector('#sound').onclick();assert.equal(player.muted,true);
+        })()''', audio=True)
 
     def test_webrtc_is_receive_only_without_public_ice_services(self):
         self.run_js('''(async()=>{

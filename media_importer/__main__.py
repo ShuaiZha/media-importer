@@ -88,6 +88,11 @@ def main(argv=None):
             return 0
         if args.command == "validate":
             Config.load(args.config)
+            # Catch incomplete frozen Python TLS resources before an update
+            # stops the currently running service. This opens no connection.
+            if getattr(sys, 'frozen', False):
+                import ssl
+                ssl.create_default_context()
             print("配置有效；未连接相机或目的地，未修改配置。")
             return 0
         if args.command == "sync":

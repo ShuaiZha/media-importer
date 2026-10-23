@@ -785,3 +785,6 @@ def preview_support(device):
     if model_key(device.get('model_name', '')) != 'HERO9':
         return {'supported': False, 'reason': '当前实时预览已验证 HERO9 Black；其他机型等待实机验证'}
     return {'supported': True, 'reason': None}
+def livestream_camera(serial):
+    from .gopro_livestream import LiveCamera
+    return LiveCamera(serial)

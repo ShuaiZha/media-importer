@@ -37,6 +37,13 @@ def create_source(config, stop=None):
     return _module(SOURCES, config.source["type"], "来源").create(config, stop)
 
 
+def livestream_camera(kind, serial):
+    from ..model import ConfigError
+    factory = getattr(_module(SOURCES, kind, '来源'), 'livestream_camera', None)
+    if factory is None: raise ConfigError('此设备尚未适配有声直播')
+    return factory(serial)
+
+
 def create_destination(config, stop=None):
     return _module(DESTINATIONS, config.destination["type"], "目的地").create(config, stop)
 

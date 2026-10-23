@@ -17,7 +17,8 @@ class HLS:
                 raise ValueError('Media response too large')
             return data
 
-    def load(self, base, token, resource):
+    def load(self, base, token, resource, stream='preview'):
+        if not re.fullmatch(r'preview|[0-9a-f]{32}', stream): raise ValueError('Invalid stream')
         stamp = time.monotonic()
         self.sessions = {key: value for key, value in self.sessions.items()
                          if stamp - value[1] < 30 and value[0] == token}
@@ -27,7 +28,7 @@ class HLS:
             # MPEG-TS carries the camera's in-band SPS/PPS. The upstream fMP4
             # initializer may contain dummy parameters when its initial probe
             # sees a frame before SPS/PPS; Apple then advances a black video.
-            data = self.fetch(base + '/api/stream.m3u8?src=preview').decode()
+            data = self.fetch(base + '/api/stream.m3u8?src=' + stream).decode()
             match = re.search(r'^hls/playlist\.m3u8\?id=([A-Za-z0-9]{8})$', data, re.M)
             if not match:
                 raise ValueError('Invalid media playlist')
