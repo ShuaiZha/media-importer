@@ -18,7 +18,7 @@
 
 Mac 原生拍摄控制支持录像、拍照、延时摄影、常用参数、定长录像和 HiLight；从「相机 → 相机页面」在同一页面取景、控制拍摄、浏览缩略图、回放视频并选择文件备份，适配电脑与手机。拍摄后可确认导入本次新增素材，详见[使用说明](docs/feishu.md#拍摄控制)。
 
-**[v0.11.7（未发布）](docs/releases/v0.11.7.md)** 可在相机素材页看缩略图、回放并勾选文件，确认后提交备份；沿用现有队列与缓存，固定保留原片。取景、拍摄或恢复占用相机时，导入按规则等待，完整缓存仍可独立上传。入口与运行关系见[业务流程](docs/workflows.md)。
+**[v0.11.7](docs/releases/v0.11.7.md)** 可在相机素材页看缩略图、回放并勾选文件，确认后提交备份；沿用现有队列与缓存，固定保留原片。取景、拍摄或恢复占用相机时，导入按规则等待，完整缓存仍可独立上传。入口与运行关系见[业务流程](docs/workflows.md)。
 
 ![并行传输：文件 A 完整导入本地后开始上传，同时继续导入文件 B、C](docs/assets/parallel-transfer.svg)
 
@@ -28,7 +28,7 @@ Mac 原生拍摄控制支持录像、拍照、延时摄影、常用参数、定�
 
 准备 USB 数据线、可读写的 SMB 共享和[飞书应用凭据](docs/feishu.md#1-准备应用与凭据)。**以下两种部署方式任选其一；无线连接与拍摄控制目前仅支持 Mac 原生版。**
 
-安装命令获取最新正式版本，当前为 **v0.11.2**；该版菜单称为「同步」，对应下文的「备份」。v0.11.7 目前需从源码构建，尚不提供正式安装包或镜像。升级程序后，请按[飞书指南](docs/feishu.md#3-订阅与菜单)更新菜单；事件标识与旧文字命令保持兼容。
+安装命令获取最新正式版本，当前为 **v0.11.7**。旧版升级后，请按[飞书指南](docs/feishu.md#3-订阅与菜单)将菜单更新为「备份、相机、设置」；事件标识与旧文字命令保持兼容。
 
 ### 部署方式一：原生 CLI
 
@@ -55,7 +55,7 @@ curl -fsSL https://github.com/ShuaiZha/media-importer/releases/latest/download/i
 适合已有 Docker 环境的用户。需要 Git、Python 3.9+ 和运行中的 Docker Compose。
 
 ```sh
-git clone --branch v0.11.2 https://github.com/ShuaiZha/media-importer.git
+git clone --branch v0.11.7 https://github.com/ShuaiZha/media-importer.git
 cd media-importer
 python3 scripts/setup.py
 docker compose up -d --no-build
@@ -79,7 +79,7 @@ Mac 原生版另提供 HERO9 有声 RTMP 直播：在飞书配置 Wi-Fi，通过
 
 ## 文档与支持
 
-`main` 含 [v0.11.7 未发布改动](docs/releases/v0.11.7.md)；安装命令与稳定镜像仍使用 v0.11.2。
+安装包、镜像与更新说明见 [v0.11.7 发布说明](docs/releases/v0.11.7.md)。升级保留配置、未完成任务与完整缓存。
 
 | 我想… | 文档 |
 | --- | --- |

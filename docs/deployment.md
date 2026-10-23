@@ -12,12 +12,12 @@
 
 Docker 仅支持 USB，不负责宿主机蓝牙与 Wi-Fi 切换；无线连接、拍摄控制、实时预览及整合的素材回放页面使用 [Mac 原生版](native.md#无线连接与相机控制)。USB 通过网络读取，无需设备直通。宿主机连通不等于容器连通，VPN / Tailscale 环境也需从容器检查。
 
-v0.11.7（未发布）的素材页选择备份沿用 Mac 原生页面和现有任务队列，无需新增配置；Docker 继续通过飞书的文件选择入口执行单次备份，菜单名称以对应版本说明为准。
+v0.11.7 的素材页选择备份沿用 Mac 原生页面和现有任务队列，无需新增配置；Docker 通过飞书「备份 → 选择文件」执行单次备份。
 
 ## 首次部署
 
 ```sh
-git clone --branch v0.11.2 https://github.com/ShuaiZha/media-importer.git
+git clone --branch v0.11.7 https://github.com/ShuaiZha/media-importer.git
 cd media-importer
 python3 scripts/setup.py
 docker compose up -d --no-build
@@ -26,13 +26,13 @@ docker compose ps
 
 Windows 将 `python3` 替换为 `py -3`。向导生成 `.env`、JSON 和目录，拉取正式镜像并检查连接，不覆盖已有配置。相机地址与序列号可留空自动发现。
 
-示例固定为 v0.11.2，对应镜像 `ghcr.io/shuaizha/media-importer:0.11.2`，支持 Linux AMD64 / ARM64。选择其他版本时，先在 [Releases](https://github.com/ShuaiZha/media-importer/releases) 确认对应镜像已发布；未发布源码须按[构建说明](../CONTRIBUTING.md#docker)操作。
+示例固定为 v0.11.7，对应镜像 `ghcr.io/shuaizha/media-importer:0.11.7`，支持 Linux AMD64 / ARM64。选择其他版本时，先在 [Releases](https://github.com/ShuaiZha/media-importer/releases) 确认对应镜像已发布；未发布源码须按[构建说明](../CONTRIBUTING.md#docker)操作。
 
 配置示例须与程序版本对应。version 5 JSON 用于 v0.11.0+，不能直接套用到旧镜像；升级首次启动会[迁移旧配置](configuration.md#从旧配置升级)，保留原配置值、任务和缓存。
 
 检查完成后，继续[配置飞书订阅、菜单并发布](feishu.md#3-订阅与菜单)。首次备份前核对身份，保留原片，用少量素材验证。
 
-按所安装版本配置[飞书菜单事件](feishu.md#3-订阅与菜单)，无需更换凭据。正式版 v0.11.2 的菜单称为「同步」；v0.11.6 源码版改称「备份」，事件标识不变。v0.11.2 的「连接相机」在 Docker 中只检查 USB；自动蓝牙与 Wi-Fi 连接需 Mac 原生版。查询和确认相机不再开启备份。
+升级后按[飞书菜单表](feishu.md#3-订阅与菜单)改为「备份、相机、设置」，事件标识与凭据不变。「连接相机」在 Docker 中只检查 USB；自动蓝牙与 Wi-Fi 连接需 Mac 原生版。查询和确认相机不会开启备份。
 
 ### 手动配置
 
@@ -61,7 +61,7 @@ docker compose exec backup python3 -m media_importer check --json
 | 停止 / 启动后台 | `docker compose stop` / `docker compose up -d --no-build` |
 | 移除容器和网络 | `docker compose down` |
 
-`stop`、`down` 保留宿主机配置、任务与缓存，但机器人会离线。日常暂停传输使用飞书「备份 → 停止备份」（v0.11.2 为「同步 → 停止同步」）。运行卡片还提供「当前文件完成后停止」，旧文字命令仍可用。停止备份不代替停止录像、预览或直播；完整业务关系见[业务流程](workflows.md)。
+`stop`、`down` 保留宿主机配置、任务与缓存，但机器人会离线。日常暂停传输使用飞书「备份 → 停止备份」。运行卡片还提供「当前文件完成后停止」，旧文字命令仍可用。停止备份不代替停止录像、预览或直播；完整业务关系见[业务流程](workflows.md)。
 
 ## 更新稳定版
 
@@ -71,7 +71,7 @@ docker compose exec backup python3 -m media_importer check --json
 python3 scripts/manage.py update
 ```
 
-指定版本可加 `--version 0.11.2`。更新器核对 Release、标签和镜像摘要，下载镜像后停止服务，保存一致快照、快进源码，再恢复原来运行的服务。配置、开关、未完成任务与完整缓存保留。
+指定版本可加 `--version 0.11.7`。更新器核对 Release、标签和镜像摘要，下载镜像后停止服务，保存一致快照、快进源码，再恢复原来运行的服务。配置、开关、未完成任务与完整缓存保留。
 
 - 本地源码修改、分叉或自定义 Compose 覆盖可能阻止更新，先按错误提示处理。
 - `backups/update-*/` 不含完整视频；迁移应使用[完整备份](recovery.md)。
