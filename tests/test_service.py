@@ -216,7 +216,7 @@ class FakeDestination:
 class ServiceTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.store = Store(self.temporary.name)
+        self.store = Store.create(self.temporary.name)
         self.config = configuration()
         self.source = FakeSource([footage(), footage(primary=False)])
         self.destination = FakeDestination()
@@ -512,7 +512,7 @@ class ServiceTests(unittest.TestCase):
         row=self.cached();self.store.update(row['id'],state='uploaded')
         service=self.service();attempted=threading.Event();finished=threading.Event()
         def clean():
-            db=Store(self.store.directory)
+            db=Store.create(self.store.directory)
             child=Service(self.config,db,self.source,self.destination,self.stop);child.cache_guard=service.cache_guard
             attempted.set();child.clean_cache(db.get(row['id']));finished.set();db.close()
         with service.cache_guard:

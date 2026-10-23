@@ -39,7 +39,7 @@ class MigrationTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):migration.migrate(self.config,self.data)
 
     def test_preserves_complete_data_names_and_settings_discards_offsets(self):
-        self.run_migrate();store=Store(self.data)
+        self.run_migrate();store=Store.create(self.data)
         try:
             row=store.get('file');self.assertEqual('device/original.mp4',row['remote_path']);self.assertEqual('cached',row['state'])
             self.assertTrue(row['cache_identity']);self.assertNotIn('upload_offset',row)
@@ -55,14 +55,14 @@ class MigrationTests(unittest.TestCase):
 
     def test_complete_temporary_checkpoint_becomes_staged(self):
         with sqlite3.connect(self.data/'state.sqlite3') as db:db.execute('update files set upload_offset=?',(self.asset.size,))
-        self.run_migrate();store=Store(self.data)
+        self.run_migrate();store=Store.create(self.data)
         try:
             self.assertEqual('staged',store.get('file')['state']);self.assertFalse([x for x in store.temporary_items() if x['kind']=='remote'])
         finally:store.close()
 
     def test_uncertain_rename_keeps_identity_and_is_not_deleted(self):
         with sqlite3.connect(self.data/'state.sqlite3') as db:db.execute("update files set state='publishing'")
-        self.run_migrate();store=Store(self.data)
+        self.run_migrate();store=Store.create(self.data)
         try:
             row=store.get('file');self.assertEqual('publishing',row['state']);self.assertTrue(row['remote_identity'])
             self.assertEqual('device/.old.partial',row['temp_path']);self.assertFalse([x for x in store.temporary_items() if x['kind']=='remote'])

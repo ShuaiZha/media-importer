@@ -109,7 +109,7 @@ class WorkerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.directory = Path(self.tmp.name)
-        self.store = Store(self.directory)
+        self.store = Store.create(self.directory)
         self.config = configuration(delete_source_after_import=False)
         self.values = copy.deepcopy(self.config.values)
         self.values["notifications"].update(enabled=True)
@@ -153,7 +153,7 @@ class WorkerTests(unittest.TestCase):
     def archive(self, rows=None, cleanup="pending"):
         observations = {f['id']: f for f in self.view['files']}
         for row in rows or self.rows:
-            self.store.update(row["id"], state="uploaded", cleanup=cleanup)
+            self.store.update(row["id"], state="uploaded", cleanup=cleanup, cache_cleared_at="fixture-cleared")
             observations[row['id']] = {'id': row['id'], 'cache_state': 'missing', 'state': 'uploaded', 'cleanup': cleanup}
         self.view['files'] = list(observations.values())
 
@@ -222,6 +222,7 @@ class WorkerTests(unittest.TestCase):
         self.tick()
         self.archive(cleanup="blocked")
         self.view["policy"]["delete_source"] = True
+        self.values["backup"]["delete_source_after_import"] = True
         self.view["status"]["source_work"] = True
         self.view["status"]["phase"] = "checking_cleanup"
         self.tick(1)
@@ -425,6 +426,7 @@ class WorkerTests(unittest.TestCase):
         self.tick()
         self.archive()
         self.view["policy"]["delete_source"] = True
+        self.values["backup"]["delete_source_after_import"] = True
         self.sender.side_effect = RuntimeError("offline")
         self.tick(1)
         self.assertIn("原片待清理", json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
@@ -634,11 +636,13 @@ class WorkerTests(unittest.TestCase):
         self.tick()
         self.archive(cleanup='deleted')
         self.view['files'][0]['cache_state'] = 'verified'
+        self.store.update(self.rows[0]['id'], cache_cleanup_error='fixture pending')
         self.tick(1)
         self.assertEqual(1, self.sender.call_count)
         self.assertTrue(self.sender.call_args.args[1]['config']['update_multi'])
         self.assertIn('待清理 1 个', json.dumps(self.sender.call_args.args[1], ensure_ascii=False))
         self.view['files'][0]['cache_state'] = 'missing'
+        self.store.update(self.rows[0]['id'], cache_cleanup_error=None, cache_cleared_at='fixture-cleared-again')
         self.worker = self.make_worker()
         self.tick(5)
         self.assertEqual(1, self.sender.call_count)

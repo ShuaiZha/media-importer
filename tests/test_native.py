@@ -30,7 +30,7 @@ class NativeTests(unittest.TestCase):
         self.preferences['backup'].update(enabled=True, delete_source_after_import=True)
         (self.project / 'config/settings.json').write_text(json.dumps(self.preferences))
         with patch.dict(os.environ, {'MEDIA_IMPORTER_REQUIRE_CACHE_MOUNT': '0', 'MEDIA_IMPORTER_CACHE_DIR': '', 'MEDIA_IMPORTER_RUNTIME': ''}):
-            db = Store(self.project / 'data')
+            db = Store.create(self.project / 'data')
             db.set_meta('cache_identity', 'original-volume'); db.set_meta('must-preserve', {'unfinished': ['a', 'b']}); db.close()
         (self.project / 'cache' / MARKER).write_text('original-volume\n')
         (self.project / 'cache/unfinished.bin').write_bytes(b'complete-small-cache')
@@ -128,7 +128,7 @@ class NativeTests(unittest.TestCase):
     def test_missing_native_cache_is_never_created_and_volume_marker_is_required(self):
         missing = self.root / 'unplugged/cache'
         with patch.dict(os.environ, {'MEDIA_IMPORTER_RUNTIME': 'native', 'MEDIA_IMPORTER_CACHE_DIR': str(missing), 'MEDIA_IMPORTER_REQUIRE_CACHE_MOUNT': '0'}):
-            db = Store(self.project / 'data')
+            db = Store.create(self.project / 'data')
             try:
                 self.assertFalse(initialize_cache(db)['available'])
                 self.assertFalse(missing.exists())

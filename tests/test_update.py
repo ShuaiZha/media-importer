@@ -84,7 +84,7 @@ class ReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, patch.dict(update.os.environ, {'MEDIA_IMPORTER_REQUIRE_CACHE_MOUNT': '0'}):
             root = Path(folder)
             for name in ('snapshot', 'cache', 'tmp'): (root/name).mkdir()
-            store = Store(root/'snapshot')
+            store = Store.create(root/'snapshot')
             store.set_meta('cache_identity', 'test-original-volume'); store.close()
             marker = root/'cache'/MARKER; marker.write_text('test-original-volume\n')
             cached = root/'cache/complete.bin'; cached.write_bytes(b'keep-complete-cache')

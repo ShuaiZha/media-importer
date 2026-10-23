@@ -33,31 +33,11 @@ class Bot:
         self.sender = sender or feishu.send_card
         self.updater = updater or feishu.update_card
         self._source_event = None
-        self.directory.mkdir(parents=True, exist_ok=True)
-        with self.db() as db:
-            from .camera_operations import initialize
-            initialize(db)
-            from .selected_imports import initialize as initialize_selected
-            initialize_selected(db)
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS bot_actions (
-                    token TEXT PRIMARY KEY, scope TEXT NOT NULL, payload TEXT NOT NULL,
-                    revision TEXT, created REAL NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS bot_jobs (
-                    id TEXT PRIMARY KEY, scope TEXT NOT NULL, payload TEXT NOT NULL,
-                    created REAL NOT NULL, state TEXT NOT NULL DEFAULT 'queued',
-                    response TEXT, attempts INTEGER NOT NULL DEFAULT 0,
-                    retry_at REAL NOT NULL DEFAULT 0, error TEXT
-                );
-            """)
-            db.execute("DELETE FROM bot_actions WHERE created < ?", (time.time() - 86400,))
-            db.execute("DELETE FROM bot_jobs WHERE state IN ('done','error') AND created < ?", (time.time() - 7 * 86400,))
 
     @contextmanager
     def db(self):
-        con = sqlite3.connect(self.directory / "state.sqlite3", timeout=2)
-        con.row_factory = sqlite3.Row
+        from .database import connect
+        con = connect(self.directory, timeout=2)
         try:
             with con:
                 yield con
@@ -667,6 +647,8 @@ def healthy(directory):
 
 
 def serve(settings, directory):
+    from .database import initialize
+    initialize(directory)
     import lark_oapi as lark
     from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTriggerResponse
     bot = Bot(settings, directory)

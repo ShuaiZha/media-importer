@@ -181,6 +181,8 @@ class SelectedService(Service):
             self.store.db.executemany('INSERT OR IGNORE INTO transfer_run_files VALUES (?,?)',
                                      ((self.run_id, row['id']) for row in rows))
             self.store.db.execute('UPDATE transfer_runs SET finished_at=NULL WHERE id=?', (self.run_id,))
+            from .completion import refresh
+            refresh(self.store.db, [self.run_id])
 
     @staticmethod
     def _signature(group):
@@ -249,6 +251,8 @@ class SelectedService(Service):
         with self.store.db:
             self.store.db.execute('UPDATE transfer_runs SET imported_at=COALESCE(imported_at,?) WHERE id=?',
                                   (now(), self.run_id))
+            from .completion import refresh
+            refresh(self.store.db, [self.run_id])
         self.report('complete', '选定素材已完整导入，未选素材保留', current_file=None,
                     current_file_id=None, current_bytes=0, current_total_bytes=0, issue=None)
         return True
@@ -307,9 +311,13 @@ class SelectedService(Service):
             with self.store.db:
                 self.store.db.execute('UPDATE transfer_runs SET finished_at=COALESCE(finished_at,?) WHERE id=?',
                                       (now(), self.run_id))
+                from .completion import refresh
+                refresh(self.store.db, [self.run_id])
             self.report('completed', '选定素材归档完成，相机原片保留', current_file=None,
                         current_file_id=None, current_bytes=0, current_total_bytes=0, issue=None)
         else:
             with self.store.db:
                 self.store.db.execute('UPDATE transfer_runs SET finished_at=NULL WHERE id=?', (self.run_id,))
+                from .completion import refresh
+                refresh(self.store.db, [self.run_id])
         return result

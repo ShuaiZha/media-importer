@@ -13,6 +13,7 @@ from .storage import inspect_cache, observe_cached_file
 from .paths import archive_location
 from .media import MEDIA_SCOPES, selected_file_ids
 from .task_facts import file_facts
+from .completion import cleanup_summary
 
 
 def age(stamp):
@@ -42,30 +43,6 @@ def healthy(directory):
             db.close()
     except (OSError, sqlite3.Error, ValueError):
         return False
-
-
-def cleanup_summary(files, delete_source=False):
-    """Observed outcomes, kept separate from the user's deletion preference."""
-    previews = [f for f in files if f['state'] == 'excluded']
-    files = [f for f in files if f['state'] != 'excluded']
-    archived = [f for f in files if f['state'] == 'uploaded']
-    ready_groups = {f.get('group_id') for f in files if f.get('group_id') and f.get('imported')}
-    ready_groups -= {f.get('group_id') for f in files if not f.get('imported')}
-    return {
-        'preview_deleted': sum(f['cleanup'] == 'deleted' for f in previews),
-        'preview_absent': sum(f['cleanup'] == 'absent' for f in previews),
-        'preview_pending': sum(delete_source and f.get('cleanup_selected', True)
-                               and (f.get('group_id') in ready_groups or bool(f.get('source_cleanup_error')))
-                               and f['cleanup'] not in ('deleted', 'absent') for f in previews),
-        'source_deleted': sum(f['cleanup'] == 'deleted' for f in files),
-        'source_absent': sum(f['cleanup'] == 'absent' for f in files),
-        'source_pending': sum(delete_source and f.get('selected', True) and f.get('imported')
-                              and f['cleanup'] not in ('deleted', 'absent') for f in files),
-        'source_not_deleted': sum(f['cleanup'] not in ('deleted', 'absent') for f in files),
-        'cache_cleared': sum(f.get('cache_state') == 'missing' and not f.get('cache_cleanup_error') for f in archived),
-        'cache_pending': sum(f.get('cache_state') in ('verified', 'unverified') or bool(f.get('cache_cleanup_error')) for f in archived),
-        'cache_unknown': sum(f.get('cache_state') in (None, 'unavailable') and not f.get('cache_cleanup_error') for f in archived),
-    }
 
 
 def attention(live, enabled, configuration, health, files, stages):

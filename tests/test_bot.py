@@ -30,7 +30,7 @@ class BotTests(unittest.TestCase):
         self.original = configuration(enabled=False, delete_source_after_import=False)
         self.path.write_text(json.dumps(preferences(self.original.values)))
         self.settings = Settings(self.path)
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.sender = Mock()
         self.updater = Mock()
         self.bot = Bot(self.settings, self.root / 'data', sender=self.sender, updater=self.updater)

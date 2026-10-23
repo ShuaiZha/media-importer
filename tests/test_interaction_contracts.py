@@ -160,7 +160,7 @@ class NotificationLifecycle(unittest.TestCase):
     archive = test_notifications.WorkerTests.archive
 
     def test_requested_progress_is_sent_while_background_has_not_applied_settings(self):
-        from media_importer.notifications import initialize
+        from media_importer.outbox import initialize
         initialize(self.store.db)
         scope = self.store.get_meta('notification_state')['scope']
         with self.store.db:

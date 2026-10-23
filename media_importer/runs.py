@@ -61,6 +61,9 @@ def reconcile(db, destination, source_type, serial, selection='all', preferred_i
     if not pending:
         if current:
             _include_previews(db, current['id'])
+        if current:
+            from .completion import refresh
+            refresh(db, [current['id']])
         return current['id'] if current else None
     if not current or current['finished_at']:
         identifier = preferred_id or uuid.uuid4().hex
@@ -75,6 +78,8 @@ def reconcile(db, destination, source_type, serial, selection='all', preferred_i
         db.executemany('INSERT INTO transfer_run_files VALUES (?,?)', ((identifier, file_id) for file_id in new))
         db.execute('UPDATE transfer_runs SET imported_at=NULL WHERE id=?', (identifier,))
     _include_previews(db, identifier)
+    from .completion import refresh
+    refresh(db, [identifier])
     return identifier
 
 

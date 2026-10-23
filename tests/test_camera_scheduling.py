@@ -15,7 +15,7 @@ from media_importer.store import Store
 class CameraSchedulingTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.store = Store(Path(self.temporary.name) / 'data')
+        self.store = Store.create(Path(self.temporary.name) / 'data')
         self.service = SimpleNamespace(store=self.store, activity=None,
             process_camera_operations=True, control=SimpleNamespace(source_interrupt=threading.Event()))
 

@@ -101,7 +101,7 @@ def migrate(config_path, directory, backup=None):
                     db.execute('PRAGMA user_version=5')
         finally:
             db.close()
-        store=Store(directory)
+        store=Store.create(directory)
         try:
             # This one-time migration targets the GoPro-only pre-v0.10 format;
             # it is not a runtime source selector. Preserve identities and paths.

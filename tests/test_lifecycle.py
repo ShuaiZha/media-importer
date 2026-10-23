@@ -51,7 +51,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(2, self.service().settle())
         self.assertEqual(2, len(self.index()))
         self.store.close()
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.service().cycle()
         self.assertEqual([], self.store.files())
         self.assertEqual(2, len(self.remote.uploads))
@@ -74,7 +74,7 @@ class LifecycleTests(unittest.TestCase):
         self.store.set_meta('settled_runs', runs)
         archive = copy.deepcopy(self.remote.objects)
         self.store.close()
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.assertIsNone(self.store.get_meta('settled_runs'))
         self.assertEqual(2, self.service().settle())
         self.assertFalse(self.store.files())
@@ -96,14 +96,14 @@ class LifecycleTests(unittest.TestCase):
         content = self.store.cached_path(before).read_bytes()
         archive = copy.deepcopy(self.remote.objects)
         self.store.close()
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.assertEqual(2, self.service().settle())
         self.assertEqual([before], self.store.files())
         self.assertEqual(content, self.store.cached_path(before).read_bytes())
         self.assertEqual(archive, self.remote.objects)
 
     def test_legacy_migration_preserves_detached_delivery_and_cancels_stale_progress(self):
-        from media_importer.notifications import freeze_completion
+        from media_importer.outbox import freeze_completion
         values = copy.deepcopy(self.config.values)
         values['notifications']['enabled'] = True
         self.config = Config.from_values(values)
@@ -124,7 +124,7 @@ class LifecycleTests(unittest.TestCase):
         expected = dict(self.store.db.execute("SELECT * FROM notification_events WHERE detached=1").fetchone())
         self.store.set_meta('settled_runs', [run['id']])
         self.store.close()
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.assertEqual('cancelled', self.store.db.execute("SELECT state FROM notification_events WHERE id='old-progress'").fetchone()[0])
         self.assertEqual(2, self.service().settle())
         self.assertEqual([expected], [dict(r) for r in self.store.db.execute('SELECT * FROM notification_events')])
@@ -233,7 +233,7 @@ class LifecycleTests(unittest.TestCase):
         content = {r['id']: self.store.cached_path(r).read_bytes() for r in before}
         self.assertEqual(0, self.service().settle())
         self.store.close()
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.assertEqual(before, self.store.files())
         for row in self.store.files():
             self.assertEqual(content[row['id']], self.store.cached_path(row).read_bytes())
@@ -354,7 +354,7 @@ class LifecycleTests(unittest.TestCase):
     def test_retirement_is_atomic_if_notification_freeze_fails(self):
         self.service().cycle()
         before = self.store.files()
-        with patch('media_importer.notifications.freeze_completion', side_effect=ValueError('fixture')):
+        with patch('media_importer.outbox.freeze_completion', side_effect=ValueError('fixture')):
             with self.assertRaises(ValueError):
                 self.service().settle()
         self.assertEqual(before, self.store.files())

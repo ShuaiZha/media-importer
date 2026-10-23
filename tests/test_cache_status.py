@@ -56,7 +56,7 @@ class CacheStatusTests(unittest.TestCase):
         self.config_path.write_text(json.dumps(preferences(configuration(enabled=False).values)))
         self.settings = Settings(self.config_path)
         self.config = Config.load(self.config_path)
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.source = FakeSource([footage()])
         self.source.read_range = lambda asset, start, count: FakeSource.payload(asset)[start:start+count]
         self.remote = FakeDestination()

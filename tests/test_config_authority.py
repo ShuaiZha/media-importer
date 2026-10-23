@@ -109,7 +109,7 @@ class AuthorityTests(unittest.TestCase):
         from media_importer.destination_binding import bind
         from test_service import footage
         directory = self.root / 'data'
-        store = Store(directory)
+        store = Store.create(directory)
         try:
             logical = 'archive:already-bound'
             store.set_meta('destination_binding', {'id':logical, 'connection':'original-connection', 'bound_at':'existing'})
@@ -129,7 +129,7 @@ class AuthorityTests(unittest.TestCase):
         from media_importer.store import Store
         from media_importer.destination_binding import bind
         from test_service import footage
-        directory = self.root / 'data'; store = Store(directory)
+        directory = self.root / 'data'; store = Store.create(directory)
         try:
             document, _ = convert(self.old, self.root)
             store.batch(document['archive']['id'], [footage()]); before=store.files()

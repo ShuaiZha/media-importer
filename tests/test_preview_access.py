@@ -26,7 +26,7 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
         from websockets.asyncio.server import serve
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.db = Store(self.root)
+        self.db = Store.create(self.root)
         self.token = 'a' * 64
         self.streams = 0
         self.commands = []
@@ -168,7 +168,7 @@ class AccessTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(b'404', await self.http(self.path+path))
             self.assertEqual(3,fetch.call_count)
         def revoke(_url):
-            db=Store(self.root)
+            db=Store.create(self.root)
             try:db.set_meta('live_preview',{**self.state,'stop_requested':True})
             finally:db.close()
             return b'fragment'

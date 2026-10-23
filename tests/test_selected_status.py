@@ -4,7 +4,7 @@ import unittest
 
 from media_importer.bot_cards import detail_content, progress_card, status_content
 from media_importer.model import now
-from media_importer.notifications import freeze_completion, initialize
+from media_importer.outbox import freeze_completion, initialize
 from media_importer.storage import cache_evidence
 import test_cache_status
 from test_service import footage, FakeSource

@@ -309,7 +309,7 @@ class ConnectionTests(unittest.TestCase):
         decide(self.store, self.settings, state['id'], True)
         service = Service(self.config(), self.store, source, target, threading.Event())
         def check_before_delete(asset):
-            db = Store(self.store.directory)
+            db = Store.create(self.store.directory)
             try:
                 check = Service(service.config, db, source, target, threading.Event())
                 rows = check.rows()

@@ -29,7 +29,7 @@ class CacheCoordinationTests(unittest.TestCase):
                 raise AssertionError('fixture timed out')
 
         def clean_source():
-            db = Store(self.store.directory)
+            db = Store.create(self.store.directory)
             child = Service(self.config, db, self.source, self.remote, self.stop)
             child.cache_guard = service.cache_guard
             try:

@@ -50,6 +50,8 @@ Mac 无线工作放入可终止的子进程。凭据只在该进程中读取；�
 | [live_preview](../media_importer/live_preview.py) / [preview_worker](../media_importer/preview_worker.py) / [preview_cards](../media_importer/preview_cards.py) | 按需预览会话、子进程回收与飞书入口；Mac 包内置 go2rtc |
 | [store](../media_importer/store.py) / [storage](../media_importer/storage.py) | 任务、锁、缓存盘与副本核验 |
 | [lifecycle](../media_importer/lifecycle.py) | 完成后收尾，保留必要去重与待发结果 |
+| [database](../media_importer/database.py) | 启动时初始化与迁移；运行连接只检查格式，不建表或创建数据库 |
+| [completion](../media_importer/completion.py) / [outbox](../media_importer/outbox.py) | 与文件变更同时保存完成事实；收尾时冻结待发结果，不依赖飞书排版与发送 |
 | [bot](../media_importer/bot.py) / [notifications](../media_importer/notifications.py) | 本人交互、发送队列与失败重试 |
 | [native](../media_importer/native/) | 安装、更新、卸载与系统服务 |
 
@@ -59,6 +61,8 @@ Mac 无线工作放入可终止的子进程。凭据只在该进程中读取；�
 | --- | --- |
 | `files`、`source_groups` | 未收尾任务、素材关联和删除事实 |
 | `batches`、`transfer_runs` | 本轮完成条件与通知归属 |
+| `task_results` | 与任务变更同时保存的完成摘要，随任务收尾删除 |
+| `notification_events` | 待发送结果、重试和原卡更新依据，不参与归档判定 |
 | `source_index` | 保留原片时去重；完整扫描确认原片不存在后移除 |
 | `destination_anchor` | 连接地址变化后核验逻辑目的地 |
 | `.receipts/` | 数据库损坏时重建完整缓存任务 |
@@ -69,6 +73,10 @@ Mac 无线工作放入可终止的子进程。凭据只在该进程中读取；�
 两路停止后，`settle` 在同一事务中冻结待发结果、保留去重与归档依据，再删除已完成明细。有完整缓存、待清理临时文件、清理错误或删除结果未知时不收尾。通知失败独立重试，不重新上传。
 
 全量与选定任务共用 `retirement_ready` 和 `retire_rows`，由调用方固定范围并先保存完成结果。`task_facts` 统一导入、正式归档及两项清理事实，不执行 IO 或授权删除；归档完成与允许收尾仍是不同边界。
+
+数据库初始化只从启动、检查、恢复等明确入口执行，普通 `Store` 连接不建表、不迁移、不创建缺失数据库。相机页面的状态、结果和媒体查询使用只读连接，不唤醒传输；查询不需要取得写事务。
+
+`task_results` 是未收尾任务的完成摘要，与文件状态在同一事务中更新；不保存历史明细。通知只读取摘要、排版并发送，不再扫描文件表推断完成。任务收尾与待发结果原子提交，发送失败独立重试；完成结果与清理结果分别表达，收尾后摘要随任务删除，待发结果保留到发送成功。
 
 同一份数据仅一个传输实例。业务配置只有 JSON 一个来源；`.env` 仅保存部署字段与飞书首次连接凭据，SMB 密码只存本机 `credentials/`；JSON 和控制队列只保存随机引用，连接检查通过后才原子切换。更新快照、备份与迁移包含凭据文件。素材身份决定去重，归档禁止覆盖，源清理、归档和缓存清理分别记录，不能相互替代。
 

@@ -1,8 +1,6 @@
 """Durable, best-effort outgoing notifications, independent from transfer workers."""
-import hashlib
 import copy
 import json
-import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
@@ -11,28 +9,10 @@ from pathlib import Path
 
 from .adapters import notification_adapter
 from .model import BackupError, ConfigError
-from .task_facts import archive_complete
+from .completion import read as read_results
+from .outbox import _digest
 
 
-def retire_references(db, runs, file_ids):
-    """Drop only message tracking whose durable task scope has been retired."""
-    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='notification_events'").fetchone():
-        return
-    db.executemany('DELETE FROM notification_events WHERE batch_id=? AND detached=0', ((key,) for key in runs))
-    for entry in db.execute("SELECT key,value FROM meta WHERE key LIKE 'notification_progress_card:%' OR key LIKE 'event_message:completed:%'").fetchall():
-        value = json.loads(entry['value'])
-        if value.get('batch_id') in runs or any(entry['key'].endswith(':' + key) for key in runs):
-            db.execute('DELETE FROM meta WHERE key=?', (entry['key'],))
-    notice_row = db.execute("SELECT value FROM meta WHERE key='notification_state'").fetchone()
-    if notice_row:
-        notice = json.loads(notice_row[0])
-        for key, episode in list(notice.get('problems', {}).items()):
-            if episode.get('files') and set(episode['files']) <= file_ids:
-                notice['problems'].pop(key)
-                event_id = 'failed:' + notice.get('scope', '') + ':' + key + ':' + str(episode['since'])
-                db.execute('DELETE FROM notification_events WHERE id=?', (event_id,))
-                db.execute('DELETE FROM meta WHERE key=?', ('event_message:' + event_id,))
-        db.execute("UPDATE meta SET value=? WHERE key='notification_state'", (json.dumps(notice),))
 
 
 DELIVERY_ERRORS = {
@@ -98,68 +78,13 @@ def _put_meta(db, key, value):
         WHERE meta.value<>excluded.value""", (key, json.dumps(value, ensure_ascii=False)))
 
 
-def initialize(db):
-    db.execute("""CREATE TABLE IF NOT EXISTS notification_events (
-        id TEXT PRIMARY KEY, kind TEXT NOT NULL, scope TEXT NOT NULL, batch_id TEXT,
-        payload TEXT NOT NULL, state TEXT NOT NULL, created_at REAL NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at REAL NOT NULL DEFAULT 0,
-        sent_at REAL, detached INTEGER NOT NULL DEFAULT 0)""")
-    if 'detached' not in {r[1] for r in db.execute('PRAGMA table_info(notification_events)')}:
-        db.execute('ALTER TABLE notification_events ADD COLUMN detached INTEGER NOT NULL DEFAULT 0')
-
-
-def freeze_completion(db, config, run, rows, *, create):
-    """Detach a bounded result from file details in the retirement transaction."""
-    if run['selection'].startswith('selected:'):
-        # Explicit selected imports update their own operation card, including
-        # completion. They do not inherit the full-sync notification policy.
-        return
-    from .paths import archive_location
-    from pathlib import PurePosixPath
-    scope = _digest([config.destination_id, run['source_type'], run['serial']])
-    key = 'completed:' + scope + ':' + run['id']
-    saved = db.execute('SELECT * FROM notification_events WHERE id=?', (key,)).fetchone()
-    if saved and saved['detached']:
-        return  # Preserve an already-frozen result, retries and progress-message references.
-    enabled = config.values['notifications']['enabled']
-    if not enabled or saved and saved['state'] in ('suppressed', 'cancelled') or not saved and not create:
-        return
-    if not create and saved and saved['state'] == 'sent':
-        return
-    from .source_connection import deletion_enabled
-    active_source = (run['source_type'], run['serial']) == (config.source['type'], config.source['serial'])
-    view = {'policy': {'delete_source': active_source and deletion_enabled(config, _meta(db, 'source_selection', {}))},
-            'files': [{**r, 'cache_state': 'missing'} for r in rows]}
-    result = {**NotificationWorker._completion_result(rows, view), 'destination_name': config.destination['name']}
-    text = NotificationWorker._completion(rows, view)
-    locations = sorted({archive_location(config.destination, str(PurePosixPath(r['remote_path']).parent))
-                        for r in rows if r['remote_path']})
-    previous = _meta(db, 'event_message:' + key, {})
-    progress = [json.loads(r[0]) for r in db.execute("SELECT value FROM meta WHERE key LIKE 'notification_progress_card:%'")]
-    pending_progress = [p for p in progress if p.get('batch_id') == run['id'] and p.get('message_id') and p.get('recipient')]
-    if saved and saved['state'] == 'sent' and (not previous.get('id') or
-            previous.get('signature') == _digest([text, locations]) and not any(not p.get('finished') for p in pending_progress)):
-        return
-    payload = {'title': '素材导入助手 · 归档完成', 'text': text, 'result': result, 'locations': locations,
-               'progress_messages': [{'id': p['message_id'], 'recipient': p['recipient']} for p in pending_progress],
-               'update_message_id': previous.get('id'), 'update_recipient': previous.get('recipient')}
-    db.execute('''INSERT INTO notification_events (id,kind,scope,batch_id,payload,state,created_at,detached)
-        VALUES (?,'completed',?,?,?,'pending',?,1) ON CONFLICT(id) DO UPDATE SET
-        payload=excluded.payload,detached=1,state='pending' ''',
-        (key, scope, run['id'], json.dumps(payload, ensure_ascii=False), time.time()))
 
 
 @contextmanager
 def _database(directory):
-    db = sqlite3.connect(str(Path(directory) / "state.sqlite3"), timeout=5)
-    db.row_factory = sqlite3.Row
+    from .database import connect
+    db = connect(directory, timeout=5)
     try:
-        db.execute("PRAGMA busy_timeout=5000")
-        db.execute('BEGIN IMMEDIATE')
-        initialize(db)
-        db.execute("INSERT OR IGNORE INTO meta (key,value) VALUES (?,?)",
-                   ("notification_instance_id", json.dumps(uuid.uuid4().hex)))
-        db.commit()
         yield db
     finally:
         db.close()
@@ -213,9 +138,7 @@ def _duration(seconds):
     return f"{seconds // 3600} 小时 {(seconds % 3600) // 60} 分"
 
 
-def _digest(value):
-    # Only compact metadata is hashed; media is never read by the notification worker.
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:24]
+
 
 
 class NotificationWorker:
@@ -237,20 +160,10 @@ class NotificationWorker:
                     pass  # An unavailable state disk must not kill the notification or transfer worker.
             self.stop.wait(5)
 
-    def _batches(self, db, destination, source, selection='all'):
-        result = {}
-        for row in db.execute("""SELECT b.id batch_id,b.created_at batch_created,b.imported_at imported_at,b.historical,f.*
-                FROM transfer_runs b JOIN transfer_run_files bf ON bf.run_id=b.id
-                JOIN files f ON f.id=bf.file_id WHERE b.destination=? AND (b.selection=? OR b.historical=1) ORDER BY b.created_at""", (destination, selection)):
-            asset = json.loads(row["asset"])
-            if asset.get("serial") != source["serial"] or asset.get("source_type") != source["type"]:
-                continue
-            result.setdefault(row["batch_id"], []).append(dict(row))
-        return result
-
-    @staticmethod
-    def _complete(rows):
-        return archive_complete(rows)
+    def _results(self, db, values, destination):
+        from .config import Config
+        config = Config.from_values({**values, 'destination': {**values['destination'], 'archive_id': destination}})
+        return read_results(db, config, selection=values['backup']['media_scope'])
 
     @staticmethod
     def _cleaning(view, batch_id):
@@ -276,12 +189,12 @@ class NotificationWorker:
             delivery["state"] = "idle"
         _put_meta(db, "notification_delivery", delivery)
 
-    def _baseline(self, db, batches, scope, stamp):
-        for batch_id, rows in batches.items():
-            if rows and rows[0].get("imported_at"):
+    def _baseline(self, db, reports, scope, stamp):
+        for batch_id, report in reports.items():
+            if report.get('imported_at'):
                 self._enqueue(db, "imported:" + scope + ":" + batch_id, "imported", scope, "", "", stamp,
                               batch_id=batch_id, state="suppressed")
-            if self._complete(rows):
+            if report['complete']:
                 self._enqueue(db, "completed:" + scope + ":" + batch_id, "completed", scope, "", "", stamp,
                               batch_id=batch_id, state="suppressed")
 
@@ -369,21 +282,8 @@ class NotificationWorker:
         return _digest(signature), "\n".join(lines)
 
     @staticmethod
-    def _completion_result(rows, view):
-        """Keep completion facts independent of a later round or retired tasks."""
-        archived = [r for r in rows if r['state'] != 'excluded']
-        total = sum(json.loads(row["asset"])["size"] for row in archived)
-        from .status import cleanup_summary
-        live = {f['id']: f for f in view.get('files', [])}
-        files = [{**live.get(r['id'], {}), **r, 'imported': r['state'] != 'excluded'} for r in rows]
-        outcome = cleanup_summary(files, view.get('policy', {}).get('delete_source', False))
-        return {'file_count': len(archived), 'byte_count': total, 'cleanup': outcome,
-                'ignored_preview_files': len(rows) - len(archived)}
-
-    @staticmethod
-    def _completion(rows, view):
+    def _completion(result):
         from .bot_cards import cleanup_text
-        result = NotificationWorker._completion_result(rows, view)
         return f"{result['file_count']} 个文件 · {_size(result['byte_count'])}\n" + cleanup_text(
             result['cleanup'], result['ignored_preview_files'])
 
@@ -508,20 +408,17 @@ class NotificationWorker:
                 _put_meta(db, 'notification_delivery', delivery)
 
     @staticmethod
-    def _completed_view(view, rows):
+    def _completed_view(view, report):
         result = copy.deepcopy(view)
-        archived = [r for r in rows if r['state'] != 'excluded']
-        result['batch'] = {'id': rows[0]['batch_id'], 'scanned': True, 'total_files': len(archived),
-                           'total_bytes': sum(json.loads(r['asset'])['size'] for r in archived),
-                           'excluded_preview_files': len(rows) - len(archived),
-                           'completed_files': len(archived), 'imported_files': len(archived),
+        facts = report['result']
+        result['batch'] = {'id': report['id'], 'scanned': True, 'total_files': facts['file_count'],
+                           'total_bytes': facts['byte_count'],
+                           'excluded_preview_files': facts['ignored_preview_files'],
+                           'completed_files': facts['file_count'], 'imported_files': facts['file_count'],
                            'percent': 100, 'import_percent': 100}
         result['stages'] = {name: {'phase': 'completed'} for name in ('import', 'upload')}
         result['queues'] = {name: {'pending_files': 0} for name in ('import', 'upload')}
-        from .status import cleanup_summary
-        live = {f['id']: f for f in view.get('files', [])}
-        result['cleanup'] = cleanup_summary([{**live.get(r['id'], {}), **r, 'imported': r['state'] != 'excluded'} for r in rows],
-                                            view.get('policy', {}).get('delete_source', False))
+        result['cleanup'] = facts['cleanup']
         return result
 
     @staticmethod
@@ -599,7 +496,7 @@ class NotificationWorker:
             destination = identity(db, Config.from_values(values))
             scope = _digest([destination, values["source"]["type"], values["source"]["serial"]])
             state = _meta(db, "notification_state", {})
-            batches = self._batches(db, destination, values["source"], values['backup']['media_scope'])
+            batches = self._results(db, values, destination)
             if state.get("scope") != scope:
                 state = {"scope": scope, "armed_at": None, "problems": {}}
             resumed = enabled and state.get('armed_at') is None
@@ -607,7 +504,7 @@ class NotificationWorker:
                 db.execute("UPDATE notification_events SET state='cancelled' WHERE scope<>? AND state='pending'", (scope,))
                 self._observe_connection(db, scope, values, view, stamp)
                 db.execute("UPDATE notification_events SET state='cancelled' WHERE detached=0 AND state='pending' AND kind IN ('completed','imported','progress') AND batch_id IS NOT NULL AND batch_id NOT IN (SELECT id FROM transfer_runs)")
-                self._baseline(db, {k: v for k, v in batches.items() if v[0]['historical']}, scope, stamp)
+                self._baseline(db, {k: v for k, v in batches.items() if v['historical']}, scope, stamp)
                 if not enabled or not state.get("initialized"):
                     self._baseline(db, batches, scope, stamp)
                 if not enabled or state.get("armed_at") is None:
@@ -641,13 +538,13 @@ class NotificationWorker:
                     db.commit()
                     self._send_pending(db, scope, options, stamp, view, starts_only=True)
                     return
-                for batch_id, rows in batches.items():
-                    if rows[0]['historical']:
+                for batch_id, report in batches.items():
+                    if report['historical']:
                         continue
-                    if self._complete(rows) and not self._cleaning(view, batch_id):
+                    if report['complete'] and not self._cleaning(view, batch_id):
                         self._enqueue(db, "completed:" + scope + ":" + batch_id, "completed", scope,
-                                      "素材导入助手 · 归档完成", self._completion(rows, view), stamp, batch_id=batch_id)
-                    if (rows and rows[0].get('imported_at') and not self._complete(rows)
+                                      "素材导入助手 · 归档完成", self._completion(report['result']), stamp, batch_id=batch_id)
+                    if (report.get('imported_at') and not report['complete']
                             and batch_id == view.get('batch', {}).get('id')
                             and view.get('unplug', {}).get('ready') and view.get('unplug', {}).get('can_disconnect', True)
                             and not self._cleaning(view, batch_id)):
@@ -657,7 +554,7 @@ class NotificationWorker:
                 active = any(stage.get("phase") in ("downloading", "uploading") and
                              not view.get("controls", {}).get(name, {}).get("requested_stop", False)
                              for name, stage in view.get("stages", {}).items())
-                if not active or (self._complete(batches.get(view["batch"].get("id"), []))
+                if not active or (batches.get(view["batch"].get("id"), {}).get("complete", False)
                                   and not view.get('selection', {}).get('cached_outside_scope_files')):
                     db.execute("UPDATE notification_events SET state='cancelled' WHERE kind='progress' AND state='pending'")
                 db.execute("UPDATE notification_events SET state='cancelled' WHERE kind='progress' AND state='pending' AND batch_id IS NOT ?",
@@ -710,48 +607,43 @@ class NotificationWorker:
                 startup_key = self._card_key(scope, {**view, 'batch': {}}, self.settings.notification_credentials())
                 if _meta(db, startup_key, {}).get('message_id'):
                     self._refresh_existing_progress(db, scope, view, options, stamp)
-            if (not self._complete(batches.get(view['batch'].get('id'), [])) and
+            if (not batches.get(view['batch'].get('id'), {}).get('complete', False) and
                     (resumed or not active or any(stage.get('phase', '').startswith('waiting') or stage.get('phase') == 'failed'
                                        for stage in view.get('stages', {}).values()))):
                 self._refresh_existing_progress(db, scope, view, options, stamp)
-            for rows in batches.values():
-                if self._complete(rows):
-                    self._refresh_existing_progress(db, scope, self._completed_view(view, rows), options, stamp)
-                    self._refresh_completion(db, scope, rows, view, options, stamp)
+            for report in batches.values():
+                if report['complete']:
+                    self._refresh_existing_progress(db, scope, self._completed_view(view, report), options, stamp)
+                    self._refresh_completion(db, scope, report, view, options, stamp)
 
-    def _refresh_completion(self, db, scope, rows, view, options, stamp):
+    def _refresh_completion(self, db, scope, report, view, options, stamp):
         """Cleanup may finish after archive delivery; correct that same result card."""
-        key = 'event_message:completed:' + scope + ':' + rows[0]['batch_id']
+        key = 'event_message:completed:' + scope + ':' + report['id']
         sent = _meta(db, key, {})
         if not sent.get('id') or sent.get('recipient') != self._recipient() or sent.get('retry_at', 0) > stamp:
             return
-        from .config import Config
-        from .paths import archive_location
-        from pathlib import PurePosixPath
         from .bot_cards import event_card
-        config = Config.from_values(self.settings.read()['config'])
-        locations = sorted({archive_location(config.destination, str(PurePosixPath(r['remote_path']).parent))
-                            for r in rows if r.get('remote_path')})
-        text = self._completion(rows, view)
+        locations = report['locations']
+        text = self._completion(report['result'])
         signature = _digest([text, locations])
         if signature == sent.get('signature'):
             return
         try:
             content = event_card('completed', '归档完成', text, view, keyword=options.get('keyword', ''),
-                                 updated_at=_stamp(stamp), locations=locations, result={**self._completion_result(rows, view), 'destination_name': config.destination['name']})
+                                 updated_at=_stamp(stamp), locations=locations, result=report['result'])
             content['config']['update_multi'] = True
             if self.settings.notification_credentials().get('receive_id_type') == 'open_id':
                 from .bot import Bot
                 bot = Bot(self.settings, self.directory)
-                content['elements'] += bot.result_actions(self._completion_result(rows, view), locations)
+                content['elements'] += bot.result_actions(report['result'], locations)
             adapter = notification_adapter('feishu')
             (self.updater or adapter.update_card)(self.settings.notification_credentials(), sent['id'], content)
-            sent.update(signature=signature, retry_at=0)
+            sent.update(signature=signature, result_signature=_digest([report['result'], locations]), retry_at=0)
         except Exception:
             sent['retry_at'] = stamp + 30
         with db:
             db.execute('BEGIN IMMEDIATE')
-            if db.execute('SELECT 1 FROM transfer_runs WHERE id=?', (rows[0]['batch_id'],)).fetchone():
+            if db.execute('SELECT 1 FROM transfer_runs WHERE id=?', (report['id'],)).fetchone():
                 _put_meta(db, key, sent)
 
     def _recover_card(self, db, event_id, scope, stamp, message, title='缓存上传已恢复'):
@@ -845,7 +737,7 @@ class NotificationWorker:
             return
         options = latest["notifications"]
         current_batches = None
-        current = []
+        current = {}
         for row in candidates:
             if starts_only and row['kind'] not in ('started', 'requested_progress'):
                 continue
@@ -866,15 +758,15 @@ class NotificationWorker:
             payload = json.loads(row["payload"])
             if row["kind"] == "completed" and not row['detached']:
                 if current_batches is None:
-                    current_batches = self._batches(db, latest_destination, latest["source"], latest['backup']['media_scope'])
-                current = current_batches.get(row["batch_id"], [])
-                if not self._complete(current) or self._cleaning(view, row["batch_id"]):
+                    current_batches = self._results(db, latest, latest_destination)
+                current = current_batches.get(row["batch_id"], {})
+                if not current.get('complete') or self._cleaning(view, row["batch_id"]):
                     with db:
                         db.execute("UPDATE notification_events SET next_attempt_at=? WHERE id=?", (stamp + 5, row["id"]))
                         self._reconcile_delivery(db, options, stamp)
                     continue
-                payload["text"] = self._completion(current, view)
-                payload['result'] = self._completion_result(current, view)
+                payload.update(title='素材导入助手 · 归档完成', text=self._completion(current['result']),
+                               result=current['result'], locations=current['locations'])
             elif row['kind'] == 'imported':
                 if row['batch_id'] != view.get('batch', {}).get('id'):
                     with db:
@@ -903,12 +795,11 @@ class NotificationWorker:
                 self._send_progress(db, scope, progress_view, options, stamp)
             else:
                 from .bot_cards import event_card
-                from .paths import archive_location
-                from pathlib import PurePosixPath
-                locations = payload['locations'] if row['detached'] else sorted({archive_location(latest['destination'], str(PurePosixPath(r['remote_path']).parent))
-                                    for r in current if r.get('remote_path')})
+                locations = payload.get('locations', [])
                 if payload.get('result'):
                     payload['result'].setdefault('destination_name', self.settings.read()['config']['destination']['name'])
+                if row['kind'] == 'completed' and payload.get('result'):
+                    payload.update(title='素材导入助手 · 归档完成', text=self._completion(payload['result']))
                 content = event_card(row['kind'], payload['title'], payload['text'], view,
                                      keyword=options.get('keyword', ''), updated_at=_stamp(stamp), locations=locations,
                                      result=payload.get('result'))
@@ -953,7 +844,8 @@ class NotificationWorker:
                                 db.execute('UPDATE notification_events SET payload=? WHERE id=?', (json.dumps(final_payload, ensure_ascii=False), row['id']))
                             elif latest_event:
                                 _put_meta(db, 'event_message:' + row['id'], {'id': message_id, 'recipient': self._recipient(),
-                                    'signature': _digest([payload['text'], locations])})
+                                    'signature': _digest([payload['text'], locations]),
+                                    'result_signature': _digest([payload.get('result'), locations])})
         except Exception as exc:
             code, message = _safe_failure(exc)
             next_retry_at = stamp + min(1800, 30 * 2 ** min(row["attempts"], 6))

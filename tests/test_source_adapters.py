@@ -105,7 +105,7 @@ class SourceAdapterTests(unittest.TestCase):
         raw['source_options'].update(url=URL, serial=SERIAL)
         raw['backup']['source_transport'] = 'usb'
         self.path.write_text(json.dumps(raw))
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.addCleanup(lambda: self.store.close())
         self.settings = Settings(self.path, self.store.directory)
         self.remote = FakeDestination()
@@ -218,7 +218,7 @@ class SourceAdapterTests(unittest.TestCase):
         saved = {row['id']: (row['asset_id'], row['asset'], row['remote_path'],
                               self.store.cached_path(row).read_bytes()) for row in rows}
         self.store.close()
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.remote.online = True
         self.assertTrue(self.service().cycle()['complete'])
         self.assertEqual(before_settings, self.path.read_bytes())

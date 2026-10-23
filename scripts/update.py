@@ -180,7 +180,7 @@ Config.load('/config/settings.json')
 root=Path('/tmp/probe');root.mkdir()
 source=Path('/snapshot/state.sqlite3')
 if source.is_file(): shutil.copyfile(source,root/'state.sqlite3')
-store=Store(root)
+store=Store.create(root)
 try:
     assert store.db.execute('PRAGMA quick_check').fetchone()[0]=='ok'
     identity=store.get_meta('cache_identity')

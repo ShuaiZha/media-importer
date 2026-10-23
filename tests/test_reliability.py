@@ -26,7 +26,7 @@ class ReliabilityTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.env = patch.dict(os.environ, ENV, clear=True)
         self.env.start()
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.volume = '12345678123456781234567812345678'
         self.store.set_meta('cache_identity', self.volume)
         (self.store.cache / MARKER).write_text(self.volume)
@@ -68,7 +68,7 @@ class ReliabilityTests(unittest.TestCase):
         self.service().cycle()
         self.assertEqual(1, self.store.get(bad['id'])['attempts'])
         self.store.close()
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.assertEqual(bad['retry_at'], self.store.get(bad['id'])['retry_at'])
 
     def test_cache_volume_failure_still_stops_both_lanes(self):
@@ -136,7 +136,7 @@ class ReliabilityTests(unittest.TestCase):
         # documented for Compose. Each lane opens its own Store connection.
         (output / 'data/cache').rmdir()
         (output / 'data/cache').symlink_to(self.root / 'data/cache', target_is_directory=True)
-        self.store = Store(output / 'data')
+        self.store = Store.create(output / 'data')
         self.assertEqual({r['id'] for r in rows}, {r['id'] for r in self.store.files()})
         self.source.assets.clear()
         self.service().cycle()
@@ -153,7 +153,7 @@ class ReliabilityTests(unittest.TestCase):
         self.assertEqual('publishing', saved['state'])
         output = self.root / 'recovered'
         recover(self.store.cache, output)
-        restored = Store(output / 'data')
+        restored = Store.create(output / 'data')
         restored.cache = self.store.cache
         try:
             self.service(restored).upload_cached(restored.get(row['id']))

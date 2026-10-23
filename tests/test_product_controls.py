@@ -42,7 +42,7 @@ class DrainTests(unittest.TestCase):
         source.download, destination.upload = importing, sending
         result = {}
         def run():
-            db = Store(self.data)
+            db = Store.create(self.data)
             try:
                 result['value'] = Service(config, db, source, destination, self.stop, control).safe_cycle()
             finally:
@@ -120,7 +120,7 @@ class DrainTests(unittest.TestCase):
         source.download = request_drain
         result = {}
         def run():
-            db = Store(self.data)
+            db = Store.create(self.data)
             try:
                 result['value'] = Service(config, db, source, remote, self.stop, control).safe_cycle()
             finally:

@@ -16,7 +16,7 @@ from test_service import configuration, footage, FakeSource, FakeDestination, re
 class SelectedTransferTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.store = Store(Path(self.tmp.name) / 'data')
+        self.store = Store.create(Path(self.tmp.name) / 'data')
         self.config = configuration(enabled=False, delete_source_after_import=True, archive_previews=False)
         self.assets = [footage(n, primary=p) for n in (1, 2, 3) for p in (True, False)]
         self.source = FakeSource(self.assets)

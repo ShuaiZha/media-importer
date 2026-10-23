@@ -25,7 +25,7 @@ class BackupTests(unittest.TestCase):
         self.config = configuration(enabled=True, delete_source_after_import=True)
         self.settings.write_text(json.dumps(preferences(self.config.values)))
         self.credentials = self.root / '.env'; self.credentials.write_text("DESTINATION_PASSWORD='secret'\n")
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.store.set_meta('cache_identity', 'test-volume')
         (self.store.cache / MARKER).write_text('test-volume\n')
         self.batch = self.store.batch(self.config.destination_id, [footage(1)])
@@ -56,7 +56,7 @@ class BackupTests(unittest.TestCase):
         shutil.copy2(self.bundle / 'settings.json', target_settings)
         result = prepare_restore(restored, target_settings, self.bundle)
         self.assertFalse(result['sync_enabled']); self.assertFalse(result['delete_source'])
-        db = Store(restored)
+        db = Store.create(restored)
         try:
             self.assertEqual(before, db.files())
             row = db.files()[0]

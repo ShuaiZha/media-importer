@@ -94,7 +94,7 @@ class Workspace:
         if action not in shapes or set(value) != shapes[action]: raise ConfigError('请求参数无效')
         if 'nonce' in value and (not isinstance(value['nonce'], str) or not re.fullmatch('[0-9a-f]{32}', value['nonce'])):
             raise ConfigError('操作标识无效')
-        db = Store(self.directory)
+        db = Store(self.directory, readonly=action in ('status', 'result'))
         future = None
         try:
             access = authorize(db, token)
@@ -136,7 +136,8 @@ class Workspace:
                 result = stop_request(db, owner, value['id'])
                 return {'id': result['id'], 'state': result['state']}
         finally:
-            self.control.changed.set()
+            if action not in ('status', 'result'):
+                self.control.changed.set()
             db.close()
         if future:
             try:
@@ -145,7 +146,7 @@ class Workspace:
                 raise ConfigError('相机读取等待超时，请稍后刷新；当前传输记录已保留')
 
     async def media(self, token, resource, identifier, header):
-        db = Store(self.directory)
+        db = Store(self.directory, readonly=True)
         try:
             authorize(db, token)
             connection = db.get_meta('source_connection', {})
@@ -157,7 +158,7 @@ class Workspace:
             result = await asyncio.wait_for(asyncio.wrap_future(future), 35)
         except asyncio.TimeoutError:
             raise ConfigError('素材读取超时，请重试')
-        db = Store(self.directory)
+        db = Store(self.directory, readonly=True)
         try: authorize(db, token)  # Revocation also applies to an in-flight read.
         finally: db.close()
         return result

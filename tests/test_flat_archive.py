@@ -86,7 +86,7 @@ class FlatArchiveTests(unittest.TestCase):
         self.assertTrue(pending['remote_path'].endswith('_1.MP4'))
         self.assertEqual(FakeSource.payload(footage()), self.destination.objects[pending['temp_path']])
         self.store.close()
-        self.store = Store(self.temporary.name)
+        self.store = Store.create(self.temporary.name)
         self.stop.clear()
         self.service().upload_cached(self.store.get(row['id']))
         result = self.store.get(row['id'])

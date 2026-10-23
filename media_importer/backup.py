@@ -60,7 +60,7 @@ def export(directory, settings_path, env_path, bundle):
     with worker_lock(directory) as acquired:
         if not acquired:
             raise BackupError("请先停止传输与机器人服务再备份")
-        store = Store(directory)
+        store = Store.create(directory)
         try:
             if [r[0] for r in store.db.execute("PRAGMA quick_check")] != ["ok"]:
                 raise BackupError("任务数据库检查失败，未生成有效备份")
@@ -154,7 +154,7 @@ def prepare_restore(directory, settings_path, bundle=None):
                 path = safe_path(Path(directory), expected['path'])
                 if not path.is_file() or entry(Path(directory), path) != expected:
                     raise BackupError('恢复后的记录或缓存与备份不符：' + expected['path'])
-    store = Store(directory)
+    store = Store.create(directory)
     try:
         cache = inspect_cache(store.cache, store.get_meta('cache_identity'))
         if not cache['available']:

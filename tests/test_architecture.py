@@ -31,7 +31,7 @@ class ArchitectureTests(unittest.TestCase):
         self.path = self.root / 'settings.json'
         self.path.write_text(json.dumps(preferences(self.config.values)))
         self.settings = Settings(self.path)
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.source = FakeSource([footage(), footage(primary=False)])
         self.remote = FakeDestination()
         self.stop = threading.Event()
@@ -59,7 +59,7 @@ class ArchitectureTests(unittest.TestCase):
         self.assertTrue(all(r['cleanup'] == 'deleted' and r['source_deleted_at'] for r in before.values()))
         self.service().cycle()
         self.store.close()
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.service().cycle()
         for row in self.store.files():
             self.assertEqual('deleted', row['cleanup'])
@@ -84,7 +84,7 @@ class ArchitectureTests(unittest.TestCase):
         with self.store.db:
             self.store.db.execute("UPDATE files SET cleanup='absent',source_deleted_at=NULL WHERE id=?", (row['id'],))
         self.store.close()
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.assertIsNone(self.store.get(row['id'])['source_deleted_at'])
         self.assertEqual('absent', self.store.get(row['id'])['cleanup'])
 
@@ -105,7 +105,7 @@ class ArchitectureTests(unittest.TestCase):
         self.assertFalse(self.source.assets)
         self.source.snapshot = original_snapshot
         self.store.close()
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         restarted = self.service()
         restarted.cycle()
         self.assertTrue(all(r['cleanup'] == 'deleted' for r in self.store.files()))
@@ -255,7 +255,7 @@ class ArchitectureTests(unittest.TestCase):
             self.service().cycle()
             clean.assert_not_called()
         self.store.close()
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.assertEqual(cleared, self.store.get(row['id'])['cache_cleared_at'])
         self.assertEqual([], self.store.files(self.config.destination_id, work=True))
 

@@ -1,6 +1,5 @@
 import json
 import os
-import sqlite3
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -9,80 +8,20 @@ from .model import Asset, BackupError, now
 
 
 class Store:
-    def __init__(self, directory):
+    def __init__(self, directory, *, readonly=False):
         self.directory = Path(directory)
-        from .deployment import assert_runtime
+        from .deployment import assert_runtime, cache_path
+        from .database import connect
         assert_runtime(self.directory)
-        if os.environ.get('MEDIA_IMPORTER_RUNTIME') == 'native' and not self.directory.is_dir():
-            raise BackupError('原生数据目录不可访问；等待原磁盘，不创建替代目录')
-        self.directory.mkdir(parents=True, exist_ok=True)
-        from .deployment import cache_path
         self.cache = cache_path(self.directory)
-        from .storage import requires_mount
-        if not requires_mount() and os.environ.get('MEDIA_IMPORTER_RUNTIME') != 'native':
-            self.cache.mkdir(exist_ok=True)
-        self.db = sqlite3.connect(str(self.directory / "state.sqlite3"), timeout=15)
-        self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA synchronous=FULL")
-        version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 5):
-            self.db.close()
-            raise BackupError("数据库格式不受支持；请先离线迁移到版本 5")
-        from .camera_operations import initialize as initialize_camera_operations
-        initialize_camera_operations(self.db)
-        from .capture import initialize as initialize_capture
-        initialize_capture(self.db)
-        from .selected_imports import initialize as initialize_selected_imports
-        initialize_selected_imports(self.db)
-        self.db.executescript("""
-            CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS files (
-                id TEXT PRIMARY KEY, destination TEXT NOT NULL, asset_id TEXT NOT NULL,
-                asset TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
-                remote_path TEXT, temp_path TEXT,
-                cleanup TEXT NOT NULL DEFAULT 'pending', error TEXT,
-                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-                remote_identity TEXT, cache_identity TEXT, group_id TEXT, source_cleanup_error TEXT, error_stage TEXT,
-                attempts INTEGER NOT NULL DEFAULT 0, cache_cleanup_error TEXT
-            );
-            CREATE TABLE IF NOT EXISTS batches (
-                id TEXT PRIMARY KEY, destination TEXT NOT NULL,
-                created_at TEXT NOT NULL, updated_at TEXT NOT NULL, state TEXT NOT NULL, imported_at TEXT
-            );
-            CREATE TABLE IF NOT EXISTS batch_files (
-                batch_id TEXT NOT NULL, file_id TEXT NOT NULL,
-                PRIMARY KEY(batch_id, file_id)
-            );
-            CREATE TABLE IF NOT EXISTS source_groups (
-                id TEXT PRIMARY KEY, destination TEXT NOT NULL, members TEXT NOT NULL,
-                safe INTEGER NOT NULL, reason TEXT
-            );
-            CREATE TABLE IF NOT EXISTS temporary_cleanup (
-                id TEXT PRIMARY KEY, file_id TEXT NOT NULL, destination TEXT NOT NULL,
-                kind TEXT NOT NULL, path TEXT NOT NULL, identity TEXT,
-                state TEXT NOT NULL DEFAULT 'pending', error TEXT, created_at TEXT NOT NULL,
-                UNIQUE(kind, destination, path)
-            );
-            CREATE INDEX IF NOT EXISTS files_destination_state ON files(destination, state);
-            CREATE TABLE IF NOT EXISTS cache_receipts (
-                file_id TEXT PRIMARY KEY, imported_at TEXT NOT NULL
-            );
-        """)
-        with self.db:
-            self.db.execute('BEGIN IMMEDIATE')
-            self.db.execute("PRAGMA user_version=5")
-            columns = {r[1] for r in self.db.execute('PRAGMA table_info(files)')}
-            for name, definition in {'role': "TEXT NOT NULL DEFAULT 'original'", 'source_deleted_at': 'TEXT',
-                                     'source_absent_at': 'TEXT', 'cache_cleared_at': 'TEXT',
-                                     'error_code': 'TEXT', 'retry_at': 'REAL NOT NULL DEFAULT 0'}.items():
-                if name not in columns:
-                    self.db.execute(f'ALTER TABLE files ADD COLUMN {name} {definition}')
-        from .runs import initialize
-        initialize(self.db)
-        from .lifecycle import initialize as initialize_lifecycle
-        with self.db:
-            initialize_lifecycle(self.db)
+        self.db = connect(self.directory, readonly=readonly)
+
+    @classmethod
+    def create(cls, directory):
+        """Explicit bootstrap for startup, restore and isolated fixtures."""
+        from .database import initialize
+        initialize(directory)
+        return cls(directory)
 
     def close(self):
         self.db.close()
@@ -212,6 +151,8 @@ class Store:
             if fields.get('state') == 'uploaded':
                 from .runs import archived
                 archived(self.db, file_id)
+            from .completion import file_changed
+            file_changed(self.db, file_id)
 
     def batch_state(self, batch_id, state):
         with self.db:
@@ -223,6 +164,8 @@ class Store:
                 self.db.execute("UPDATE batches SET imported_at=? WHERE id=? AND imported_at IS NULL", (now(), batch_id))
                 from .runs import imported
                 imported(self.db, batch_id)
+                from .completion import refresh
+                refresh(self.db, [r[0] for r in self.db.execute('SELECT DISTINCT run_id FROM transfer_run_files WHERE file_id IN (SELECT file_id FROM batch_files WHERE batch_id=?)', (batch_id,))])
 
     def reporting_run(self, config):
         from .runs import reconcile

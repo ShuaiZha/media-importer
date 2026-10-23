@@ -42,7 +42,7 @@ class MediaScopeTests(unittest.TestCase):
         self.path = self.root / 'settings.json'
         self.path.write_text(json.dumps(preferences(configuration().values)))
         self.settings = Settings(self.path)
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.assets = [footage(), footage(primary=False), thumbnail(), photo(), photo('GPR', False), photo('THM', False)]
         self.source = FakeSource(self.assets)
         self.destination = FakeDestination()
@@ -182,7 +182,9 @@ class MediaScopeTests(unittest.TestCase):
         self.settings.update_preferences({'backup': {'media_scope': 'video', 'delete_source_after_import': True}})
         row = next(r for r in self.store.files() if self.store.asset(r).path == photo().path)
         row['batch_created'] = now()
-        text = NotificationWorker._completion([row], self.view())
+        from media_importer.completion import build
+        run = {'id': 'fixture', 'selection': 'video', 'historical': False, 'created_at': now()}
+        text = NotificationWorker._completion(build(run, [row])['result'])
         self.assertIn('未执行删除 1', text)
         self.assertNotIn('原片清理待处理', text)
 

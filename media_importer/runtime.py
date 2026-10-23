@@ -97,7 +97,7 @@ class Control:
 def daemon(config_path, directory, stop):
     from .service import Service
     control = Control(Settings(config_path, directory), stop)
-    store = Store(directory)
+    store = Store.create(directory)
     # Old cards stay invalid. The same camera does not need a new approval after restart.
     from .source_connection import restore, run as discover_sources
     item = control.settings.read()

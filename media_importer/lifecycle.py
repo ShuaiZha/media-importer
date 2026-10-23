@@ -135,9 +135,10 @@ def retire_rows(store, destination, rows):
     closed = set()
     for key in runs:
         if not db.execute('SELECT 1 FROM transfer_run_files WHERE run_id=?', (key,)).fetchone():
+            db.execute('DELETE FROM task_results WHERE run_id=?', (key,))
             db.execute('DELETE FROM transfer_runs WHERE id=?', (key,))
             closed.add(key)
-    from .notifications import retire_references
+    from .outbox import retire_references
     retire_references(db, closed, ids)
     db.execute("INSERT OR REPLACE INTO meta VALUES ('metadata_backup_reset',?)", (json.dumps(time.time_ns()),))
 
@@ -160,11 +161,10 @@ def settle(service):
     destination = service.destination_id
     from .source_connection import deletion_enabled
     delete_source = deletion_enabled(config, store.get_meta('source_selection', {}))
-    from .notifications import freeze_completion, initialize as notification_schema
+    from .outbox import freeze_completion
     from .media import selected_file_ids
     with store.db:
         store.db.execute('BEGIN IMMEDIATE')
-        notification_schema(store.db)
         rows = store.files(destination)
         initialized = store.get_meta('once_clear_initialized', False)
         groups = store.groups(destination)

@@ -82,6 +82,8 @@ def main(argv=None):
                 return 0 if healthy(args.data) else 1
             else:
                 from .adapters.feishu import send_card
+                from .database import initialize
+                initialize(args.data)
                 bot = Bot(Settings(args.config, args.data), args.data)
                 send_card(bot.credentials, bot.panel())
                 print("控制面板已发送到本人飞书单聊")
@@ -139,7 +141,7 @@ def main(argv=None):
         if args.command == "check":
             from .preflight import run
             from .settings import Settings
-            store = Store(args.data)
+            store = Store.create(args.data)
             try:
                 from .storage import initialize_cache
                 initialize_cache(store)
@@ -175,7 +177,7 @@ def main(argv=None):
                 with worker_lock(args.data) as acquired:
                     if not acquired:
                         raise BackupError("请先停止传输服务，再运行缓存核验")
-                    store = Store(args.data)
+                    store = Store.create(args.data)
                     try:
                         result = Service(config, store, source, destination, stop).verify_caches()
                         emit(result)

@@ -28,7 +28,7 @@ class CameraOperationTests(unittest.TestCase):
         self.env.start()
         self.path = self.root / 'settings.json'
         self.path.write_text(json.dumps(preferences(configuration(enabled=False).values)))
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.settings = Settings(self.path, self.store.directory)
         self.config = Config.from_values(self.settings.read()['config'])
         self.source = FakeSource([footage(), footage(primary=False)])

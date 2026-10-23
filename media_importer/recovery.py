@@ -168,7 +168,7 @@ def recover(cache, output, settings_path=None, *, export=False):
             fsync_directory(target.parent)
             result['recovered'].append({'id': receipt['file_id'], 'path': str(candidate)})
     else:
-        store = Store(output / 'data')
+        store = Store.create(output / 'data')
         try:
             store.set_meta('cache_identity', volume)
             store.set_meta('destination_binding', json.loads(next(iter(bindings))))

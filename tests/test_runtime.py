@@ -16,7 +16,7 @@ class RuntimeTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name);self.data=self.root/'data'
         self.env=patch.dict(os.environ,ENV,clear=True);self.env.start()
         self.path=self.root/'settings.json';self.path.write_text(json.dumps(preferences(configuration().values)))
-        self.settings=Settings(self.path);self.store=Store(self.data);self.stop=threading.Event()
+        self.settings=Settings(self.path);self.store=Store.create(self.data);self.stop=threading.Event()
 
     def tearDown(self):self.store.close();self.env.stop();self.tmp.cleanup()
 
@@ -57,7 +57,7 @@ class RuntimeTests(unittest.TestCase):
             return download(asset,*args)
         source.download=importing;destination.upload=sending
         def run():
-            db=Store(self.data)
+            db=Store.create(self.data)
             try:outcome['result']=Service(config,db,source,destination,self.stop,control).safe_cycle()
             except Cancelled:outcome['result']={'reason':'paused'}
             finally:db.close()

@@ -24,7 +24,7 @@ class PreflightTests(unittest.TestCase):
         from media_importer.credentials import stage
         stage(self.root, json.loads(self.path.read_text())['archive']['credential_id'], ENV['DESTINATION_PASSWORD'])
         self.settings = Settings(self.path)
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.source, self.destination = Mock(), Mock()
         self.source.idle_reason.return_value = None
         self.patches = [patch('media_importer.preflight.create_source', return_value=self.source),

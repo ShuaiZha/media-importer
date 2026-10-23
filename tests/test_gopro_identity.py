@@ -81,7 +81,7 @@ class GoProIdentityTests(unittest.TestCase):
         self.camera = RebootCamera(self.config)
         self.remote = FakeDestination()
         self.directory = Path(self.temp.name) / 'data'
-        self.store = Store(self.directory)
+        self.store = Store.create(self.directory)
         self.addCleanup(lambda: self.store.close())
 
     def service(self):
@@ -114,7 +114,7 @@ class GoProIdentityTests(unittest.TestCase):
         before = [dict(r) for r in self.store.db.execute('SELECT * FROM source_index ORDER BY asset_id')]
         archives = copy.deepcopy(self.remote.objects)
         self.store.close()
-        self.store = Store(self.directory)
+        self.store = Store.create(self.directory)
         self.camera.created_shift = -32
         self.service().cycle()
         self.assertFalse(self.store.files())
@@ -136,7 +136,7 @@ class GoProIdentityTests(unittest.TestCase):
         cached = self.store.get(row['id'])
         content = self.store.cached_path(cached).read_bytes()
         self.store.close()
-        self.store = Store(self.directory)
+        self.store = Store.create(self.directory)
         self.camera.created_shift = 3600
         self.service().prepare_imports()
         self.assertEqual(cached, self.store.get(row['id']))

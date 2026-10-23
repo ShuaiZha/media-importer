@@ -9,6 +9,8 @@ from media_importer.bot import Bot
 from media_importer.bot_cards import detail_content, progress_card, status_content
 from media_importer.config import Config, ConfigError, DEFAULTS
 from media_importer.notifications import NotificationWorker
+from media_importer.completion import read as read_results
+from media_importer.task_facts import archive_complete
 from media_importer.store import Store
 import test_media_scope as media_fixtures
 from test_media_scope import thumbnail, photo
@@ -80,9 +82,9 @@ class PreviewPolicyTests(unittest.TestCase):
             self.assertIn('预览文件：未归档 2 个', json.dumps(detail_content(view), ensure_ascii=False))
             self.assertNotIn('3 / 3', text)
         rows = self.store.files()
-        self.assertTrue(NotificationWorker._complete(rows))
-        self.assertIn('1 个文件', NotificationWorker._completion(rows, view))
-        self.assertIn('预览文件：未归档 2 个', NotificationWorker._completion(rows, view))
+        self.assertTrue(archive_complete(rows))
+        self.assertIn('1 个文件', NotificationWorker._completion(next(iter(read_results(self.store.db, service.config).values()))['result']))
+        self.assertIn('预览文件：未归档 2 个', NotificationWorker._completion(next(iter(read_results(self.store.db, service.config).values()))['result']))
         self.assertTrue(service.cycle()['complete'])
         self.assertEqual(1, len(self.destination.uploads))
         self.assertEqual(1, len(self.source.downloads))
@@ -113,7 +115,7 @@ class PreviewPolicyTests(unittest.TestCase):
         self.assertFalse(service.cycle()['complete'])
         self.assertFalse(self.source.deletes)
         self.assertEqual(3, len(self.source.assets))
-        self.assertFalse(NotificationWorker._complete(self.store.files()))
+        self.assertFalse(archive_complete(self.store.files()))
         self.assertEqual(0, self.view()['batch']['imported_files'])
 
     def test_preview_policy_is_frozen_until_next_round_and_existing_records_are_immutable(self):
@@ -147,7 +149,7 @@ class PreviewPolicyTests(unittest.TestCase):
             self.store.db.execute('ALTER TABLE files DROP COLUMN role')
             self.store.db.execute('ALTER TABLE transfer_runs DROP COLUMN archive_previews')
         self.store.close()
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.assertEqual(before, self.store.files())
         self.assertEqual(cached, self.store.cached_path(before[1]).read_bytes())
         service = self.service(archive_previews=False)
@@ -197,13 +199,13 @@ class PreviewPolicyTests(unittest.TestCase):
         service.prepare_imports()
         before = self.store.files()
         self.store.close()
-        self.store = Store(self.root / 'data')
+        self.store = Store.create(self.root / 'data')
         self.assertEqual(before, self.store.files())
         service = self.service(archive_previews=True)
         self.assertTrue(service.cycle()['complete'])
         self.assertEqual(1, len(self.destination.uploads))
         worker = NotificationWorker(self.store.directory, self.settings, threading.Event())
-        batches = worker._batches(self.store.db, service.destination_id, service.config.source)
+        batches = read_results(self.store.db, service.config)
         rows = next(iter(batches.values()))
         view = self.view()
         card_view = worker._completed_view(view, rows)
@@ -228,7 +230,7 @@ class PreviewPolicyTests(unittest.TestCase):
                     self.assertEqual(2, view['cleanup']['preview_deleted'])
                 # A second isolated camera identity for the next subcase.
                 self.store.close()
-                self.store = Store(self.root / ('leftover' if not leftover else 'done'))
+                self.store = Store.create(self.root / ('leftover' if not leftover else 'done'))
 
 
 
