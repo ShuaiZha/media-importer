@@ -61,7 +61,7 @@ class SmbSession:
 
     def check_stop(self):
         if self.stop and self.stop.is_set():
-            raise Cancelled("同步已暂停，未完成上传将清理，完整缓存保留")
+            raise Cancelled("备份已暂停，未完成上传将清理，完整缓存保留")
 
     def disconnect(self):
         for connection in list(self.connections.values()):

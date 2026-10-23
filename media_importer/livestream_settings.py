@@ -23,7 +23,7 @@ def password(settings, value):
     try:
         return read(credential_path(settings.path.parent, value['credential_id']))
     except ConfigError:
-        raise ConfigError('直播 Wi-Fi 密码不可用，请在「相机与预览 → 直播网络」重新填写') from None
+        raise ConfigError('直播 Wi-Fi 密码不可用，请在「相机与画面 → 直播网络」重新填写') from None
 
 
 def draft(settings, fields, identifier, expected):

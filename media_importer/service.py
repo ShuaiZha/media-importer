@@ -97,7 +97,7 @@ class Service:
         if self.control:
             self.control.boundary()
         elif not self.allowed():
-            raise SyncDisabled("同步已关闭，任务与缓存已保留")
+            raise SyncDisabled("备份已关闭，任务与缓存已保留")
 
     def observe_source(self, source=None, *, store=None):
         source = source or self.source
@@ -252,7 +252,7 @@ class Service:
         if self.activity:
             self.activity.touch(self.stage)
         if self.control and self.control.transfer_stop.is_set():
-            raise Cancelled("同步已停止，保留未完成任务")
+            raise Cancelled("备份已停止，保留未完成任务")
         self.check_stop()
         current = time.monotonic()
         if self._samples and done < self._samples[-1][1]:
@@ -282,7 +282,7 @@ class Service:
         if self.stop.is_set() or self.pipeline_stop and self.pipeline_stop.is_set():
             raise Cancelled("正在停止，任务记录和缓存已保留")
         if self.control and not self.control.allowed():
-            raise SyncDisabled("同步已关闭或配置无效，任务与缓存已保留")
+            raise SyncDisabled("备份已关闭或配置无效，任务与缓存已保留")
         if self.stage == 'import':
             from .source_connection import require
             require(self.store, self.config)
@@ -509,7 +509,7 @@ class Service:
         self.verify_destination()
         require_cache(self.store)
         if not self.allowed():
-            raise SyncDisabled("同步已关闭")
+            raise SyncDisabled("备份已关闭")
         row = self.store.get(row["id"])
         asset = self.store.asset(row)
         cache = self.store.cached_path(row)
@@ -614,7 +614,7 @@ class Service:
         self.check_stop()
         require_cache(self.store)
         if not self.allowed():
-            raise SyncDisabled("同步已关闭")
+            raise SyncDisabled("备份已关闭")
         asset = self.store.asset(row)
         cache = self.store.cached_path(row)
         partial = cache.with_suffix(".download")
@@ -955,9 +955,9 @@ class Service:
         if not self.allowed():
             # Monitoring uses separate read-only clients whose stop events are not the transfer switches.
             self.store.status(transfer_health={})
-            self.report("paused", "同步已关闭，只检测连接状态")
+            self.report("paused", "备份已关闭，只检测连接状态")
             for stage in ("import", "upload"):
-                self.store.stage_status(stage, phase="paused", message="同步关闭，任务与完整缓存保留",
+                self.store.stage_status(stage, phase="paused", message="备份关闭，任务与完整缓存保留",
                                         speed_bytes_per_second=0, eta_seconds=None)
             return {"complete": False, "reason": "paused"}
         self.boundary()

@@ -42,7 +42,7 @@ class SettingsFormsTests(TestCase):
         self.bot.receive_message(self.message('设置'))
         self.process()
         result = json.dumps(self.sender.call_args.args[1], ensure_ascii=False)
-        for title in ('素材与清理', '传输与缓存', '消息通知', '归档存储', '相机与预览'):
+        for title in ('素材与清理', '传输与缓存', '消息通知', '归档存储', '相机与画面'):
             self.assertIn(title, result)
         self.assertIn('"tag": "button"', result)
         for page in ('transfer_settings', 'notification_settings', 'destination_settings', 'source_settings', 'advanced_settings', 'local_storage'):

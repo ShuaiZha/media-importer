@@ -14,6 +14,7 @@ from .paths import archive_location
 from .media import MEDIA_SCOPES, selected_file_ids
 from .task_facts import file_facts
 from .completion import cleanup_summary
+from .camera_state import project as camera_state
 
 
 def age(stamp):
@@ -53,7 +54,7 @@ def attention(live, enabled, configuration, health, files, stages):
         return {'required': True, 'message': '需要处理：传输服务未响应，请在本机检查后台服务。'}
     uncertain = [f for f in files if f['cache_state'] == 'unverified' and f['state'] != 'uploaded']
     if uncertain:
-        return {'required': True, 'message': f'需要处理：{len(uncertain)} 个完整缓存待核验，其他正常文件继续上传。请检查原缓存或备份；停止同步后按维护文档在本机核验缓存。'}
+        return {'required': True, 'message': f'需要处理：{len(uncertain)} 个完整缓存待核验，其他正常文件继续上传。请检查原缓存或备份；停止备份后按维护文档在本机核验缓存。'}
     if any(f['cache_state'] == 'unverified' and f['state'] == 'uploaded' for f in files):
         return {'required': True, 'message': '需要处理：已归档文件的残留缓存身份不符，已保留待核验；归档完成数量不受影响。'}
     if not health['cache']['available']:
@@ -62,7 +63,7 @@ def attention(live, enabled, configuration, health, files, stages):
     if missing:
         return {'required': True, 'message': f'需要处理：{len(missing)} 个已记录的缓存文件缺失，请检查原缓存盘；尚未归档的原片请保留。'}
     if not enabled:
-        return {'required': False, 'message': '无需处理：任务和完整缓存保留；需要继续时从「同步」菜单开启。'}
+        return {'required': False, 'message': '无需处理：任务和完整缓存保留；需要继续时从「备份」菜单开启。'}
     for issue in [health['destination'].get('issue')] + [s.get('issue') for s in stages.values()]:
         if not issue:
             continue
@@ -339,14 +340,14 @@ def snapshot(directory, settings):
     elif not transfer_enabled:
         pending_import = sum(not f['imported'] for f in files if f['selected'])
         unplug_message = '相机读取已停止，可断开连接；' + (
-            f'仍有 {pending_import} 个文件待完成导入，下次同步需要重新连接相机。' if pending_import else
+            f'仍有 {pending_import} 个文件待完成导入，下次备份需要重新连接相机。' if pending_import else
             '相机清单尚未重新核对，当前不能确认导入是否完整。')
     elif connection and not approved and fresh(connection):
         unplug_message = '当前相机尚未确认，未开始读取素材；请在飞书确认后备份。'
     elif state.get('source', {}).get('stale'):
         unplug_message = '相机状态尚未更新，连接释放条件待确认。'
     elif not state.get('source', {}).get('online'):
-        unplug_message = '相机未连接；同步开启时，已有完整缓存可继续上传'
+        unplug_message = '相机未连接；备份开启时，已有完整缓存可继续上传'
     else:
         unplug_message = '本轮导入尚未完成，请保持相机连接'
     storage = {key: {'host': os.environ.get('MEDIA_IMPORTER_' + key.upper() + '_HOST_DIR'), 'path': str(value)}
@@ -395,6 +396,7 @@ def snapshot(directory, settings):
                           'deferred_files': sum(not f['selected'] and not f['imported'] and f['state'] != 'excluded' for f in files)},
             'configuration': configuration, 'controls': controls, 'health': health, 'queues': queues, 'storage': storage,
             'source_connection': connection, 'source_link': meta.get('source_link', {}),
+            'camera': camera_state(meta),
             'camera_control': meta.get('camera_control', {}),
             'source_operation_running': bool(state.get('maintenance_running')),
             'unplug': {'ready': ready, 'can_disconnect': can_disconnect, 'message': unplug_message},

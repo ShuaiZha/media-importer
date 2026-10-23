@@ -175,7 +175,7 @@ def decide(store, settings, session_id, accept):
                 raise ConfigError('来源类型已变化，请等待重新识别并确认设备')
         if state.get('state') == 'approved':
             if not accept:
-                raise ConfigError('本次连接已经确认；如需停止传输，请使用“停止同步”')
+                raise ConfigError('本次连接已经确认；如需停止传输，请使用“停止备份”')
             return False  # Replaying a confirmation must never re-enable stopped sync.
         if not accept:
             state['state'] = 'declined'

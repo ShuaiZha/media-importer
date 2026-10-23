@@ -69,9 +69,9 @@ class Control:
     def boundary(self):
         self.refresh()
         if self.error:
-            raise SyncDisabled("配置无效，已停止同步与清理：" + self.error)
+            raise SyncDisabled("配置无效，已停止备份与清理：" + self.error)
         if not self.enabled():
-            raise SyncDisabled("同步已关闭，任务与缓存已保留")
+            raise SyncDisabled("备份已关闭，任务与缓存已保留")
         if self.token != self.applied_token:
             raise Reconfigure("正在应用已保存的配置")
 
@@ -165,7 +165,7 @@ def daemon(config_path, directory, stop):
         while not stop.is_set():
             config = control.adopt()
             if config is None:
-                store.status(phase="invalid_config", message="配置无效，已停止同步与清理", configuration=control.state())
+                store.status(phase="invalid_config", message="配置无效，已停止备份与清理", configuration=control.state())
                 stop.wait(1)
                 continue
             from .source_session import SourceSession
@@ -210,7 +210,7 @@ def daemon(config_path, directory, stop):
                             if stop.is_set():
                                 break
                             result = {"complete": False, "reason": "settings_changed"}
-                            store.status(phase="paused", message="同步已停止，任务与缓存已保留",
+                            store.status(phase="paused", message="备份已停止，任务与缓存已保留",
                                          speed_bytes_per_second=0, eta_seconds=None)
                         control.refresh()
                         if control.token != control.applied_token or control.error:

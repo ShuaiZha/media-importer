@@ -62,7 +62,10 @@ class Workspace:
         from .capture_forms import read_catalog
         connection = store.get_meta('source_connection', {})
         device = connection.get('device', {})
-        observed = observation(store, device)
+        from .camera_coordinator import state as camera_state
+        camera = camera_state(store)
+        observed = camera['observed']
+        from .camera_coordinator import operation_reason
         preview = store.get_meta('live_preview', {})
         try:
             catalog = read_catalog(store, connection.get('id'))
@@ -72,9 +75,11 @@ class Workspace:
             catalog = None
         # Never expose component URLs, network credentials or identity internals.
         return {'device': {'name': device.get('model_name', '未连接相机'), 'transport': device.get('transport'),
-                           'online': connection.get('state') == 'approved' and fresh(connection)},
+                           'online': camera['connection']['state'] == 'connected'},
+                'camera': camera,
                 'session_id': connection.get('id'), 'state': observed,
-                'commands': allowed_commands(store, connection),
+                'commands': allowed_commands(store, connection, facts=camera),
+                'restrictions': {name: operation_reason(store, name, facts=camera) for name in ('preview', 'livestream', 'browse')},
                 'catalog': {k: catalog[k] for k in ('preset', 'presets', 'parameters', 'observed_at') if k in catalog} if catalog else None,
                 'preview': {'state': preview.get('state', 'stopped'), 'id': preview.get('id'),
                             'mode': preview.get('mode', 'preview'),
@@ -113,8 +118,9 @@ class Workspace:
                 if value['session_id'] != connection.get('id') or not fresh(connection) or connection.get('state') != 'approved':
                     raise ConfigError('相机连接已变化，请刷新页面')
                 from .camera_coordinator import operation_reason
-                if action != 'library_release' and operation_reason(db, 'browse'):
-                    raise ConfigError('请先结束实时预览，再浏览素材')
+                reason = operation_reason(db, 'browse')
+                if action != 'library_release' and reason:
+                    raise ConfigError(reason)
                 was_active = db.get_meta('camera_library', {}).get('until', 0) > time.time()
                 touch(db, value['session_id'], release=action == 'library_release')
                 if not was_active and action != 'library_release': self.control.source_interrupt.set()
@@ -123,13 +129,13 @@ class Workspace:
             elif action == 'capture':
                 from .capture import enqueue, READ_COMMANDS
                 command = value['command']
-                if command not in READ_COMMANDS: touch(db, connection.get('id'), release=True)
                 result = enqueue(db, owner, 'workspace:' + value['nonce'], command, value['session_id'], value['parameters'])
+                if command not in READ_COMMANDS: touch(db, connection.get('id'), release=True)
                 return {'id': result['id'], 'state': result['state']}
             elif action in ('preview_start', 'live_start'):
                 from .live_preview import request
-                touch(db, connection.get('id'), release=True)
                 result = request(db, self.settings, owner, 'workspace:' + value['nonce'], mode='rtmp' if action == 'live_start' else 'preview')
+                touch(db, connection.get('id'), release=True)
                 return {'id': result['id'], 'state': result['state']}
             elif action == 'preview_stop':
                 from .live_preview import stop_request

@@ -152,7 +152,7 @@ def confirm(store, settings, identifier, owner, choice_revision):
         if op['state'] != 'ready' or not _summary(plan)['total_files']:
             raise ConfigError('请先预览本次选择，再确认开始')
         if item['config']['backup']['enabled']:
-            raise ConfigError('全量同步仍开启，请先从「同步 → 立即停止」停止，再重新浏览素材')
+            raise ConfigError('全量备份仍开启，请先从「备份 → 停止备份」停止，再重新浏览素材')
         if active(store.db):
             raise ConfigError('已有选定任务正在处理，请先完成或停止该任务')
         if time.time() - op['updated'] > 300:
@@ -187,7 +187,7 @@ def resume(store, settings, identifier, owner):
             raise ConfigError('没有可继续的选定任务，请重新浏览素材')
         item = _settings(settings)
         if item['config']['backup']['enabled'] or active(store.db):
-            raise ConfigError('请先停止全量同步或其他选定任务')
+            raise ConfigError('请先停止全量备份或其他选定任务')
         plan = json.loads(op['plan'])
         source = item['config']['source']
         if (_binding(store, item) != op['destination'] or
@@ -226,7 +226,7 @@ class SelectionControl:
                 reason = ('服务正在停止' if self.stop.is_set() else
                           '本次选定任务已停止，完整缓存与任务保留' if not current or current['cancelled'] else
                           '配置已变更，请确认后继续本次任务' if item['revision'] != self.op['revision'] else
-                          '全量同步已开启，本次选定任务暂停' if not self.browsing and item['config']['backup']['enabled'] else None)
+                          '全量备份已开启，本次选定任务暂停' if not self.browsing and item['config']['backup']['enabled'] else None)
                 self._draining = bool(current and current['drain'])
             except (BackupError, OSError, ValueError, sqlite3.Error):
                 reason = '无法核对本次操作状态，已暂停传输'
@@ -309,8 +309,8 @@ def process_one(parent, settings, *, browsing_only=False):
     op = dict(row)
     store = parent.store
     browsing = op['state'] in ('queued', 'scanning')
-    from .live_preview import active as preview_active
-    if browsing and preview_active(store):
+    from .camera_coordinator import operation_reason
+    if browsing and operation_reason(store, 'browse'):
         return False
     control = SelectionControl(parent, settings, op, browsing)
     from .liveness import CombinedStop

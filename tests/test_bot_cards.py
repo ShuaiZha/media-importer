@@ -56,7 +56,7 @@ class CommandCardTests(unittest.TestCase):
         title,color,elements=status_content(state)
         text=json.dumps(elements,ensure_ascii=False)
         self.assertEqual('grey',color)
-        self.assertIn('同步已停止',title)
+        self.assertIn('备份已停止',title)
         self.assertIn('1 / 2',text)
         self.assertNotIn('old.mp4',text)
         self.assertNotIn('/s',text)
@@ -103,9 +103,9 @@ class CommandCardTests(unittest.TestCase):
         self.assertEqual('warning',result['level'])
         self.assertIn('等待生效',result['title'])
         result=settings_result({'backup':{'enabled':False}},True,True)
-        self.assertEqual('正在停止同步',result['title'])
+        self.assertEqual('正在停止备份',result['title'])
         result=settings_result({'backup':{'enabled':False}},True,False)
-        self.assertEqual('同步已停止',result['title'])
+        self.assertEqual('备份已停止',result['title'])
 
     def test_two_byte_bars_share_the_same_rendering_in_status_and_notifications(self):
         state = view()
@@ -128,7 +128,7 @@ class CommandCardTests(unittest.TestCase):
         state = view(); state['configuration']['sync_enabled'] = False
         stopped = progress_card(state, 300)
         self.assertEqual('grey', stopped['header']['template'])
-        self.assertIn('同步已停止', json.dumps(stopped, ensure_ascii=False))
+        self.assertIn('备份已停止', json.dumps(stopped, ensure_ascii=False))
         state['configuration']['sync_enabled'] = True
         state['batch'].update(percent=100, completed_files=2)
         self.assertEqual('green', progress_card(state, 300)['header']['template'])

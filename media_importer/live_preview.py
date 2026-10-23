@@ -14,7 +14,7 @@ from .model import BackupError, ConfigError, now
 from .source_connection import fresh
 
 KEY = 'live_preview'
-ACTIVE = {'queued', 'connecting', 'starting', 'ready', 'stopping'}
+from .camera_state import PICTURE_ACTIVE as ACTIVE
 
 
 def component(name='go2rtc'):
@@ -57,7 +57,7 @@ def request(store, settings, owner, key, mode='preview'):
         component('ffmpeg')
         from .livestream_settings import password
         if not item['config']['livestream']['ssid']:
-            raise ConfigError('请先在「设置 → 相机与预览 → 直播网络」配置 Wi-Fi')
+            raise ConfigError('请先在「设置 → 相机与画面 → 直播网络」配置 Wi-Fi')
         password(settings, item['config']['livestream'])
     identifier = uuid.uuid5(uuid.NAMESPACE_URL, owner + ':preview:' + key).hex
     with store.db:
@@ -71,6 +71,13 @@ def request(store, settings, owner, key, mode='preview'):
             raise ConfigError('请先结束当前画面，再切换预览或有声直播')
         if active(store) or previous.get('id') == identifier:
             return previous
+        from .camera_coordinator import operation_reason
+        reason = operation_reason(store, 'livestream' if mode == 'rtmp' else 'preview')
+        if reason:
+            raise ConfigError(reason)
+        from .capture import mutating_pending
+        if mutating_pending(store.db):
+            raise ConfigError('相机操作正在执行，请等待结果后开启画面')
         device = store.get_meta('source_selection', {})
         if not device.get('serial_number'):
             raise ConfigError('请先连接相机，并在飞书确认设备身份')

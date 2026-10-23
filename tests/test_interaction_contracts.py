@@ -34,7 +34,7 @@ class CommandContracts(unittest.TestCase):
             return self.bot.process_one()
 
     def test_menu_text_and_legacy_queries_resolve_without_starting_camera(self):
-        self.assertEqual(['同步', '相机', '设置'], [name for name, _ in MENUS])
+        self.assertEqual(['备份', '相机', '设置'], [name for name, _ in MENUS])
         for _, entries in MENUS:
             self.assertLessEqual(len(entries), 5)
             for key in entries:
@@ -94,7 +94,7 @@ class CommandContracts(unittest.TestCase):
         self.settings.set_enabled(False)
         self.store.status(worker_heartbeat_at=now(), configuration={'applied_revision': self.settings.read()['revision'], 'pending': False})
         worker.tick(snapshot(self.root / 'data', self.settings))
-        self.assertIn('同步已停止', rendered(updater.call_args.args[2]))
+        self.assertIn('备份已停止', rendered(updater.call_args.args[2]))
 
     def test_stop_menu_updates_existing_progress_without_stopping_preview_or_recording(self):
         self.settings.set_enabled(True)

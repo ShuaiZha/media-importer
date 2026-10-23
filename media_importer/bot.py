@@ -89,7 +89,7 @@ class Bot:
                     (payload.get('settings_version') == 3 and payload['settings_form'] == 'transfer_settings'))
         if 'archive_change' in payload or 'archive_draft' in payload:
             return modern and payload.get('mode') in ('connection', 'new')
-        if payload.get('panel', 'status') not in ('status', 'details', 'stop_options', 'event_details', 'cleanup', 'confirm_delete', 'source_confirmation', 'source_offline', 'source_online',
+        if payload.get('panel', 'status') not in ('status', 'details', 'camera_status', 'stop_options', 'event_details', 'cleanup', 'confirm_delete', 'source_confirmation', 'source_offline', 'source_online',
                                                   'notifications', 'previews', 'confirm_previews', 'scope', *PAGES):
             return False
         if 'source_decision' in payload:
@@ -142,7 +142,7 @@ class Bot:
                 notice = {'title': '操作说明', 'detail': notice, 'level': 'info'}
             color = {'error': 'red', 'warning': 'orange', 'success': 'green', 'info': 'blue'}[notice['level']]
             elements = [paragraph(notice['detail'])] if notice.get('detail') else []
-            if notice['title'] in ('同步已停止', '正在停止同步'):
+            if notice['title'] in ('备份已停止', '正在停止备份'):
                 view = snapshot(self.directory, self.settings)
                 pending = view.get('work', {}).get('pending_files', 0)
                 if pending: elements.append(paragraph(f'剩余 {pending} 个文件'))
@@ -153,10 +153,15 @@ class Bot:
         from .bot_settings import PAGES, panel as settings_panel
         if page in PAGES:
             return settings_panel(self, page, item)
+        if page == 'camera_status':
+            from .camera_cards import overview
+            store = Store(self.directory, readonly=True)
+            try: return overview(self, store)
+            finally: store.close()
         if page in ('source_confirmation', 'source_offline', 'source_online'):
             return self.source_panel(values, page)
         if page == 'stop_options':
-            return card('停止同步', [self.buttons(
+            return card('停止备份', [self.buttons(
                 self.button('立即停止', {'changes': {'backup': {'enabled': False}}}),
                 self.button('当前文件完成后停止', {'changes': {'backup': {'stop_after_current': True}}, 'settings_version': 2}, rev))], shared=True)
         if page == 'confirm_delete':
@@ -252,7 +257,7 @@ class Bot:
         actions = [self.button('返回摘要' if detail else '查看详情', {'panel': 'status' if detail else 'details'}),
                    self.button('刷新', {'panel': 'details' if detail else 'status', 'refresh': True})]
         if view.get('transfer_enabled', view.get('configuration', {}).get('sync_enabled')):
-            actions.append(self.button('停止同步', {'panel': 'stop_options'}))
+            actions.append(self.button('停止备份', {'panel': 'stop_options'}))
         return [self.buttons(*actions)]
 
     def active_progress_message(self):
@@ -304,7 +309,7 @@ class Bot:
             try:
                 if abs(time.time() - int(message["create_time"]) / 1000) > 300:
                     action = {"panel": "status", "notice": {"title": "指令已过期，未执行", "level": "warning",
-                                                             "detail": "请通过「同步」菜单重新提交指令。"}}
+                                                             "detail": "请通过「备份」菜单重新提交指令。"}}
             except (KeyError, ValueError, TypeError):
                 return False
         self.enqueue("message:" + header["event_id"], action)
@@ -541,7 +546,7 @@ class Bot:
                         finally:
                             store.close()
                         notice = {'title': '相机已确认' if payload['source_decision'] else '暂未确认相机',
-                                  'detail': ('同步已开启' if self.settings.read()['config']['backup']['enabled'] else '同步已关闭') if payload['source_decision'] else '', 'level': 'success' if payload['source_decision'] else 'info'}
+                                  'detail': ('备份已开启' if self.settings.read()['config']['backup']['enabled'] else '备份已关闭') if payload['source_decision'] else '', 'level': 'success' if payload['source_decision'] else 'info'}
                     # Enabling arms discovery even before the camera is reachable.
                     # Source IO still requires a fresh, approved identity; a new
                     # camera receives its own confirmation without blocking SMB.

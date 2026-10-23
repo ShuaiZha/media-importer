@@ -67,8 +67,9 @@ class Library:
             if connection.get('id') != session or not fresh(connection) or connection.get('state') != 'approved':
                 raise ConfigError('相机连接已变化，请刷新页面')
             from .camera_coordinator import operation_reason
-            if operation_reason(service.store, 'browse'):
-                raise ConfigError('请先结束实时预览，再浏览相机素材')
+            reason = operation_reason(service.store, 'browse')
+            if reason:
+                raise ConfigError(reason)
             if not active(service.store):
                 raise ConfigError('素材浏览会话已结束，请刷新素材')
             source = service.source.fork(service.stop, purpose='browse')

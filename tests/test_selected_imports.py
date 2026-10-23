@@ -124,7 +124,7 @@ class SelectedImportTests(unittest.TestCase):
             operations.confirm(self.store, self.settings, op['id'], self.owner, op['choice_revision'])
         self.settings.set_enabled(True)
         op = self.ready()
-        with self.assertRaisesRegex(ConfigError, '全量同步'):
+        with self.assertRaisesRegex(ConfigError, '全量备份'):
             operations.confirm(self.store, self.settings, op['id'], self.owner, op['choice_revision'])
         self.assertFalse(self.store.files())
 

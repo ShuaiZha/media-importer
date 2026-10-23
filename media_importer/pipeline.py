@@ -86,7 +86,7 @@ def transfer(service):
                             generation += 1
                             condition.notify_all()
                     if resumed:
-                        task.report("idle", "已取消等待，继续同步", issue=None)
+                        task.report("idle", "已取消等待，继续备份", issue=None)
                     require_cache(db)
                     if time.monotonic() < retry_at:
                         pass

@@ -4,34 +4,81 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 
 
+@dataclass(frozen=True)
+class Operation:
+    resource: str
+    read_only: bool = False
+    stop: bool = False
+    during_recording: bool = False
+    finish_preview: bool = False
+
+
+# Every entry point uses the same admission contract. Device capabilities,
+# trusted identity and copy proofs remain independently enforced by their owners.
+OPERATIONS = {
+    'status': Operation('snapshot', read_only=True),
+    'connect': Operation('radio'),
+    'import': Operation('media'), 'delete': Operation('media'), 'browse': Operation('media'),
+    'inspect': Operation('media', read_only=True, during_recording=True),
+    'preview': Operation('picture'), 'livestream': Operation('picture'),
+    'capture': Operation('control', read_only=True),
+    'state': Operation('control', read_only=True), 'catalog': Operation('control', read_only=True),
+    'stop_recording': Operation('control', stop=True, during_recording=True),
+    'hilight': Operation('control', during_recording=True),
+    **{name: Operation('control') for name in (
+        'load_preset', 'set_parameter', 'start_timelapse', 'start_recording', 'photo', 'mode_video', 'mode_photo')},
+    **{name: Operation('control', finish_preview=True) for name in ('preview_record', 'preview_photo', 'preview_timelapse')},
+}
+
+
+def state(store):
+    from .camera_state import project
+    import json
+    keys = ('source_connection', 'source_link', 'camera_control', 'live_preview', 'camera_library', 'status')
+    rows = store.db.execute('SELECT key,value FROM meta WHERE key IN (?,?,?,?,?,?)', keys)
+    return project({row[0]: json.loads(row[1]) for row in rows})
+
+
 def preview_state(store):
     return store.get_meta('live_preview', {})
 
 
 def preview_active(store):
-    state = preview_state(store)
-    return state.get('state') in {'queued', 'connecting', 'starting', 'ready', 'stopping'} or bool(state.get('cleanup_pending'))
+    from .camera_state import PICTURE_ACTIVE
+    value = preview_state(store)
+    return value.get('state') in PICTURE_ACTIVE or bool(value.get('cleanup_pending'))
 
 
 def live_radio_owned(store):
     return preview_state(store).get('mode') == 'rtmp' and preview_active(store)
 
 
-def operation_reason(store, operation):
+def operation_reason(store, operation, *, command=None, facts=None):
     """One resource policy; connection health and user preferences stay separate."""
-    state = preview_state(store)
-    if operation in ('connect', 'capture'):
-        if live_radio_owned(store):
-            return '请先结束有声直播，再进行拍摄控制' if operation == 'capture' else '有声直播使用蓝牙会话；结束后恢复媒体连接'
-        return None
-    if operation not in ('import', 'delete', 'browse'):
+    name = command if operation == 'capture' and command else operation
+    if name not in OPERATIONS:
         raise ValueError('Unknown camera operation')
-    if state.get('cleanup_pending'):
-        return '相机预览停止结果待核验；完整缓存可继续归档'
-    if preview_active(store):
-        return '实时预览进行中，本地导入与原片清理等待；完整缓存可继续归档'
-    from .camera_library import active
-    if operation != 'browse' and active(store):
+    contract = OPERATIONS[name]
+    if contract.resource == 'snapshot':
+        return None
+    facts = state(store) if facts is None else facts
+    picture = facts['picture']
+    if contract.resource in ('radio', 'control') and picture['active'] and picture['mode'] == 'rtmp':
+        return '请先结束有声直播并完成连接恢复'
+    if contract.resource == 'radio':
+        return None  # Reconnection is also required to verify an uncertain stop.
+    if picture['recovering'] and not (contract.read_only or contract.stop):
+        return '相机画面停止结果待核验；完整缓存可继续归档'
+    if facts['control_uncertain'] and not (contract.read_only or contract.stop):
+        return '相机操作结果待核验，请先刷新相机状态'
+    if facts['recording'] and not (contract.read_only or contract.stop or contract.during_recording):
+        return '相机正在拍摄或拍摄结果待核验，请先停止拍摄并核对状态'
+    if picture['active']:
+        if contract.resource in ('media', 'picture'):
+            return ('有声直播' if picture['mode'] == 'rtmp' else '实时预览') + '进行中，相机读取与原片清理等待；完整缓存可继续归档'
+        if not (contract.read_only or contract.stop or contract.finish_preview):
+            return '请先结束实时预览，再执行相机操作'
+    if contract.resource == 'media' and operation != 'browse' and facts['browsing']:
         return '正在浏览或回放相机素材，本地导入与原片清理等待；完整缓存可继续归档'
     return None
 
@@ -63,6 +110,11 @@ def dispatch(service, settings, *, import_lane=False):
         return service.activity.waiting('import') if import_lane and service.activity else nullcontext()
 
     with waiting():
+        # An explicit stop outranks a newly queued picture. It must never wait
+        # behind a preview which is itself waiting for recording to stop.
+        if service.store.db.execute("SELECT 1 FROM capture_requests WHERE state IN ('queued','running') AND command='stop_recording' LIMIT 1").fetchone():
+            if capture(service, settings):
+                return DispatchResult(True)
         handled = bool(preview(service, settings))
     if import_lane and handled:
         return DispatchResult(True)

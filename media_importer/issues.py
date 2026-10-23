@@ -7,7 +7,7 @@ def describe(exc, stage=None):
     lower = message.lower()
     code, action, scope = "file", "程序会重试此文件，其他可处理的文件继续。", "file"
     if isinstance(exc, CacheFileError):
-        code, action = 'cache_verification', '此文件保留待核验，其他完整缓存继续上传；停止同步后可核验缓存。'
+        code, action = 'cache_verification', '此文件保留待核验，其他完整缓存继续上传；停止备份后可核验缓存。'
     elif isinstance(exc, TransferStalled):
         code, action, scope = 'transfer_stalled', '本次传输已取消，正在重建连接；完整缓存保留。', 'transfer'
     elif isinstance(exc, CacheUnavailable) or isinstance(exc, OSError) and not isinstance(exc, DestinationError):

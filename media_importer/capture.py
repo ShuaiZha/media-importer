@@ -16,9 +16,8 @@ LABELS['preview_record'] = '预览已结束，录像已开始'
 LABELS.update(catalog='拍摄设置已读取', load_preset='拍摄预设已切换', set_parameter='拍摄参数已更新',
               start_timelapse='延时摄影已开始', hilight='HiLight 标记已添加',
               preview_photo='预览已结束，拍照已完成', preview_timelapse='预览已结束，延时摄影已开始')
-OBSERVATIONS = ('recording', 'mode', 'busy', 'observed_at', 'preset', 'preset_label', 'specification',
-                'recording_seconds', 'remaining_video_seconds', 'battery_percent',
-                'storage_remaining_bytes', 'overheating', 'storage_status')
+from .camera_state import OBSERVATIONS
+
 
 
 def validate_parameters(command, parameters):
@@ -56,33 +55,8 @@ def mutating_pending(db):
 
 
 def observation(store, device):
-    """A refresh never interrupts media IO or disguises an old observation as new."""
-    from datetime import datetime
-    candidates = []
-    control = store.get_meta('camera_control', {})
-    if control.get('serial') == device.get('serial_number') and not control.get('error'):
-        candidates.append(control)
-    source = store.get_meta('status', {}).get('source', {})
-    if source.get('serial_number') == device.get('serial_number'):
-        telemetry = source.get('telemetry') or {}
-        if telemetry.get('available'):
-            candidates.append({k: telemetry[k] for k in OBSERVATIONS if k in telemetry})
-    observations = []
-    for state in candidates:
-        try:
-            if 0 <= time.time() - datetime.fromisoformat(state['observed_at']).timestamp() < 45:
-                observations.append(state)
-        except (KeyError, ValueError, TypeError):
-            pass
-    if observations:
-        merged = {}
-        for state in sorted(observations, key=lambda item: datetime.fromisoformat(item['observed_at']).timestamp()):
-            if any(key in state and key in merged and state[key] != merged[key] for key in ('mode', 'preset')):
-                for key in ('specification', 'preset_label', 'recording_seconds'):
-                    merged.pop(key, None)
-            merged.update({k: v for k, v in state.items() if k in OBSERVATIONS})
-        return merged
-    return {'stale': True, 'reason': '暂无新鲜拍摄状态，等待后台观测；当前传输不受影响'}
+    from .camera_state import observation as project_observation
+    return project_observation({key: store.get_meta(key, {}) for key in ('camera_control', 'status')}, device)
 
 
 def get(db, identifier, owner):
@@ -95,13 +69,16 @@ def capabilities(device):
     return source_controls(device)
 
 
-def allowed_commands(store, state):
-    from .camera_coordinator import operation_reason
-    if operation_reason(store, 'capture'): return []
+def allowed_commands(store, state, *, facts=None):
+    from .camera_coordinator import operation_reason, state as camera_state
+    facts = camera_state(store) if facts is None else facts
+    if operation_reason(store, 'capture', facts=facts): return []
     device = state.get('device', {})
     commands = capabilities(device)['commands']
     if state.get('state') == 'approved' and fresh(state):
-        return commands
+        transitions = {v: k for k, v in PREVIEW_COMMANDS.items()}
+        return [c for c in commands if not operation_reason(store, 'capture', facts=facts,
+                command=transitions.get(c, c) if facts['picture']['active'] else c)]
     binding = store.get_meta('source_selection', {})
     trusted = (device.get('serial_number') and
                all(device.get(k) == binding.get(k) for k in ('type', 'serial_number')))
@@ -113,16 +90,14 @@ def allowed_commands(store, state):
 
 
 def enqueue(store, owner, key, command, session_id, parameters=None):
-    from .camera_coordinator import operation_reason
-    reason = operation_reason(store, 'capture')
-    if reason:
-        raise ConfigError(reason)
     if command not in COMMANDS:
         raise ConfigError('相机操作不存在')
+    from .camera_coordinator import operation_reason
+    reason = operation_reason(store, 'capture', command=command)
+    if reason:
+        raise ConfigError(reason)
     from .live_preview import active
     parameters = validate_parameters(command, parameters or {})
-    if active(store) and command not in READ_COMMANDS | {'stop_recording', *PREVIEW_COMMANDS}:
-        raise ConfigError('实时预览尚未结束，请先在预览卡片点击「结束预览」')
     identifier = uuid.uuid5(uuid.NAMESPACE_URL, owner + ':' + key).hex
     with store.db:
         store.db.execute('BEGIN IMMEDIATE')
@@ -174,7 +149,9 @@ def process_one(service, settings):
         from .capture_sessions import settle
         return settle(service)
     op = dict(row)
-    if active(store) and op['command'] not in READ_COMMANDS | {'stop_recording'}:
+    from .camera_coordinator import operation_reason
+    actual = PREVIEW_COMMANDS.get(op['command'], op['command'])
+    if operation_reason(store, 'capture', command='state' if op['state'] == 'running' else actual):
         return False
     store.status(capture_work=True)
     try:

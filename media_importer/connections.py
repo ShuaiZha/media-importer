@@ -111,7 +111,7 @@ class ConnectionManager:
         requested = requested_until > time.time()
         needed = bool(backup['enabled'] or requested)
         if mode == 'usb' or not needed:
-            self.publish('waiting_source', '等待相机连接' if mode == 'usb' else '同步关闭；可从「相机 → 连接相机」建立连接')
+            self.publish('waiting_source', '等待相机连接' if mode == 'usb' else '备份关闭；可从「相机 → 连接相机」建立连接')
             return
         if not wireless_supported():
             self.publish('unsupported', '无线自动连接仅支持 Mac 原生版；此环境可继续使用 USB')

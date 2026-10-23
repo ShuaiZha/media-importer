@@ -527,7 +527,7 @@ class WorkerTests(unittest.TestCase):
         self.tick(1)
         self.assertEqual(1, self.sender.call_count)
         self.assertEqual(1, self.updater.call_count)
-        self.assertIn('同步已停止', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
+        self.assertIn('备份已停止', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
         self.tick(5)
         self.assertEqual(1, self.updater.call_count)
 
@@ -630,7 +630,7 @@ class WorkerTests(unittest.TestCase):
         self.tick(1)
         self.assertEqual(1, self.sender.call_count)
         self.assertEqual(2, self.updater.call_count)
-        self.assertNotIn('同步已停止', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
+        self.assertNotIn('备份已停止', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
 
     def test_completed_card_updates_cleanup_on_same_message_without_resending(self):
         self.tick()

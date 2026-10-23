@@ -100,7 +100,7 @@ def main(argv=None):
         if args.command == "sync":
             from .settings import Settings
             Settings(args.config, args.data).set_enabled(args.state == "on")
-            print("已保存同步" + ("开启" if args.state == "on" else "关闭") + "设置；后台将在运行时应用")
+            print("已保存备份" + ("开启" if args.state == "on" else "关闭") + "设置；后台将在运行时应用")
             return 0
         if args.command == "daemon":
             from .runtime import daemon
@@ -127,7 +127,7 @@ def main(argv=None):
                 emit(result)
             else:
                 status, batch = result["status"], result["batch"]
-                print("同步: " + ("已开启" if result["configuration"]["sync_enabled"] else "已关闭"))
+                print("备份: " + ("已开启" if result["configuration"]["sync_enabled"] else "已关闭"))
                 print("状态: " + status.get("message", "尚无记录"))
                 print(f"导入: {batch['imported_files']} / {batch['total_files']} 个文件，{batch['import_percent']:.1f}%")
                 print(f"归档: {batch['completed_files']} / {batch['total_files']} 个文件，{batch['percent']:.1f}%")
@@ -136,7 +136,7 @@ def main(argv=None):
                     if progress.get("current_file"):
                         print(f"{label}: {progress['current_file']} ({progress.get('current_bytes', 0)} / {progress.get('current_total_bytes', 0)} bytes)")
                 print(result["unplug"]["message"])
-                print("飞书发送：状态 / 开启同步 / 停止同步 / 原片处理")
+                print("飞书发送：状态 / 开启备份 / 停止备份 / 原片处理")
             return 0
         if args.command == "check":
             from .preflight import run

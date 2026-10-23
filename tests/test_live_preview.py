@@ -120,7 +120,7 @@ class PreviewTests(unittest.TestCase):
         preview.update(self.store, state['id'], state='error', cleanup_pending=True)
         self.assertTrue(preview.active(self.store))
         self.assertEqual('queued', self.request('retry')['state'])
-        with self.assertRaisesRegex(ConfigError, '结束预览'):
+        with self.assertRaisesRegex(ConfigError, '待核验'):
             capture(self.store, self.bot.scope, 'key', 'photo', connection['id'])
         service = Service(Config.from_values(self.settings.read()['config']), self.store,
                           FakeSource([]), FakeDestination(), threading.Event())
@@ -130,8 +130,11 @@ class PreviewTests(unittest.TestCase):
         connection = self.bind()
         with patch('media_importer.connections.wireless_supported', return_value=True):
             capture(self.store, self.bot.scope, 'photo-before-preview', 'photo', connection['id'])
-        state = self.request()
-        preview.update(self.store, state['id'], state='error', cleanup_pending=True)
+        with self.assertRaisesRegex(ConfigError, '相机操作正在执行'):
+            self.request()
+        # Previously persisted or concurrent intents must also be rechecked at
+        # execution, even when they bypass today's admission contract.
+        self.store.set_meta(preview.KEY, {'id': 'a' * 32, 'state': 'error', 'cleanup_pending': True})
         from media_importer.capture import process_one
         service = Service(Config.from_values(self.settings.read()['config']), self.store,
                           FakeSource([]), FakeDestination(), threading.Event())

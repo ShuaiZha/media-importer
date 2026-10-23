@@ -150,6 +150,6 @@ class SimpleControlsTests(unittest.TestCase):
         current['work']['pending_files']=0
         current['unplug']={'ready':True,'can_disconnect':True}
         text=json.dumps(status_content(current),ensure_ascii=False)
-        self.assertIn('同步待机',text)
+        self.assertIn('备份待机',text)
         self.assertIn('没有待处理文件',text)
         self.assertNotIn('需保持可用',text)

@@ -58,7 +58,7 @@ class SelectedStatusTests(unittest.TestCase):
         self.assertEqual('选定素材导入进行中', card['header']['title']['content'])
         self.assertIn('50%', text)
         self.assertNotIn('自动进度更新已停止', text)
-        self.assertNotIn('同步已停止', text)
+        self.assertNotIn('备份已停止', text)
         self.assertNotIn(other['id'], text)
 
     def test_upload_progress_does_not_require_full_sync(self):

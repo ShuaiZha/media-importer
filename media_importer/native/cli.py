@@ -149,7 +149,7 @@ def main(argv=None):
                       '；飞书连接：' + ('正常' if result['health']['bot'] else '等待或未连接'))
                 for k, value in result['paths'].items():
                     print(k + ': ' + value)
-                print('传输详情与同步开关请在飞书查看；诊断可运行 media-importer check')
+                print('传输详情与备份开关请在飞书查看；诊断可运行 media-importer check')
             return 0
         if args.command == 'logs':
             path = home / 'logs/service.log'
@@ -217,7 +217,7 @@ def main(argv=None):
                 if describe(home)['service']['running']:
                     print('后台服务已运行')
                 else:
-                    lifecycle.start(home, lifecycle.load(home)); print('后台服务已启动；同步按现有设置运行')
+                    lifecycle.start(home, lifecycle.load(home)); print('后台服务已启动；备份按现有设置运行')
             elif args.command == 'stop':
                 lifecycle.stop(home); print('后台服务已停止；配置、任务和完整缓存保留')
         if args.command == 'uninstall' and args.purge:

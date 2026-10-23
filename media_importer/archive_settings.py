@@ -39,7 +39,7 @@ def candidate(values, fields, config_directory=None):
 
 def _stopped(store, item):
     if item['config']['backup']['enabled']:
-        raise ConfigError('请先停止同步，待两路传输结束后再修改连接设置')
+        raise ConfigError('请先停止备份，待两路传输结束后再修改连接设置')
     from .selected_imports import active
     if active(store.db):
         raise ConfigError('请先停止本次选定任务，再修改连接设置')

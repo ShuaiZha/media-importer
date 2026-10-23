@@ -116,7 +116,7 @@ class Settings:
                 raise Conflict("设置已经变化，请获取新的设置卡片后再操作")
             values = preferences(item["config"])
             if changes.get("backup", {}).get("stop_after_current") and not values["backup"]["enabled"]:
-                raise ConfigError("同步已经停止，无需等待当前文件")
+                raise ConfigError("备份已经停止，无需等待当前文件")
             if "source_options" in changes:
                 from .archive_settings import _stopped
                 from .store import Store
@@ -132,7 +132,7 @@ class Settings:
             for group, updates in changes.items():
                 values[group].update(updates)
             if values["backup"]["source_transport"] != previous_transport and values["backup"]["enabled"]:
-                raise ConfigError("请先从「同步 → 停止同步」停止传输，再切换连接方式；任务与完整缓存保留")
+                raise ConfigError("请先从「备份 → 停止备份」停止传输，再切换连接方式；任务与完整缓存保留")
             if "enabled" in changes.get("backup", {}) or not values["backup"]["enabled"]:
                 values["backup"]["stop_after_current"] = False
             checked = runtime_config(values)

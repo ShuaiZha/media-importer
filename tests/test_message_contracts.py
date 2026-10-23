@@ -53,18 +53,18 @@ class MessageContractTests(unittest.TestCase):
         card = progress_card(state, 300, notifications_enabled=False)
         self.assertEqual('远端归档进行中', card['header']['title']['content'])
         self.assertNotIn('自动进度更新', text(card))
-        self.assertNotIn('同步已停止', text(card))
+        self.assertNotIn('备份已停止', text(card))
 
     def test_stopping_has_priority_over_complete_but_only_ack_confirms_stop(self):
         state = view()
         state['configuration']['sync_enabled'] = False
         state['batch'].update(completed_files=2, imported_files=2)
         state['controls']['import']['state'] = 'pausing'
-        self.assertEqual('正在停止同步', status_content(state)[0])
+        self.assertEqual('正在停止备份', status_content(state)[0])
         response = settings_result({'backup': {'enabled': False}}, True, True)
         self.assertNotIn('均已停止', response['detail'])
         response = settings_result({'backup': {'enabled': False}}, True, False)
-        self.assertEqual('同步已停止', response['title'])
+        self.assertEqual('备份已停止', response['title'])
 
     def test_empty_batch_with_durable_work_is_not_reported_as_empty(self):
         state = view()

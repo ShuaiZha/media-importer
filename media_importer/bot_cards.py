@@ -43,7 +43,7 @@ def settings_result(changes, applied, stopping):
     if not applied:
         return {'title': '设置已保存 · 等待生效', 'detail': '', 'level': 'warning'}
     if 'enabled' in backup:
-        return {'title': '同步已开启' if backup['enabled'] else '正在停止同步' if stopping else '同步已停止',
+        return {'title': '备份已开启' if backup['enabled'] else '正在停止备份' if stopping else '备份已停止',
                 'detail': '', 'level': 'warning' if stopping else 'success'}
     if 'stop_after_current' in backup:
         return {'title': '当前文件完成后停止', 'detail': '不再开始新文件。', 'level': 'success'}
@@ -95,6 +95,8 @@ def connection_elements(view):
         label = '待确认'
     elif view.get('running') and view.get('configuration', {}).get('sync_enabled') and source.get('online') is not True:
         label = {'connecting': '连接中', 'waiting_retry': '等待重连'}.get(view.get('source_link', {}).get('phase'), label)
+    if view.get('camera'):
+        label = view['camera']['connection']['label']
     return [paragraph('相机' + label + ' · 缓存' + _connection(health.get('cache', {}), True) +
                       ' · 存储' + _connection(health.get('destination', {})))]
 
@@ -131,7 +133,7 @@ def _title(view):
     if not view.get('running'):
         return '服务未响应', 'red'
     if any(c.get('state') == 'pausing' for c in view.get('controls', {}).values()):
-        return ('正在停止选定素材传输' if view.get('selected_import') else '正在停止同步'), 'orange'
+        return ('正在停止选定素材传输' if view.get('selected_import') else '正在停止备份'), 'orange'
     if configuration.get('pending'):
         return '设置等待生效', 'orange'
     if view.get('attention', {}).get('required'):
@@ -158,7 +160,7 @@ def _title(view):
         uploading = view.get('stages', {}).get('upload', {}).get('phase') in ('uploading', 'publishing')
         return ('远端归档进行中 · 相机待确认' if uploading else '相机待确认'), 'blue'
     if not configuration.get('sync_enabled', True):
-        return '同步已停止', 'grey'
+        return '备份已停止', 'grey'
     if configuration.get('stop_after_current'):
         return '当前文件完成后停止', 'blue'
     if round_complete(view):
@@ -173,6 +175,9 @@ def _title(view):
         return '远端归档进行中', 'blue'
     if importing:
         return '本地导入进行中', 'blue'
+    activity = view.get('camera', {}).get('activity', {})
+    if activity.get('state') in ('preview', 'livestream', 'recording', 'browsing', 'recovering'):
+        return '导入等待相机', 'orange' if activity['state'] == 'recovering' else 'blue'
     if stages.get('import', {}).get('phase') in ('scanning', 'verifying') or view.get('status', {}).get('source_work'):
         return '正在核验素材', 'blue'
     if any(s.get('phase') == 'failed' for s in stages.values()) or view.get('issues'):
@@ -191,10 +196,14 @@ def _title(view):
         if view.get('health', {}).get('source', {}).get('online') is False:
             return '等待相机连接', 'blue'
         return '等待传输', 'blue'
-    return '同步待机', 'blue'
+    return '备份待机', 'blue'
 
 
 def headline_elements(view):
+    activity = view.get('camera', {}).get('activity', {})
+    if activity.get('state') in ('preview', 'livestream', 'recording', 'browsing', 'recovering'):
+        waiting = ' · 导入等待' if view.get('configuration', {}).get('sync_enabled') else ''
+        return [paragraph(activity['label'] + waiting)]
     if view.get('running') and view.get('status', {}).get('preview_work'):
         return [paragraph('预览进行中，导入等待')]
     if view.get('running') and view.get('status', {}).get('source_work'):
@@ -340,7 +349,7 @@ def event_card(kind, title, text, view, *, keyword='', updated_at=None, location
     if kind in ('connected', 'disconnected'):
         title = '相机已连接' if kind == 'connected' else '相机已断开'
         mode = {'usb': 'USB', 'wifi': 'Wi-Fi'}.get(view.get('health', {}).get('source', {}).get('transport'), '')
-        elements.append(paragraph((mode + ' · ' if mode else '') + ('同步已开启' if view.get('configuration', {}).get('sync_enabled') else '同步已关闭')))
+        elements.append(paragraph((mode + ' · ' if mode else '') + ('备份已开启' if view.get('configuration', {}).get('sync_enabled') else '备份已关闭')))
     elif kind == 'completed':
         title = '归档完成'
         if result:
@@ -368,7 +377,7 @@ def event_card(kind, title, text, view, *, keyword='', updated_at=None, location
     elif kind == 'test':
         title = '通知测试成功'
     elif kind == 'recovered':
-        elements.append(paragraph('按当前同步设置继续处理'))
+        elements.append(paragraph('按当前备份设置继续处理'))
     else:
         elements.append(paragraph(text))
     return card(title, elements, color, shared=True)
@@ -436,4 +445,4 @@ def detail_content(view):
     if view.get('temporary_cleanup'):
         elements.append(paragraph(f"未完成临时文件待清理 {len(view['temporary_cleanup'])} 个"))
     elements.append(note('更新 ' + format_time(view.get('observed_at'))))
-    return '同步详情', 'blue', elements
+    return '备份详情', 'blue', elements

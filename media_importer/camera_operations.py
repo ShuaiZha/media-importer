@@ -335,15 +335,15 @@ def _outcome(service, op, *, recovery=False):
 
 def process_one(parent, settings):
     """Called at an import boundary, or by the idle daemon while sync is off."""
-    from .live_preview import active
-    if active(parent.store):
-        return False
+    from .camera_coordinator import operation_reason
     store = parent.store
     op = store.db.execute("SELECT * FROM camera_operations WHERE state IN "
                           "('queued','running','queued_delete','deleting','queued_verify','verifying') ORDER BY created LIMIT 1").fetchone()
     if op is None:
         return False
     op = dict(op)
+    if operation_reason(store, 'delete' if op['state'] in ('queued_delete', 'deleting') else 'inspect'):
+        return False
     recovery = op['state'] in ('running', 'deleting')
     deleting = op['state'] in ('queued_delete', 'deleting')
     verifying = op['state'] in ('queued_verify', 'verifying')

@@ -35,7 +35,7 @@ def panel(bot, page, item):
         return card('设置', [bot.buttons(bot.button(COMMANDS[key][0], COMMANDS[key][1]))
                             for key in MENUS[2][1]], shared=True)
     if page == 'camera_settings':
-        return card('相机与预览', [bot.buttons(bot.button('相机连接', {'panel': 'source_settings'}),
+        return card('相机与画面', [bot.buttons(bot.button('相机连接', {'panel': 'source_settings'}),
                                               bot.button('观看入口', {'panel': 'preview_settings'}),
                                               bot.button('直播网络', {'panel': 'livestream_settings'}))], shared=True)
     if page == 'livestream_settings':
@@ -105,7 +105,7 @@ def panel(bot, page, item):
                 input_field('domain', '认证域（可留空）', target['domain'], required=False, maximum=255),
                 password,
             ], revision, connection_revision=connection_revision(values)),
-            note('停止同步后修改；检查会创建并清理测试文件。'),
+            note('停止备份后修改；检查会创建并清理测试文件。'),
             note('密码经飞书提交，保存到本机，不回显。')], shared=True)
     if page == 'source_settings':
         source = item.get('source_hint', values['source'])
@@ -121,7 +121,7 @@ def panel(bot, page, item):
                 input_field('timeout_seconds', '相机请求超时（秒，1–300）', source['timeout_seconds']),
                 input_field('request_attempts', '请求尝试次数（1–5）', source['request_attempts']),
             ], revision),
-            note('停止同步后修改。')], shared=True)
+            note('停止备份后修改。')], shared=True)
     if page in ('preview_settings', 'preview_check', 'preview_check_details', 'preview_detect'):
         from .preview_access import configuration
         from .preview_settings import discover, inspect

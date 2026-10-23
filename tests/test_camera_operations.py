@@ -367,7 +367,8 @@ class CameraCardTests(unittest.TestCase):
         self.assertFalse(self.source.deletes)
 
     def test_status_updates_original_card_only_when_backend_changes(self):
-        self.bot.receive_message(self.message('相机状态'))
+        # Detailed live scans are explicit; the menu query itself is a snapshot.
+        self.bot.receive_card(self.callback(self.bot.action({'camera': {'version': 1, 'action': 'inspect'}})))
         self.assertTrue(self.bot.process_one())
         self.sender.assert_called_once()
         self.assertFalse(self.poll())
@@ -384,7 +385,7 @@ class CameraCardTests(unittest.TestCase):
         self.assertFalse(self.source.deletes)
 
     def test_failed_card_update_retries_without_repeating_camera_operation(self):
-        self.bot.receive_message(self.message('相机状态'))
+        self.bot.receive_card(self.callback(self.bot.action({'camera': {'version': 1, 'action': 'inspect'}})))
         self.bot.process_one()
         operations.process_one(self.service, self.settings)
         scans = self.source.snapshot_calls

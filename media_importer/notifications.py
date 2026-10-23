@@ -108,7 +108,7 @@ def send_test(settings, directory):
         from .bot_cards import event_card
         adapter.send_card(settings.notification_credentials(), event_card(
             'test', '素材导入助手 · 通知测试',
-            '通知通道已验证。同步开启后，进度按设置更新，完成与异常单独通知。', {},
+            '通知通道已验证。备份开启后，进度按设置更新，完成与异常单独通知。', {},
             keyword=options.get('keyword', ''), updated_at=_stamp()))
     except Exception as exc:
         code, message = _safe_failure(exc)
@@ -593,7 +593,7 @@ class NotificationWorker:
                                      'cache_cleanup': '缓存清理已完成', 'cache_verification': '缓存核验已通过',
                                      'cache_unavailable': '缓存盘已恢复', 'cache_capacity': '缓存空间已恢复',
                                      'source_state': '相机已就绪'}.get(code, '相关文件已处理成功')
-                            self._recover_card(db, failed_id, scope, stamp, '程序将按当前同步设置继续处理。', title=label)
+                            self._recover_card(db, failed_id, scope, stamp, '程序将按当前备份设置继续处理。', title=label)
                         else:
                             current[key] = episode
                 state["problems"] = current

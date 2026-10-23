@@ -40,9 +40,11 @@ def panel(bot, store, receipt=None, *, waiting=False):
     connection = store.get_meta('source_connection', {})
     device = connection.get('device', {})
     support = capabilities(device)
-    commands = allowed_commands(store, connection)
     from .capture import observation
     observed = observation(store, device)
+    from .camera_coordinator import state as camera_state
+    camera = camera_state(store)
+    commands = allowed_commands(store, connection, facts=camera)
     if receipt is not None:
         observed = {**receipt, **observed} if not observed.get('stale') else receipt
     try:
@@ -67,7 +69,8 @@ def panel(bot, store, receipt=None, *, waiting=False):
         elements.append(markdown('**' + label + '**'))
     if current and 'recording' in observed:
         mode = observed.get('mode')
-        state_label = ('延时拍摄中' if mode == 'timelapse' else '录像中') if observed['recording'] else '待机'
+        state_label = camera['activity']['label'] if camera['activity']['state'] not in ('unknown', 'idle') else (
+            ('延时拍摄中' if mode == 'timelapse' else '录像中') if observed['recording'] else '待机')
         elements.append(markdown('**' + state_label + '** · ' + {'video': '视频', 'photo': '照片', 'timelapse': '延时摄影', 'other': '其他'}.get(mode, '未知模式')))
         if observed['recording'] and observed.get('recording_seconds') is not None:
             from .notifications import _duration
@@ -93,9 +96,9 @@ def panel(bot, store, receipt=None, *, waiting=False):
         from .live_preview import KEY, ACTIVE
         preview = store.get_meta(KEY, {})
         if preview.get('state') in ACTIVE or preview.get('cleanup_pending'):
-            controls.append(bot.button('结束预览', {'live_preview': {'version': 1, 'action': 'stop', 'id': preview['id']}}))
+            controls.append(bot.button('结束直播' if preview.get('mode') == 'rtmp' else '结束预览', {'live_preview': {'version': 1, 'action': 'stop', 'id': preview['id']}}))
         if controls: elements.append(bot.buttons(*controls))
-        if not fresh(connection):
+        if camera['connection']['state'] not in ('connected', 'recovering'):
             elements.append(bot.buttons(button(bot, '连接相机', 'connect'), button(bot, '刷新', 'panel')))
         shoot = store.get_meta('capture_session', {})
         if shoot.get('owner') == bot.scope and shoot.get('serial') == device.get('serial_number'):

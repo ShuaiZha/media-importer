@@ -40,7 +40,7 @@ Windows 缓存示例：`D:/MediaImport/cache`。示例文件默认 `./data/cache
 
 地址和序列号可留空自动发现，不能代替飞书中的设备确认。机型能力及 USB 地址规则见[兼容性](compatibility.md#gopro)。
 
-相机参数只从 JSON 的 `source_options` 读取，连接策略只从 `backup.source_transport` 读取。飞书「相机连接」编辑同一份 JSON。修改前须停止同步，不更改既有设备归属或任务。连接策略也在此卡选择；USB 地址提示单独保留，不会被无线地址覆盖。已安装的显式 `usb` 配置升级后保持不变。
+相机参数只从 JSON 的 `source_options` 读取，连接策略只从 `backup.source_transport` 读取。飞书「相机连接」编辑同一份 JSON。修改前须停止备份，不更改既有设备归属或任务。连接策略也在此卡选择；USB 地址提示单独保留，不会被无线地址覆盖。已安装的显式 `usb` 配置升级后保持不变。
 
 ### SMB
 
@@ -91,17 +91,17 @@ Open ID 必须属于本人在**当前应用**中的身份，不是群 ID 或其�
 | `PREVIEW_RTC_PORT` | `18555` | WebRTC 视频端口（TCP/UDP），仅绑定本机或本机 Tailscale 私有地址；不可用时回退兼容播放 |
 | JSON `preview.public_url` | 空 | Tailscale HTTPS 基础地址，例如 `https://media-node.example.ts.net:8443`，由飞书保存 |
 
-两个端口在 `.env` 配置，修改后重启。观看地址在飞书「设置 → 相机与预览 → 预览设置」配置；留空仅本机观看，非空须先在本机配置 Serve；「读取本机入口」只填写表单，检查并保存后生效，无需重启。修改前先结束预览，检查不会开启画面或改动系统网络。步骤见[远程预览](native.md#远程预览tailscale)。
+两个端口在 `.env` 配置，修改后重启。观看地址在飞书「设置 → 相机与画面 → 观看入口」配置；留空仅本机观看，非空须先在本机配置 Serve；「读取本机入口」只填写表单，检查并保存后生效，无需重启。修改前先结束预览，检查不会开启画面或改动系统网络。步骤见[远程预览](native.md#远程预览tailscale)。
 
 ## 日常偏好
 
 完整文件见 [`settings.example.json`](../config/settings.example.json)。`version` 为 `5`（v0.11.0）；JSON 不支持注释，未知键、重复键或无效类型会报错。
 
-### 同步与素材
+### 备份与素材
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
-| `backup.enabled` | `false` | 同步总开关 |
+| `backup.enabled` | `false` | 备份总开关 |
 | `backup.delete_source_after_import` | `false` | 整组完整导入后删除原片，建议通过飞书确认开启 |
 | `backup.media_scope` | `"all"` | `all` 全部 / `video` 视频 / `photo` 照片与 RAW |
 | `backup.archive_previews` | `false` | 归档确认关联的 LRV、THM |
@@ -145,8 +145,8 @@ LRV 为低分辨率预览视频，THM 为缩略图。关闭预览归档只排除
 | 修改 | 原生 CLI | Docker |
 | --- | --- | --- |
 | JSON 偏好 | 自动重读；避免同时从飞书改同一设置 | 同左 |
-| 飞书保存的 SMB 连接与凭据 | 停止同步、连接检查、确认保存后自动应用 | 同左，无需修改只读 `.env` 挂载 |
-| 飞书保存的相机连接 | 停止同步后保存，自动应用 | 同左 |
+| 飞书保存的 SMB 连接与凭据 | 停止备份、连接检查、确认保存后自动应用 | 同左，无需修改只读 `.env` 挂载 |
+| 飞书保存的相机连接 | 停止备份后保存，自动应用 | 同左 |
 | 飞书保存的预览入口 | 结束预览、检查并保存，下次预览采用新入口 | 暂不支持预览 |
 | `.env` 飞书凭据与本机端口 | `media-importer stop` 后 `media-importer start` | `docker compose up -d --force-recreate --no-build` |
 | 三个数据目录 | 停止、迁移、重新登记 | 停止、迁移、修改挂载并重建 |

@@ -64,6 +64,25 @@ def _source(identity, *, details=False, stale=False):
     return elements
 
 
+def overview(bot, store):
+    """A query reads current facts; detailed source scans remain explicit."""
+    from .camera_coordinator import state
+    camera = state(store)
+    device = store.get_meta('source_connection', {}).get('device', {})
+    observed = camera['observed']
+    battery = str(observed['battery_percent']) + '%' if observed.get('battery_percent') is not None else '未知'
+    remaining = _size(observed['storage_remaining_bytes']) if observed.get('storage_remaining_bytes') is not None else '未知'
+    elements = [paragraph((device.get('model_name') or '尚未连接相机') + ' · ' +
+                          {'usb': 'USB', 'wifi': 'Wi-Fi'}.get(device.get('transport'), '未知连接')),
+                paragraph(camera['connection']['label'] + ' · ' + camera['activity']['label']),
+                paragraph('电量 ' + battery + ' · 存储卡剩余 ' + remaining)]
+    if observed.get('overheating'): elements.append(paragraph('相机报告过热'))
+    if observed.get('observed_at'): elements.append(note('更新 ' + format_time(observed['observed_at'])))
+    elements.append(bot.buttons(bot.button('刷新', {'panel': 'camera_status'}),
+                               button(bot, '设备详情', 'inspect')))
+    return card('相机状态', elements, 'orange' if camera['activity']['state'] == 'recovering' else 'blue', shared=True)
+
+
 def render(bot, op, page=None, *, device_details=False):
     result = json.loads(op['result'] or '{}')
     plan = json.loads(op['plan'] or '{"groups":[],"retained":[]}')
@@ -149,6 +168,7 @@ def render(bot, op, page=None, *, device_details=False):
 
 def process_job(bot, job, payload):
     from .camera_operations import enqueue, confirm, cancel, get, verify
+    from .camera_coordinator import operation_reason
     action = payload['camera']
     waiting = False
     store = Store(bot.directory)
@@ -156,6 +176,8 @@ def process_job(bot, job, payload):
         kind = action['action']
         if kind == 'select':
             response = selection(bot, action['mode'])
+        elif kind == 'inspect' and operation_reason(store, 'browse'):
+            response = overview(bot, store)
         else:
             identifier = payload.get('camera_request')
             if not identifier:

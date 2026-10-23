@@ -183,7 +183,7 @@ class DrainReceiptTests(unittest.TestCase):
         self.assertTrue(self.bot.process_one())
         self.assertEqual('om_drain_result', self.updater.call_args.args[1])
         text = json.dumps(self.updater.call_args.args[2], ensure_ascii=False)
-        self.assertIn('同步已停止', text)
+        self.assertIn('备份已停止', text)
         self.assertNotIn('回执已失效', text)
         self.assertEqual(saved, self.path.read_bytes())
 
@@ -194,7 +194,7 @@ class DrainReceiptTests(unittest.TestCase):
         self.applied()
         self.assertTrue(self.bot.process_one())
         text = json.dumps(self.updater.call_args.args[2], ensure_ascii=False)
-        self.assertNotIn('同步已停止', text)
+        self.assertNotIn('备份已停止', text)
         self.assertIn('设置已变更', text)
         self.assertTrue(self.settings.read()['config']['backup']['enabled'])
 
@@ -218,4 +218,4 @@ class DrainReceiptTests(unittest.TestCase):
         self.applied()
         self.assertTrue(self.bot.process_one())
         self.assertEqual('om_drain_result', self.updater.call_args.args[1])
-        self.assertIn('同步已停止', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))
+        self.assertIn('备份已停止', json.dumps(self.updater.call_args.args[2], ensure_ascii=False))

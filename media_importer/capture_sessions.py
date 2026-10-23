@@ -111,7 +111,7 @@ def selection(store, settings, owner, identifier):
             device.get('serial_number') != current['serial'] or device.get('type') != current['device_type']):
         raise ConfigError('请连接并确认本次拍摄的相机')
     if item['config']['backup']['enabled']:
-        raise ConfigError('全量同步已开启，新素材会按现有规则导入；可在「同步」查看进度')
+        raise ConfigError('全量备份已开启，新素材会按现有规则导入；可在「备份」查看进度')
     import uuid
     task_id = uuid.uuid5(uuid.NAMESPACE_URL, 'capture-' + identifier).hex
     previous = get(store.db, task_id, owner)
