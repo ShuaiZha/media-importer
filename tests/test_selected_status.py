@@ -55,7 +55,7 @@ class SelectedStatusTests(unittest.TestCase):
         self.assertEqual(before, self.store.files())
         card = progress_card(view, 300)
         text = json.dumps(card, ensure_ascii=False)
-        self.assertEqual('选定素材导入进行中', card['header']['title']['content'])
+        self.assertEqual('所选文件导入进行中', card['header']['title']['content'])
         self.assertIn('50%', text)
         self.assertNotIn('自动进度更新已停止', text)
         self.assertNotIn('备份已停止', text)
@@ -70,7 +70,7 @@ class SelectedStatusTests(unittest.TestCase):
         self.assertEqual(75, view['batch']['percent'])
         self.assertEqual(1, view['batch']['imported_files'])
         self.assertEqual(0, view['batch']['completed_files'])
-        self.assertEqual('选定素材归档进行中', status_content(view)[0])
+        self.assertEqual('所选文件归档进行中', status_content(view)[0])
         self.assertEqual('upload', view['files'][0]['stage'])
 
     def test_unrelated_current_stage_is_not_displayed_as_selected_transfer(self):
@@ -81,7 +81,7 @@ class SelectedStatusTests(unittest.TestCase):
         view = self.view()
         self.assertIsNone(view['stages']['upload']['current_file'])
         self.assertEqual(0, view['batch']['percent'])
-        self.assertEqual('选定素材等待传输', status_content(view)[0])
+        self.assertEqual('所选文件等待传输', status_content(view)[0])
 
     def test_selected_import_keeps_originals_even_if_automatic_delete_setting_is_on(self):
         self.settings.update_preferences({'backup': {'delete_source_after_import': True}})
@@ -101,7 +101,7 @@ class SelectedStatusTests(unittest.TestCase):
         self.assertFalse(view['transfer_enabled'])
         self.assertEqual('paused', view['controls']['upload']['state'])
         self.assertEqual(1, view['batch']['total_files'])
-        self.assertEqual('选定素材传输已停止', status_content(view)[0])
+        self.assertEqual('备份已停止', status_content(view)[0])
 
     def test_complete_cache_uses_selection_run_verification_for_connection_guidance(self):
         self.selected()
@@ -129,7 +129,9 @@ class SelectedStatusTests(unittest.TestCase):
         self.assertEqual(3, view['cleanup']['cache_cleared'])
         self.assertFalse(view['files'])
         self.assertEqual(0, view['queues']['upload']['pending_files'])
-        self.assertEqual('选定素材归档完成', status_content(view)[0])
+        self.assertEqual('备份已停止', status_content(view)[0])
+        self.assertIn('最近结果：已归档 3 个文件', str(status_content(view)))
+        self.assertNotIn('100%', str(status_content(view)))
 
     def test_enabling_full_sync_returns_to_existing_full_scope(self):
         self.other_cached()
@@ -166,7 +168,7 @@ class SelectedStatusTests(unittest.TestCase):
         text = json.dumps(detail_content(view), ensure_ascii=False)
         self.assertIn('已有归档待核验', text)
         self.assertIn('既有归档缺失或身份已变化', text)
-        self.assertNotIn('选定素材归档完成', text)
+        self.assertNotIn('所选文件归档完成', text)
         self.assertEqual(before, self.store.get(self.row['id']))
 
     def test_archive_checks_publish_each_file_and_never_use_another_request_proof(self):

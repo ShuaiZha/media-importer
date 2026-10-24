@@ -139,12 +139,12 @@ class SelectionCardTests(unittest.TestCase):
         op['plan'] = json.dumps(plan)
         op['result'] = json.dumps(operations._summary(plan))
         chooser = cards.render(self.bot, op, 0)
-        self.assertIn('1 个视频 + 1 个预览文件 · 1.1 KiB', text(chooser))
+        self.assertIn('1 个视频 + 1 个辅助文件 · 1.1 KiB', text(chooser))
         review = cards.render(self.bot, op)
         self.assertIn('归档范围 2 个文件', text(review))
         self.assertIn('clip-0.MP4', text(review))
         self.assertIn('clip-0.LRV', text(review))
-        self.assertNotIn('不归档关联预览文件', text(review))
+        self.assertNotIn('不归档辅助文件', text(review))
 
     def test_unknown_companions_remain_in_archive_totals_even_when_previews_excluded(self):
         op = operation(groups=1, selected=[0], state='ready')
@@ -179,7 +179,7 @@ class SelectionCardTests(unittest.TestCase):
         self.assertLess(rendered.index('GH011414.MP4'), rendered.index('GH021414.MP4'))
         self.assertNotIn('.LRV', rendered)
         self.assertNotIn('查看完整清单', rendered)
-        self.assertIn('不归档关联预览文件 2 个', rendered)
+        self.assertIn('不归档辅助文件 2 个', rendered)
 
     def test_large_review_is_bounded_and_exposes_full_archive_list(self):
         op = operation(state='ready', selected=list(range(13)))
@@ -232,13 +232,13 @@ class SelectionCardTests(unittest.TestCase):
         result = cards.render(self.bot, op)
         self.assertIn('归档范围 2 个文件', text(result))
         self.assertIn('已有归档 1 个', text(result))
-        self.assertIn('不归档关联预览文件 2 个', text(result))
+        self.assertIn('不归档辅助文件 2 个', text(result))
         self.assertNotIn('首个文件', text(result))
         self.assertIn('原片策略：保留', text(result))
         self.assertIn('clip-0.MP4', text(result))
         self.assertIn('clip-1.MP4', text(result))
         self.assertNotIn('.LRV', text(result))
-        confirm = next(b for b in buttons(result) if b['text']['content'] == '确认导入并上传')
+        confirm = next(b for b in buttons(result) if b['text']['content'] == '确认备份')
         self.assertEqual('primary', confirm['type'])
         self.assertEqual(op['choice_revision'], confirm['value']['selected_import']['choice_revision'])
         self.assertNotIn('delete_source', text(result))
@@ -280,19 +280,19 @@ class SelectionCardTests(unittest.TestCase):
         op['result'] = json.dumps({'total_files': 1, 'total_bytes': 1024, 'imported_files': 1,
                                   'uploaded_files': 0, 'reason': '存储暂不可用'})
         result = cards.render(self.bot, op)
-        self.assertEqual('选择导入已停止', result['header']['title']['content'])
-        self.assertIn('继续本次任务', text(result))
+        self.assertEqual('所选文件备份已停止', result['header']['title']['content'])
+        self.assertIn('继续本次备份', text(result))
         op['state'] = 'done'
         result = cards.render(self.bot, op)
-        self.assertEqual('本次选择导入已结束', result['header']['title']['content'])
+        self.assertEqual('本次所选文件备份已结束', result['header']['title']['content'])
         self.assertEqual('orange', result['header']['template'])
-        self.assertNotIn('选择导入已完成', text(result))
+        self.assertNotIn('所选文件备份已完成', text(result))
 
     def test_cancelled_draft_cannot_offer_transfer_resume(self):
         op = operation(state='paused', selected=[0])
         op['cancelled'] = 1
         rendered = text(cards.render(self.bot, op))
-        self.assertNotIn('继续本次任务', rendered)
+        self.assertNotIn('继续本次备份', rendered)
         self.assertIn('重新选择文件', rendered)
 
     def test_completed_archive_reports_cleanup_separately(self):
@@ -300,7 +300,7 @@ class SelectionCardTests(unittest.TestCase):
         op['result'] = json.dumps({'total_files': 1, 'total_bytes': 1024, 'imported_files': 1,
                                   'uploaded_files': 1, 'cache_cleanup_pending': 1})
         result = cards.render(self.bot, op)
-        self.assertEqual('选择导入已完成', result['header']['title']['content'])
+        self.assertEqual('所选文件备份已完成', result['header']['title']['content'])
         self.assertIn('缓存待清理 1 个', text(result))
         self.assertIn('**1 个文件**', text(result))
 
@@ -372,7 +372,7 @@ class SelectionCallbackTests(unittest.TestCase):
         self.assertIn('归档范围 1 个文件 · 32.0 B', text(preview))
         self.assertIn(second.path, text(preview))
         self.assertNotIn(first.path, text(preview))
-        confirm = next(b for b in buttons(preview) if b['text']['content'] == '确认导入并上传')
+        confirm = next(b for b in buttons(preview) if b['text']['content'] == '确认备份')
         event = self.callback(confirm['value'], event_id='confirm-one-chapter')
         event['event']['context'] = {'open_message_id': 'om_selected_test'}
         self.bot.receive_card(event)
@@ -387,7 +387,7 @@ class SelectionCallbackTests(unittest.TestCase):
         self.assertEqual(before, self.path.read_bytes())
         self.assertTrue(self.bot.process_one())
         finished = self.updater.call_args.args[2]
-        self.assertIn('选择导入已完成', text(finished))
+        self.assertIn('所选文件备份已完成', text(finished))
         self.assertIn('**1 个文件**', text(finished))
 
     def test_real_callback_saves_pages_previews_and_deduplicates_delivery(self):
@@ -408,7 +408,7 @@ class SelectionCallbackTests(unittest.TestCase):
         self.bot.receive_card(event)
         self.assertTrue(self.bot.process_one())
         result = self.updater.call_args.args[2]
-        self.assertEqual('确认导入', result['header']['title']['content'])
+        self.assertEqual('确认文件备份', result['header']['title']['content'])
         with self.bot.db() as db:
             row = dict(db.execute('SELECT * FROM selected_imports').fetchone())
         self.assertEqual([0, 1, 12], json.loads(row['plan'])['selected'])
@@ -498,7 +498,7 @@ class SelectionCallbackTests(unittest.TestCase):
         with self.bot.db() as db:
             row = dict(db.execute('SELECT * FROM selected_imports').fetchone())
             self.assertEqual(1, row['choice_revision'])
-        self.assertEqual('确认导入', self.updater.call_args.args[2]['header']['title']['content'])
+        self.assertEqual('确认文件备份', self.updater.call_args.args[2]['header']['title']['content'])
 
     def test_old_preview_confirmation_cannot_start_a_newer_selection(self):
         service, first = self.browse()
@@ -506,7 +506,7 @@ class SelectionCallbackTests(unittest.TestCase):
         self.bot.receive_card(self.callback(submit['value'], event_id='first-choice', fields={'groups': ['0']}))
         self.assertTrue(self.bot.process_one())
         old_preview = self.sender.call_args.args[1]
-        old_confirm = next(b for b in buttons(old_preview) if b['text']['content'] == '确认导入并上传')
+        old_confirm = next(b for b in buttons(old_preview) if b['text']['content'] == '确认备份')
         with self.bot.db() as db:
             op = dict(db.execute('SELECT * FROM selected_imports').fetchone())
         edit = cards.render(self.bot, op, page=0)
@@ -514,7 +514,7 @@ class SelectionCallbackTests(unittest.TestCase):
         self.bot.receive_card(self.callback(submit['value'], event_id='changed-choice', fields={'groups': ['1']}))
         self.assertTrue(self.bot.process_one())
         current_preview = self.sender.call_args.args[1]
-        current_confirm = next(b for b in buttons(current_preview) if b['text']['content'] == '确认导入并上传')
+        current_confirm = next(b for b in buttons(current_preview) if b['text']['content'] == '确认备份')
         self.bot.receive_card(self.callback(old_confirm['value'], event_id='stale-confirm'))
         self.assertTrue(self.bot.process_one())
         with self.bot.db() as db:

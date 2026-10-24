@@ -1,6 +1,7 @@
 *
 !Dockerfile
 !requirements.txt
+!LICENSE
 !media_importer/
 !media_importer/**
 !scripts/

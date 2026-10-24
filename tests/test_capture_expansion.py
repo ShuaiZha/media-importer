@@ -246,7 +246,7 @@ class RequestAndCardTests(unittest.TestCase):
         before = self.path.read_bytes()
         self.bot.receive_card(self.callback(self.bot.action({'capture': {'version': 1, 'action': 'settings'}})))
         self.assertTrue(self.bot.process_one())
-        self.assertEqual('相机页面', self.sender.call_args.args[1]['header']['title']['content'])
+        self.assertEqual('画面与拍摄', self.sender.call_args.args[1]['header']['title']['content'])
         self.assertFalse(self.store.db.execute('SELECT 1 FROM capture_requests').fetchone())
         self.assertEqual(before, self.path.read_bytes())
 

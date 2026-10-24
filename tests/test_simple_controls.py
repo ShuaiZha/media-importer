@@ -87,7 +87,7 @@ class SimpleControlsTests(unittest.TestCase):
         self.assertEqual('video', self.settings.read()['config']['backup']['media_scope'])
         self.settings.update_preferences({'backup': {'archive_previews': False}})
         previews = self.bot.panel('previews')
-        self.assertEqual(['归档预览文件'], [button['text']['content'] for element in previews['elements'] if element['tag'] == 'action' for button in element['actions']])
+        self.assertEqual(['开启辅助文件归档'], [button['text']['content'] for element in previews['elements'] if element['tag'] == 'action' for button in element['actions']])
         self.assertFalse(self.settings.read()['config']['backup']['archive_previews'])
         confirmation = self.bot.panel('confirm_previews')
         self.assertIn('下轮生效', json.dumps(confirmation, ensure_ascii=False))

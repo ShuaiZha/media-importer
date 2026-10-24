@@ -54,3 +54,40 @@ def selected_view(result, state):
                       'completed_files': result.get('uploaded_files', 0),
                       'import_percent': 100 * (result.get('import_bytes') or 0) / size if size else 0,
                       'percent': 100 * (result.get('upload_bytes') or 0) / size if size else 0}}
+
+
+def cleanup_scope(plan):
+    """Count only adapter-confirmed auxiliary members, never guess from extension."""
+    members = []
+    for group in plan.get('groups', []):
+        auxiliary = set(group.get('preview_ids', []))
+        for asset in group.get('members', []):
+            members.append({**asset, 'auxiliary': asset.get('identity_key') in auxiliary})
+    auxiliary = sum(m['auxiliary'] for m in members)
+    return {'primary_files': len(members) - auxiliary, 'auxiliary_files': auxiliary,
+            'members': members}
+
+
+def cleanup_scope_text(primary, auxiliary):
+    parts = [f'原片 {primary} 个'] if primary else []
+    if auxiliary:
+        parts.append(f'辅助文件 {auxiliary} 个')
+    return ' · '.join(parts) or '没有符合条件的文件'
+
+
+def current_work(view):
+    """A completed single-file request is a recent result, not a running service."""
+    selected = view.get('selected_import', {})
+    return bool(selected and selected.get('state') not in ('done', 'paused'))
+
+
+def cleanup_result_counts(plan, result):
+    """Split actual deletion outcomes; no assumed deletion from a planned scope."""
+    roles = {a['path']: a['auxiliary'] for a in cleanup_scope(plan)['members']}
+    facts = {}
+    for detail in result.get('details', []):
+        state, path = detail.get('state'), detail.get('path')
+        if state in ('deleted', 'absent', 'retained', 'unknown') and path in roles:
+            key = state + ('_auxiliary' if roles[path] else '_primary')
+            facts[key] = facts.get(key, 0) + 1
+    return facts

@@ -46,7 +46,7 @@ def panel(bot, state):
     finally: store.close()
     if phase == 'error': buttons.append(bot.button('连接检查', {'panel': 'preview_check'}))
     if buttons: elements.append(bot.buttons(*buttons))
-    return card(title, elements, 'orange' if phase == 'error' else 'blue', shared=True)
+    return card(title, elements, 'orange' if phase == 'error' else 'grey' if phase == 'stopped' else 'blue', shared=True)
 
 
 def process_job(bot, job, payload):

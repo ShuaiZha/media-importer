@@ -12,8 +12,9 @@ PAGE = '''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 video{object-fit:contain}#screen{aspect-ratio:16/9;background:#030712;border-radius:10px;overflow:hidden}
 .playback-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0}
 .playback-status{display:flex;flex-direction:column;gap:4px;min-width:0}#mode{font-size:12px;color:#94a3b8;line-height:1.5;overflow-wrap:anywhere}
-nav{display:flex;gap:8px;flex-shrink:0}button{font:inherit;font-size:12px;min-height:40px;padding:8px 12px;background:#253449;color:#e2e8f0;border:1px solid #3b4a60;border-radius:8px;cursor:pointer;white-space:nowrap}
+nav{display:flex;align-items:center;flex-wrap:wrap;gap:8px;flex-shrink:0}button{font:inherit;font-size:12px;min-height:40px;padding:8px 12px;background:#253449;color:#e2e8f0;border:1px solid #3b4a60;border-radius:8px;cursor:pointer;white-space:nowrap}
 button:hover{background:#33465e}button:focus-visible{outline:2px solid #93c5fd;outline-offset:2px}p{font-size:12px;color:#94a3b8;line-height:1.6;margin:0}
+#playbackOptions{position:relative}#playbackOptions summary{cursor:pointer;list-style:none;font-size:12px;padding:10px 8px;min-height:40px}#playbackOptions[open] button{position:absolute;bottom:100%;right:0;z-index:2;box-shadow:0 3px 12px #0008}summary:focus-visible{outline:2px solid #93c5fd}#mode{font-size:11px}button[hidden]{display:none!important}
 .embedded,.embedded body{height:100%;min-height:0;overflow:hidden}
 .embedded body{padding:0;margin:0;max-width:none;display:grid;grid-template-rows:minmax(0,1fr) auto}
 .embedded .page-heading,.embedded #detail{display:none}
@@ -22,7 +23,7 @@ button:hover{background:#33465e}button:focus-visible{outline:2px solid #93c5fd;o
 @media(max-width:520px){body{padding:12px}.playback-bar{flex-direction:column;align-items:stretch;gap:8px}.playback-status{flex-direction:row;align-items:center;flex-wrap:wrap;gap:4px 10px}nav button{flex:1;min-height:44px}.embedded .playback-bar{padding:10px 12px}}
 </style><body><header class="page-heading"><h1>实时预览</h1></header>
 <div id="screen"></div><div class="playback-bar"><div class="playback-status"><span id="state" role="status" aria-live="polite">正在连接画面</span><span id="mode"></span></div>
-<nav aria-label="播放控制"><button id="retry" type="button">播放／重新连接</button><button id="compat" type="button">兼容播放</button><button id="sound" type="button" hidden>开启声音</button></nav></div>
+<nav aria-label="播放控制"><button id="retry" type="button">重新加载画面</button><button id="sound" type="button" hidden>开启声音</button><button id="fullscreen" type="button">全屏</button><details id="playbackOptions"><summary>播放选项</summary><button id="compat" type="button">切换兼容播放</button></details><button id="back" type="button" hidden>返回</button></nav></div>
 <p id="detail">关闭页面不会结束预览。请在相机页面结束预览。</p>
 <script type="module">
 import {VideoRTC} from './player.js';
@@ -39,18 +40,20 @@ function dispose(){
  if(player){if(mode!=='mse'){player.onerror=null;player.pause();player.srcObject=null;player.removeAttribute('src');player.load();}player.remove();}
 }
 function finish(){
- ended=true;generation++;dispose();label.textContent='预览已结束';modeLabel.textContent='';
- detail.textContent='请从飞书「相机 → 相机页面」重新开启。';
+ ended=true;generation++;dispose();screen.hidden=true;label.textContent='预览已结束';modeLabel.textContent='';
+ detail.textContent='画面会话已结束。可从飞书「相机 → 画面与拍摄」重新开启。';
+ for(const id of ['retry','compat','sound','fullscreen','playbackOptions'])document.querySelector('#'+id).hidden=true;
+ document.querySelector('#back').hidden=history.length<2||location.hash==='#embedded';
 }
-function play(){video()?.play().catch(()=>{if(!ended)label.textContent='请点击播放按钮';});}
+function play(){video()?.play().catch(()=>{if(!ended)label.textContent='请点击重新加载画面';});}
 function fallback(id){if(!ended && generation===id && mode==='webrtc')connect(false,true);}
 function connect(preferRTC=true,failed=false,forceMSE=false){
  if(ended)return;
  const id=++generation;dispose();lastTime=0;lastFrames=0;unchanged=0;started=Date.now();
  mode=preferRTC && rtcAvailable && typeof RTCPeerConnection!=='undefined'?'webrtc':native && !forceMSE?'hls':'mse';
  label.textContent='正在连接画面';
- modeLabel.textContent=mode==='webrtc'?'WebRTC · 低延迟模式':
-  (mode==='hls'?'HLS':'MSE')+' · 兼容模式'+(failed?' · 低延迟连接未成功，已自动切换':'');
+ modeLabel.textContent=mode==='webrtc'?'低延迟 · WebRTC':
+  '兼容播放 · '+(mode==='hls'?'HLS':'MSE')+(failed?' · 低延迟连接未成功，已自动切换':'');
  if(mode==='mse'){
   player=document.createElement('viewer-video');player.mode='mse';player.media=audioAvailable?'video,audio':'video';player.background=false;
   screen.replaceChildren(player);if(player.video){player.video.muted=!soundOn;player.video.volume=1;}player.src=url;return;
@@ -108,7 +111,9 @@ async function start(){
 }
 document.querySelector('#retry').onclick=()=>{if(ended)return;if(video()?.paused && video()?.readyState>=2 && !video()?.error)play();else start();};
 document.querySelector('#sound').onclick=()=>{soundOn=!soundOn;const v=video();if(v){v.muted=!soundOn;v.volume=1;play();}document.querySelector('#sound').textContent=soundOn?'静音':'开启声音';};
-document.querySelector('#compat').onclick=()=>connect(false);
+document.querySelector('#compat').onclick=()=>{document.querySelector('#playbackOptions').open=false;connect(false);};
+document.querySelector('#back').onclick=()=>history.back();
+document.querySelector('#fullscreen').onclick=()=>{const v=video();if(v?.webkitEnterFullscreen)v.webkitEnterFullscreen();else if(screen.requestFullscreen)screen.requestFullscreen().catch(()=>{label.textContent='当前窗口不支持全屏';});};
 document.addEventListener('visibilitychange',()=>{
  if(document.hidden){hiddenAt=Date.now();return;}
  if(!ended && hiddenAt && Date.now()-hiddenAt>4000)start();

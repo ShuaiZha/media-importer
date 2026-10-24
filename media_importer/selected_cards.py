@@ -109,7 +109,7 @@ def _group_label(index, group, archive_previews, *, file_selection=False):
         count = f'{len(primary)} 个文件'
     preview_count = len(members) - len(primary)
     if preview_count:
-        count = (count + ' + ' if primary else '') + f'{preview_count} 个预览文件'
+        count = (count + ' + ' if primary else '') + f'{preview_count} 个辅助文件'
     return f'{index + 1}. {title} · {count} · {_size(sum(item.get("size", 0) for item in members))}'
 
 
@@ -158,7 +158,7 @@ def _summary(result):
     if result.get('already_archived'):
         elements.append(paragraph(f'已有归档 {_count(result, "already_archived")} 个；核验通过后不重复传输。'))
     if result.get('excluded_preview_files'):
-        elements.append(paragraph(f'不归档关联预览文件 {_count(result, "excluded_preview_files")} 个。'))
+        elements.append(paragraph(f'不归档辅助文件 {_count(result, "excluded_preview_files")} 个。'))
     return elements
 
 
@@ -196,7 +196,7 @@ def render(bot, op, page=None, *, details=False):
         return card('正在停止素材扫描' if op['cancelled'] else '正在读取相机素材',
                     [paragraph('正在结束扫描。' if op['cancelled'] else
                                '正在读取文件清单'),
-                     bot.buttons(button(bot, '停止本次任务', 'cancel', id=identifier))], shared=True)
+                     bot.buttons(button(bot, '停止本次备份', 'cancel', id=identifier))], shared=True)
     if state == 'ready' and not op['cancelled']:
         elements = _summary(result)
         members = _members(plan, selected_only=True)
@@ -205,25 +205,25 @@ def render(bot, op, page=None, *, details=False):
             elements.append(note(f'已展示前 {PAGE_SIZE} 个文件，完整清单共 {len(members)} 个。'))
         if plan.get('archive_location'): elements.append(paragraph('目的地：' + plan['archive_location']))
         elements.append(note(PRESERVATION))
-        confirm = button(bot, '确认导入并上传', 'confirm', id=identifier,
+        confirm = button(bot, '确认备份', 'confirm', id=identifier,
                          choice_revision=op['choice_revision'])
         confirm['type'] = 'primary'
         choices = ([button(bot, '查看完整清单', 'details', id=identifier, page=0)]
                    if len(members) > PAGE_SIZE else [])
         choices.append(button(bot, '修改选择', 'edit', id=identifier, page=0))
-        return card('确认导入', elements + [
+        return card('确认文件备份', elements + [
             bot.buttons(*choices),
             bot.buttons(confirm, button(bot, '取消', 'cancel', id=identifier))], shared=True)
-    titles = {'queued_transfer': '选择导入已排队', 'running': '选择导入进行中',
-              'waiting': '选择导入等待恢复', 'paused': '选择导入已停止', 'done': '选择导入已完成'}
-    title = titles.get(state, '选择导入')
+    titles = {'queued_transfer': '所选文件备份已排队', 'running': '所选文件备份进行中',
+              'waiting': '所选文件备份等待恢复', 'paused': '所选文件备份已停止', 'done': '所选文件备份已完成'}
+    title = titles.get(state, '所选文件备份')
     if state in ACTIVE and op['cancelled']:
-        title = '正在停止选择导入'
+        title = '正在停止所选文件备份'
     elements = []
     if 'total_files' in result:
         elements += _progress(result, state)
     error = result.get('error') or result.get('reason')
-    error = {'pending_files': '部分选中素材尚未完成，连接恢复后自动重试。',
+    error = {'pending_files': '部分所选文件尚未完成，连接恢复后自动重试。',
              'cache_cleanup': '归档已完成，正在重试清理本地缓存。',
              'archive_verification': '已有归档需重新核验，暂不计为完成。'}.get(error, error)
     if error:
@@ -234,7 +234,7 @@ def render(bot, op, page=None, *, details=False):
     complete = bool(result.get('total_files') and not verification_pending and
                     _count(result, 'uploaded_files') == _count(result, 'total_files'))
     if state == 'done' and not complete:
-        title = '本次选择导入已结束'
+        title = '本次所选文件备份已结束'
         if not error:
             elements.append(paragraph('本次未执行传输。' if not result.get('imported_files') and
                                       not result.get('uploaded_files') else '未完成的任务和完整缓存保留。'))
@@ -247,17 +247,17 @@ def render(bot, op, page=None, *, details=False):
         if plan.get('destination_name'): elements.append(paragraph('目的地：' + plan['destination_name']))
     buttons = []
     if state in ACTIVE:
-        buttons.append(button(bot, '停止本次任务', 'cancel', id=identifier))
+        buttons.append(button(bot, '停止本次备份', 'cancel', id=identifier))
         buttons.append(button(bot, '当前文件完成后停止', 'drain', id=identifier))
     if state == 'paused' and plan.get('confirmed'):
-        buttons.append(button(bot, '继续本次任务', 'resume', id=identifier))
+        buttons.append(button(bot, '继续本次备份', 'resume', id=identifier))
     if plan.get('selected'):
         buttons.append(button(bot, '查看详情', 'details', id=identifier, page=0))
     if state == 'done' or state == 'paused' and not plan.get('confirmed'):
         buttons.append(button(bot, '重新选择文件', 'browse'))
     if buttons:
         elements.append(bot.buttons(*buttons))
-    color = 'orange' if error or cleanup or verification_pending or state in ('paused', 'waiting') else 'green' if state == 'done' and complete else 'blue'
+    color = 'orange' if error or cleanup or verification_pending or state == 'waiting' else 'grey' if state == 'paused' or op['cancelled'] else 'green' if state == 'done' and complete else 'blue'
     return card(title, elements, color, shared=True)
 
 
@@ -308,7 +308,7 @@ def process_job(bot, job, payload):
         response = render(bot, op, page, details=kind == 'details')
         payload['selected_observation'] = observation
     except ConfigError as exc:
-        response = card('选择导入未执行', [paragraph(str(exc))], 'orange', shared=True)
+        response = card('所选文件备份未执行', [paragraph(str(exc))], 'orange', shared=True)
     finally:
         store.close()
     delivered = bot.reply(job, payload, response, waiting)

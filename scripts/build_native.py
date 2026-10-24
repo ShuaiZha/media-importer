@@ -40,6 +40,7 @@ def build(output):
         *(['--collect-submodules', 'bleak'] if sys.platform == 'darwin' else []),
         '--exclude-module', 'tkinter', str(ROOT / 'scripts/native_entry.py')], cwd=ROOT, env=env, check=True)
     bundle = work / 'dist/media-importer'
+    shutil.copyfile(ROOT / 'LICENSE', bundle / 'LICENSE')
     from scripts.preview_bundle import bundle as bundle_preview
     components = bundle_preview(bundle, key)
     info = {'format': 1, 'version': __version__, 'platform': key, 'config_version': 4, 'settings_version': 5, 'database_version': 5}

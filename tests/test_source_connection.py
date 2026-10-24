@@ -85,6 +85,26 @@ class DiscoveryTests(unittest.TestCase):
         for name in ('MAX', 'HERO8 Black', 'HERO', 'HERO9 Mini', 'unknown'):
             self.assertFalse(compatibility(name)['import_supported'], name)
 
+    def test_wireless_delete_profile_is_transport_and_firmware_specific(self):
+        profile = compatibility('HERO9 Black', 'HD9.01.01.72.00', 'wifi')
+        self.assertTrue(profile['delete_verified'])
+        self.assertEqual('wifi', profile['delete_transport'])
+        for name, firmware in [('HERO9 Black','unknown'),('HERO10 Black','HD9.01.01.72.00')]:
+            self.assertFalse(compatibility(name,firmware,'wifi')['delete_verified'])
+        self.assertFalse(compatibility('HERO9 Black','HD9.01.01.72.00','unknown')['delete_verified'])
+
+    def test_wireless_unverified_formats_are_not_deleted(self):
+        config = configuration();config.source['transport'] = 'wifi'
+        source = GoProSource(config)
+        source.compatibility = compatibility('HERO9 Black','HD9.01.01.72.00','wifi')
+        self.assertIsNone(source.deletion_support(footage()))
+        for suffix in ('JPG','THM','GPR'):
+            asset = replace(footage(), path='100GOPRO/TEST.'+suffix)
+            self.assertIsNotNone(source.deletion_support(asset))
+            with patch.object(source,'verify_primary'), patch.object(source,'_open') as request:
+                with self.assertRaises(SourceError):source.delete(asset)
+                request.assert_not_called()
+
     def test_identity_and_file_ids_do_not_depend_on_display_model(self):
         old = footage()
         generic = replace(old, device_name='GoPro')

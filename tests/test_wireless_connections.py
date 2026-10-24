@@ -54,9 +54,38 @@ class ConnectionTests(unittest.TestCase):
 
     def test_wireless_never_inherits_verified_usb_delete_capability(self):
         self.bind()
-        observe(self.store, wireless())
+        item = wireless()
+        item['compatibility']['delete_verified'] = True  # A USB proof is insufficient.
+        observe(self.store, item)
         config = Config.from_values(self.settings.read()['config'])
         self.assertIsNotNone(reason(self.store, config, deleting=True))
+
+    def test_verified_wireless_profile_does_not_enable_user_preference(self):
+        from media_importer.adapters.gopro_models import compatibility
+        from media_importer.source_connection import deletion_enabled
+        self.bind()
+        item = wireless();item['compatibility'] = compatibility(item['model_name'], item['firmware_version'], 'wifi')
+        observe(self.store, item)
+        raw = self.settings.read()['config'];raw['source']['transport'] = 'wifi'
+        config = Config.from_values(raw)
+        self.assertIsNone(reason(self.store, config, deleting=True))
+        self.assertFalse(deletion_enabled(config, item))
+        raw['backup']['delete_source_after_import'] = True
+        self.assertTrue(deletion_enabled(Config.from_values(raw), item))
+
+    def test_binding_refreshes_capability_without_changing_approval_or_settings(self):
+        from media_importer.adapters.gopro_models import compatibility
+        self.bind();before=self.settings.path.read_bytes()
+        item=wireless();item['compatibility']=compatibility(item['model_name'],item['firmware_version'],'wifi')
+        observe(self.store,item)
+        binding=self.store.get_meta('source_selection')
+        self.assertEqual(item['serial_number'],binding['serial_number'])
+        self.assertEqual('wifi',binding['transport'])
+        self.assertTrue(binding['compatibility']['delete_verified'])
+        item['firmware_version']='unknown';item['compatibility']=compatibility(item['model_name'],'unknown','wifi')
+        self.assertEqual('approved',observe(self.store,item)['state'])
+        self.assertFalse(self.store.get_meta('source_selection')['compatibility']['delete_verified'])
+        self.assertEqual(before,self.settings.path.read_bytes())
 
     def test_auto_prefers_usb_and_does_not_run_radio_when_usb_available(self):
         self.bind()

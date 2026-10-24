@@ -43,7 +43,7 @@ def settings_result(changes, applied, stopping):
     if not applied:
         return {'title': '设置已保存 · 等待生效', 'detail': '', 'level': 'warning'}
     if 'enabled' in backup:
-        return {'title': '备份已开启' if backup['enabled'] else '正在停止备份' if stopping else '备份已停止',
+        return {'title': '自动备份已开启' if backup['enabled'] else '正在停止备份' if stopping else '备份已停止',
                 'detail': '', 'level': 'warning' if stopping else 'success'}
     if 'stop_after_current' in backup:
         return {'title': '当前文件完成后停止', 'detail': '不再开始新文件。', 'level': 'success'}
@@ -52,7 +52,7 @@ def settings_result(changes, applied, stopping):
     labels = {'upload_mib_per_second': '上传限速', 'max_cache_gib': '缓存额度', 'min_free_disk_gib': '磁盘预留',
               'poll_seconds': '扫描间隔', 'retry_seconds': '重试间隔', 'stability_seconds': '清单复查间隔',
               'progress_interval_seconds': '进度间隔', 'connection_events': '连接提醒', 'keyword': '通知前缀'}
-    title, lines = '设置已生效', []
+    title, lines = '设置已生效' if changes else '设置未变化', []
     for group, updates in changes.items():
         title = titles.get(group, title)
         for key, value in updates.items():
@@ -60,14 +60,14 @@ def settings_result(changes, applied, stopping):
                 unit = ' MiB/s' if key == 'upload_mib_per_second' else ' GiB'
                 lines.append(labels[key] + '：' + (f'{value:g}' + unit if value or key == 'min_free_disk_gib' else '不限'))
             elif key in ('poll_seconds', 'retry_seconds', 'stability_seconds', 'progress_interval_seconds'):
-                lines.append(labels[key] + f'：{value:g} 秒')
+                lines.append(labels[key] + (f'：{value / 60:g} 分钟' if key == 'progress_interval_seconds' else f'：{value:g} 秒'))
             elif group == 'notifications':
                 label = '自动通知' if key == 'enabled' else labels.get(key, key)
                 lines.append(label + '：' + (('开启' if value else '关闭') if type(value) is bool else value or '无'))
             elif key == 'media_scope':
                 lines.append('素材范围：' + MEDIA_SCOPES[value])
             elif key == 'archive_previews':
-                lines.append('预览文件：' + ('归档' if value else '不归档') + '（下轮生效）')
+                lines.append('辅助文件：' + ('归档' if value else '不归档') + '（下轮生效）')
             elif key == 'delete_source_after_import':
                 lines.append('原片处理：' + ('完整导入后删除' if value else '保留'))
             elif key == 'source_transport':
@@ -133,7 +133,7 @@ def _title(view):
     if not view.get('running'):
         return '服务未响应', 'red'
     if any(c.get('state') == 'pausing' for c in view.get('controls', {}).values()):
-        return ('正在停止选定素材传输' if view.get('selected_import') else '正在停止备份'), 'orange'
+        return ('正在停止所选文件传输' if view.get('selected_import') else '正在停止备份'), 'orange'
     if configuration.get('pending'):
         return '设置等待生效', 'orange'
     if view.get('attention', {}).get('required'):
@@ -141,21 +141,21 @@ def _title(view):
     selection = view.get('selected_import', {})
     if selection:
         if selection.get('state') == 'paused':
-            return '选定素材传输已停止', 'grey'
+            return '所选文件传输已停止', 'grey'
         if round_complete(view):
-            return ('选定素材归档完成 · 缓存待清理', 'orange') if _cleanup_pending(view.get('cleanup', {})) else ('选定素材归档完成', 'green')
+            return ('所选文件归档完成 · 缓存待清理', 'orange') if _cleanup_pending(view.get('cleanup', {})) else ('所选文件归档完成', 'green')
         if selection.get('state') == 'done':
             return '选定文件任务已结束', 'grey'
         stages = view.get('stages', {})
         importing = stages.get('import', {}).get('phase') == 'downloading'
         uploading = stages.get('upload', {}).get('phase') in ('uploading', 'publishing')
         if importing and uploading:
-            return '选定素材导入与归档进行中', 'blue'
+            return '所选文件导入与归档进行中', 'blue'
         if uploading:
-            return '选定素材归档进行中', 'blue'
+            return '所选文件归档进行中', 'blue'
         if importing:
-            return '选定素材导入进行中', 'blue'
-        return ('选定素材等待重试', 'orange') if selection.get('state') == 'waiting' else ('选定素材等待传输', 'blue')
+            return '所选文件导入进行中', 'blue'
+        return ('所选文件等待重试', 'orange') if selection.get('state') == 'waiting' else ('所选文件等待传输', 'blue')
     if view.get('source_connection', {}).get('state') in ('pending', 'declined'):
         uploading = view.get('stages', {}).get('upload', {}).get('phase') in ('uploading', 'publishing')
         return ('远端归档进行中 · 相机待确认' if uploading else '相机待确认'), 'blue'
@@ -288,7 +288,7 @@ def cleanup_text(outcome, ignored=0):
         if outcome.get(key):
             previews.append(f"{label} {outcome[key]} 个")
     if previews:
-        lines.append('预览文件：' + '；'.join(previews))
+        lines.append('辅助文件：' + '；'.join(previews))
     return '\n'.join(lines)
 
 
@@ -296,11 +296,11 @@ def _result_elements(result):
     outcome = result.get('cleanup', {})
     elements = [markdown(f"**{result['file_count']} 个文件** · {_size(result.get('byte_count'))}")]
     lines = cleanup_text(outcome, result.get('ignored_preview_files', 0)).splitlines()
-    core = [line for line in lines if not line.startswith('预览文件：')]
+    core = [line for line in lines if not line.startswith('辅助文件：')]
     if core:
         elements.append(paragraph('\n'.join(core)))
     for line in lines:
-        if line.startswith('预览文件：'):
+        if line.startswith('辅助文件：'):
             elements.append(note(line))
     return elements
 
@@ -308,9 +308,9 @@ def _result_elements(result):
 def _selection_notes(view):
     selection, batch = view.get('selection', {}), view.get('batch', {})
     if view.get('selected_import'):
-        parts = ['仅处理本次选定素材；其他任务保留', '本次保留相机原片']
+        parts = ['仅处理本次所选文件；其他任务保留', '本次保留相机原片']
         if batch.get('excluded_preview_files') and not round_complete(view):
-            parts.append(f"预览文件未归档 {batch['excluded_preview_files']} 个")
+            parts.append(f"辅助文件未归档 {batch['excluded_preview_files']} 个")
         return [note('；'.join(parts))]
     parts = []
     if selection.get('scope', 'all') != 'all':
@@ -320,7 +320,7 @@ def _selection_notes(view):
     if selection.get('cached_outside_scope_files'):
         parts.append(f"含其他类别的 {selection['cached_outside_scope_files']} 个既有缓存")
     if batch.get('excluded_preview_files') and not round_complete(view):
-        parts.append(f"预览文件未归档 {batch['excluded_preview_files']} 个")
+        parts.append(f"辅助文件未归档 {batch['excluded_preview_files']} 个")
     return [note('；'.join(parts))] if parts else []
 
 
@@ -383,8 +383,30 @@ def event_card(kind, title, text, view, *, keyword='', updated_at=None, location
     return card(title, elements, color, shared=True)
 
 def status_content(view):
+    from .message_facts import current_work
+    # Query cards lead with the current control state; progress receipts retain
+    # their own terminal result. Both still use the same durable progress facts.
+    active = current_work(view)
+    enabled = view.get('configuration', {}).get('sync_enabled', False)
     title, color = _title(view)
-    return title, color, _overview(view) + [note('更新 ' + format_time(view.get('observed_at')))]
+    healthy = view.get('running') and not any(view.get('configuration', {}).get(k) for k in ('error', 'pending'))
+    stopping = any(c.get('state') == 'pausing' for c in view.get('controls', {}).values())
+    pending_identity = view.get('source_connection', {}).get('state') in ('pending', 'declined')
+    if healthy and not active and not stopping and not pending_identity:
+        if not enabled: title, color = '备份已停止', 'grey'
+        elif round_complete(view): title, color = '自动备份待机', 'blue'
+    elements = [paragraph('自动备份：' + ('开启' if enabled else '关闭'))] if active or enabled or pending_identity else []
+    if round_complete(view) and not active:
+        elements += connection_elements(view) + attention_elements(view)
+        batch = view['batch']
+        elements.append(paragraph(f"最近结果：已归档 {batch['completed_files']} 个文件 · {_size(batch.get('total_bytes'))}"))
+        summary = cleanup_summary(view.get('cleanup', {}))
+        if summary: elements.append(note(summary))
+        pending = view.get('work', {}).get('pending_files', 0)
+        if pending: elements.append(paragraph(f'待处理 {pending} 个文件'))
+    else:
+        elements += _overview(view)
+    return title, color, elements + [note('更新 ' + format_time(view.get('observed_at')))]
 
 def format_time(value, *, now=None):
     try:
@@ -408,14 +430,16 @@ def cleanup_summary(outcome):
         parts.append('缓存状态待核验')
     elif outcome.get('cache_cleared'):
         parts.append('缓存已清理')
-    deleted = outcome.get('source_deleted', 0) + outcome.get('preview_deleted', 0)
-    absent = outcome.get('source_absent', 0) + outcome.get('preview_absent', 0)
-    pending = outcome.get('source_pending', 0) + outcome.get('preview_pending', 0)
+    deleted = outcome.get('source_deleted', 0)
+    absent = outcome.get('source_absent', 0)
+    pending = outcome.get('source_pending', 0)
     if deleted: parts.append(f'原片已删除 {deleted} 个')
     if absent: parts.append(f'原片未找到 {absent} 个')
     if pending: parts.append(f'原片待清理 {pending} 个')
     retained = max(0, outcome.get('source_not_deleted', 0) - outcome.get('source_pending', 0))
     if retained: parts.append(f'原片保留 {retained} 个')
+    for key, label in (('preview_deleted', '已删除'), ('preview_absent', '未找到'), ('preview_pending', '待清理')):
+        if outcome.get(key): parts.append(f"辅助文件{label} {outcome[key]} 个")
     return ' · '.join(parts)
 
 
@@ -444,5 +468,9 @@ def detail_content(view):
     if cleanup: elements.append(paragraph(cleanup))
     if view.get('temporary_cleanup'):
         elements.append(paragraph(f"未完成临时文件待清理 {len(view['temporary_cleanup'])} 个"))
+    # Avoid repeating the same diagnostic from stage, attention and file facts.
+    import json
+    unique = {json.dumps(el, ensure_ascii=False, sort_keys=True): el for el in elements}
+    elements = list(unique.values())
     elements.append(note('更新 ' + format_time(view.get('observed_at'))))
     return '备份详情', 'blue', elements

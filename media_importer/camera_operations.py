@@ -38,7 +38,7 @@ def pending(db):
                       "('queued','running','queued_delete','deleting','queued_verify','verifying') LIMIT 1").fetchone() is not None
 
 
-def enqueue(store, settings, key, owner, kind, mode='archived'):
+def enqueue(store, settings, key, owner, kind, mode='archived', *, request=None):
     if kind not in ('inspect', 'preview') or mode not in MODES:
         raise ConfigError('相机操作无效，请重新打开菜单')
     identifier = uuid.uuid5(uuid.NAMESPACE_URL, owner + ':' + key).hex
@@ -66,7 +66,30 @@ def enqueue(store, settings, key, owner, kind, mode='archived'):
             VALUES (?,?,?,?,'queued',?,?,?,?,?)""",
             (identifier, owner, kind, mode, item['revision'], connection['id'],
              identity(store.db, config), stamp, stamp))
+        if request is not None:
+            store.db.execute('UPDATE camera_operations SET plan=? WHERE id=?',
+                (json.dumps(request), identifier))
     return get(store.db, identifier, owner)
+
+
+def review_library(store, settings, library, owner, session, catalog, identifiers, nonce, mode='archived'):
+    """Freeze explicit file identities; the worker still builds and verifies the plan."""
+    identifier = uuid.uuid5(uuid.NAMESPACE_URL, owner + ':workspace-cleanup:' + nonce).hex
+    existing = get(store.db, identifier, owner)
+    if existing:
+        plan = json.loads(existing['plan'] or '{}')
+        if (plan.get('requested_ids') != identifiers or plan.get('catalog') != catalog
+                or existing['mode'] != mode or existing['session_id'] != session):
+            raise ConfigError('本次清理选择已变化，请重新核验范围')
+        return existing
+    connection = store.get_meta('source_connection', {})
+    if connection.get('id') != session or not fresh(connection):
+        raise ConfigError('相机连接已变化，请刷新素材')
+    groups = library.selection(session, catalog, identifiers)
+    selection = [a.to_dict() for group in groups for a in group['members']]
+    return enqueue(store, settings, 'workspace-cleanup:' + nonce, owner, 'preview', mode,
+                   request={'origin': 'camera_workspace', 'selection': selection,
+                            'catalog': catalog, 'requested_ids': identifiers})
 
 
 def confirm(store, settings, identifier, owner):
@@ -194,7 +217,7 @@ def _proof(service, row, mode):
     return '尚未完成远端归档' if mode == 'archived' else '缺少可核验的完整缓存或正式归档'
 
 
-def inspect(service, mode=None):
+def inspect(service, mode=None, selection=None):
     identity = service.observe_source()
     connection = service.store.get_meta('source_connection', {})
     identity = {**identity, 'transport': connection.get('device', {}).get('transport')}
@@ -206,6 +229,9 @@ def inspect(service, mode=None):
     except BackupError as exc:
         return {'identity': identity, 'scanned': False, 'error': str(exc)}, None
     groups = service.source.groups(assets)
+    requested = {Asset.from_dict(a).identity for a in selection} if selection is not None else None
+    if requested is not None and not requested <= {a.identity for a in assets}:
+        raise ConfigError('选中文件已变化，请刷新素材后重新选择')
     rows = _rows(service, assets)
     from .media import category
     counts = {kind: {'files': 0, 'bytes': 0} for kind in ('video', 'photo', 'other')}
@@ -226,12 +252,20 @@ def inspect(service, mode=None):
         for group in groups:
             service.boundary()
             members = group['members']
+            if requested is not None and not requested.intersection(a.identity for a in members):
+                continue
             reason = None if can_delete else '当前型号或固件尚未通过删除验收'
             reason = reason or (group.get('reason') or '素材关联无法确认' if not group['safe'] else None)
+            if requested is not None and any(a.identity not in requested for a in members):
+                members = [a for a in members if a.identity in requested]
+                reason = '关联文件未全部选择，保留所选原片；不会扩大删除范围'
             previews = set(group.get('preview_ids', []))
             pending_archive = 0
             for asset in members:
                 if reason:
+                    break
+                support = getattr(service.source, 'deletion_support', None)
+                if support and (reason := support(asset)):
                     break
                 row = rows.get(asset.identity)
                 if row and row.get('cleanup') in ('deleted', 'absent'):
@@ -303,6 +337,10 @@ def _outcome(service, op, *, recovery=False):
     intents = set(json.loads(get(service.store.db, op['id'])['intents']))
     result = {'mode': op['mode'], 'deleted': 0, 'absent': 0, 'retained': 0, 'unknown': 0,
               'released_bytes': 0, 'details': [], 'recovered': recovery}
+    for item in plan.get('retained', []):
+        result['retained'] += item['files']
+        result['details'].extend({'path': path, 'state': 'retained', 'reason': item['reason']}
+                                 for path in item['paths'])
     try:
         # Reconciliation is read-only even after cancellation or process restart.
         if any((a.serial, a.source_type) != (service.config.source['serial'], service.config.source['type']) for a in assets):
@@ -378,7 +416,11 @@ def process_one(parent, settings):
                 result = _execute(service, op)
                 _save(store, op, 'done', result)
             else:
-                result, plan = inspect(service, op['mode'] if op['kind'] == 'preview' else None)
+                request = json.loads(op['plan'] or '{}')
+                result, plan = inspect(service, op['mode'] if op['kind'] == 'preview' else None,
+                                       request.get('selection'))
+                if plan is not None and request.get('origin') == 'camera_workspace':
+                    plan.update({key: request[key] for key in ('origin', 'selection', 'catalog', 'requested_ids')})
                 _save(store, op, 'ready' if op['kind'] == 'preview' and plan is not None else 'done', result, plan)
     except (BackupError, OSError, ValueError) as exc:
         result = _outcome(service, op) if deleting else {}

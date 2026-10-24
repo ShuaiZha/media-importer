@@ -145,18 +145,18 @@ def confirm(store, settings, identifier, owner, choice_revision):
         store.db.execute('BEGIN IMMEDIATE')
         op = get(store.db, identifier, owner)
         if not op or type(choice_revision) is not int or op['choice_revision'] != choice_revision:
-            raise ConfigError('预览范围已变化，请使用最新预览确认')
+            raise ConfigError('选择范围已变化，请重新确认文件')
         if op and op['state'] in ('queued_transfer', 'running', 'waiting', 'done'):
             return op
         op, item, plan = _draft(store, settings, identifier, owner)
         if op['state'] != 'ready' or not _summary(plan)['total_files']:
-            raise ConfigError('请先预览本次选择，再确认开始')
+            raise ConfigError('请先检查所选文件，再确认备份')
         if item['config']['backup']['enabled']:
             raise ConfigError('全量备份仍开启，请先从「备份 → 停止备份」停止，再重新浏览素材')
         if active(store.db):
             raise ConfigError('已有选定任务正在处理，请先完成或停止该任务')
         if time.time() - op['updated'] > 300:
-            raise ConfigError('确认预览已超过 5 分钟，请重新预览')
+            raise ConfigError('文件确认已超过 5 分钟，请重新检查')
         plan['confirmed'] = True
         store.db.execute("""UPDATE selected_imports SET state='queued_transfer',plan=?,updated=?,retry_at=0
             WHERE id=?""", (json.dumps(plan, ensure_ascii=False), time.time(), identifier))

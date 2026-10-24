@@ -9,11 +9,41 @@ import re
 import subprocess
 import time
 from urllib.request import build_opener, ProxyHandler
+from urllib.error import HTTPError, URLError
 
 from ..model import SourceConnectionError, now
 from .gopro_models import compatibility
 
 WIFI_URL = 'http://10.5.5.9:8080'
+
+
+class TransientRadioError(SourceConnectionError):
+    """A lost read/connection may be retried; camera writes must never be replayed."""
+
+
+def bluetooth_error(exc):
+    # SDK exception text can contain device identifiers. Use only typed reasons.
+    try:
+        from bleak.exc import BleakBluetoothNotAvailableError, BleakError
+    except ImportError:
+        return None  # Protocol-only/container tests do not install host radio SDKs.
+    if isinstance(exc, BleakBluetoothNotAvailableError):
+        reason = exc.reason.name
+        if reason == 'POWERED_OFF':
+            return SourceConnectionError('Mac 蓝牙已关闭，请开启蓝牙后重试')
+        if reason.startswith('DENIED_'):
+            return SourceConnectionError('macOS 未允许蓝牙访问，请检查本程序的蓝牙权限')
+        return SourceConnectionError('Mac 蓝牙当前不可用，请检查蓝牙状态')
+    if isinstance(exc, BleakError):
+        return TransientRadioError('相机蓝牙连接中断，请保持相机开机后重试')
+    return None
+
+
+async def ble_wait(operation, timeout, message):
+    try:
+        return await asyncio.wait_for(operation, timeout)
+    except TimeoutError as exc:
+        raise TransientRadioError(message) from exc
 
 
 def characteristic(number):
@@ -75,8 +105,13 @@ def decode_statuses(body):
 
 
 def http(path):
-    with build_opener(ProxyHandler({})).open(WIFI_URL + path, timeout=3) as response:
-        return json.loads(response.read(1024 * 1024))
+    try:
+        with build_opener(ProxyHandler({})).open(WIFI_URL + path, timeout=3) as response:
+            return json.loads(response.read(1024 * 1024))
+    except HTTPError as exc:
+        raise SourceConnectionError(f'相机 Wi-Fi 请求失败（HTTP {exc.code}），请检查相机状态') from exc
+    except (OSError, URLError) as exc:
+        raise TransientRadioError('相机 Wi-Fi 请求中断或超时，请检查相机连接') from exc
 
 
 def http_identity(serial):
@@ -106,12 +141,13 @@ class Camera:
             raise SourceConnectionError('未发现相机蓝牙；请保持开机、开启无线连接并退出手机 Quik')
         self.client = BleakClient(device, timeout=20)
         try:
-            await asyncio.wait_for(self.client.connect(), 25)
+            await ble_wait(self.client.connect(), 25, '相机蓝牙连接超时，请保持相机开机后重试')
             for service in self.client.services:
                 for char in service.characteristics:
                     if 'notify' in char.properties:
                         callback = self.receive if char.uuid in (characteristic(0x73), characteristic(0x75), characteristic(0x77)) else lambda *_: None
-                        await asyncio.wait_for(self.client.start_notify(char, callback), 5)
+                        await ble_wait(self.client.start_notify(char, callback), 5,
+                                       '相机蓝牙通知初始化超时，请重新连接相机')
             identity = hardware(await self.command(0x3c))
             if self.serial and identity['serial_number'] != self.serial:
                 raise SourceConnectionError('蓝牙相机序列号不符，未执行操作')
@@ -142,16 +178,20 @@ class Camera:
     async def command(self, code, payload=b'', channel=0x72):
         while not self.incoming.empty():
             self.incoming.get_nowait()
-        await asyncio.wait_for(self.client.write_gatt_char(characteristic(channel),
-            bytes([len(payload) + 1, code]) + payload, response=True), 6)
-        async with asyncio.timeout(8):
-            while True:
-                sender, body = await self.incoming.get()
-                if sender != characteristic(channel + 1) or not body or body[0] != code:
-                    continue
-                if len(body) < 2 or body[1] != 0:
-                    raise SourceConnectionError('相机拒绝本次命令，请检查当前模式和忙碌状态')
-                return body[2:]
+        await ble_wait(self.client.write_gatt_char(characteristic(channel),
+            bytes([len(payload) + 1, code]) + payload, response=True), 6,
+            '相机蓝牙命令发送超时，请刷新状态核对')
+        try:
+            async with asyncio.timeout(8):
+                while True:
+                    sender, body = await self.incoming.get()
+                    if sender != characteristic(channel + 1) or not body or body[0] != code:
+                        continue
+                    if len(body) < 2 or body[1] != 0:
+                        raise SourceConnectionError('相机拒绝本次命令，请检查当前模式和忙碌状态')
+                    return body[2:]
+        except TimeoutError as exc:
+            raise TransientRadioError('相机蓝牙命令响应超时，请刷新状态核对') from exc
 
     async def statuses(self, *ids):
         result = decode_statuses(await self.command(0x13, bytes(ids), 0x76))
@@ -201,12 +241,12 @@ class Camera:
 
     async def execute(self, action, parameters=None):
         parameters = parameters or {}
-        before = await self.state()
-        if action == 'state':
-            return before
         if action == 'catalog':
             from .gopro_capture import catalog
             return await catalog(self)
+        before = await self.state()
+        if action == 'state':
+            return before
         if action == 'hilight':
             if not before['recording'] or before['mode'] != 'video':
                 raise SourceConnectionError('HiLight 仅在视频录像中可用')
@@ -307,6 +347,8 @@ async def perform(action, serial, expires_at=None, parameters=None):
                 try:
                     await asyncio.to_thread(http_identity, serial)
                     break
+                except TransientRadioError:
+                    await asyncio.sleep(1)
                 except SourceConnectionError:
                     raise
                 except Exception:
@@ -321,5 +363,38 @@ async def perform(action, serial, expires_at=None, parameters=None):
         return await camera.execute(action, parameters) if parameters else await camera.execute(action)
 
 
+async def read_with_reconnect(action, serial, expires_at=None, parameters=None):
+    """Retry one complete read on a fresh BLE connection within the existing limit."""
+    for attempt in range(2):
+        try:
+            return await asyncio.wait_for(perform(action, serial, expires_at, parameters), 25)
+        except (TimeoutError, TransientRadioError) as exc:
+            failure = exc if isinstance(exc, TransientRadioError) else TransientRadioError('相机参数或状态读取超时，请重新连接相机')
+        except SourceConnectionError:
+            raise  # Wrong identity, rejected query or invalid data is not a transient link failure.
+        except Exception as exc:
+            failure = bluetooth_error(exc)
+            if failure is None:
+                raise
+            if not isinstance(failure, TransientRadioError):
+                raise failure from exc
+        if attempt:
+            raise failure
+        # perform() has left its context and disconnected before trying again.
+        await asyncio.sleep(.5)
+
+
 def run(action, serial, expires_at=None, parameters=None):
-    return asyncio.run(asyncio.wait_for(perform(action, serial, expires_at, parameters), 130 if action == 'connect' else 60))
+    operation = (read_with_reconnect(action, serial, expires_at, parameters)
+                 if action in ('state', 'catalog') else perform(action, serial, expires_at, parameters))
+    try:
+        return asyncio.run(asyncio.wait_for(operation, 130 if action == 'connect' else 60))
+    except TimeoutError as exc:
+        raise SourceConnectionError('相机无线操作超时，请检查连接后重试') from exc
+    except Exception as exc:
+        if isinstance(exc, SourceConnectionError):
+            raise
+        failure = bluetooth_error(exc)
+        if failure is not None:
+            raise failure from exc
+        raise

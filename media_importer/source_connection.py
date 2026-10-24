@@ -45,9 +45,15 @@ def deletion_enabled(config, selection):
     """Keep the user's preference; unverified selected devices retain originals."""
     same = (selection.get('serial_number') == config.source['serial'] and
             selection.get('type') == config.source['type'])
+    transport = config.source.get('transport', 'usb')
+    if transport == 'auto':
+        transport = selection.get('transport', 'usb')
+    profile = selection.get('compatibility', {})
+    verified = (profile.get('delete_verified', False) and
+                selection.get('transport', 'usb') == transport and
+                profile.get('delete_transport', 'usb') == transport)
     return bool(config.backup['delete_source_after_import'] and
-                config.source.get('transport') != 'wifi' and selection.get('transport') != 'wifi' and
-                (not same or selection.get('compatibility', {}).get('delete_verified', False)))
+                (verified if same else transport == 'usb'))
 
 
 def reason(store, config, *, deleting=False):
@@ -60,7 +66,9 @@ def reason(store, config, *, deleting=False):
             device.get('serial_number') != config.source['serial'] or not device.get('http_ready', True)):
         return ('等待飞书确认当前相机；已有完整缓存可继续上传' if state.get('state') in ('pending', 'declined')
                 else '等待相机连接；已有完整缓存可继续上传')
-    if deleting and (device.get('transport') != 'usb' or not device.get('compatibility', {}).get('delete_verified')):
+    profile = device.get('compatibility', {})
+    if deleting and (not profile.get('delete_verified') or
+                     profile.get('delete_transport', 'usb') != device.get('transport')):
         return '此连接方式、型号或固件尚未验证原片删除，当前保留原片'
     return None
 
@@ -120,6 +128,12 @@ def observe(store, device, stamp=None):
             else:
                 state.pop('restored', None)
             state.update(device=device, online=True, last_seen=stamp, failures=0, missing_since=None)
+            if trusted and any(binding.get(key) != device.get(key) for key in ('transport', 'compatibility')):
+                # Binding grants identity, not permanent capability. Re-evaluate
+                # transport/firmware support without changing approval or user settings.
+                binding.update({key: device.get(key) for key in ('transport', 'compatibility')})
+                store.db.execute('UPDATE meta SET value=? WHERE key=?',
+                                 (json.dumps(binding), 'source_selection'))
         elif old:
             state['failures'] = state.get('failures', 0) + 1
             state['missing_since'] = state.get('missing_since') or stamp

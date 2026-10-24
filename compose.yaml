@@ -1,6 +1,6 @@
 name: media-importer
 x-common: &common
-  image: ghcr.io/shuaizha/media-importer:0.11.7
+  image: ghcr.io/shuaizha/media-importer:1.0.0
   environment:
     MEDIA_IMPORTER_RUNTIME: docker
     MEDIA_IMPORTER_ENV_FILE: /run/media-importer.env

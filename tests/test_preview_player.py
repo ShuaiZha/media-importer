@@ -35,7 +35,7 @@ class Peer {
 }
 const intervals=[],timers=[];
 const context=vm.createContext({document,WebSocket:Socket,RTCPeerConnection:Peer,MediaStream:class{},MediaSource:class{},
- VideoRTC:class{},customElements:{define(){}},URL,location:{href:'https://preview.example/view/session/'},
+ VideoRTC:class{},customElements:{define(){}},URL,history:{length:1,back(){}},location:{href:'https://preview.example/view/session/'},
  Date:{now:()=>clock},setInterval(fn,delay){intervals.push({fn,delay});},setTimeout(fn,delay){timers.push({fn,delay});},
  fetch:async()=>({ok:true,status:200,json:async()=>({webrtc:input.rtc,audio:input.audio})}),assert,
  advance(ms){clock+=ms;},intervals,timers});
@@ -45,12 +45,14 @@ vm.runInContext(input.script,context);
 '''
 
 
-@unittest.skipUnless(shutil.which('node'), 'Node.js is required for browser-side playback tests')
+NODE = shutil.which('node')
+
+@unittest.skipUnless(NODE, 'Node.js is required for browser-side playback tests')
 class PlaybackTests(unittest.TestCase):
     def run_js(self, code, native=True, rtc=True, audio=False):
         script=PAGE.split('<script type="module">',1)[1].split('</script>',1)[0]
         script=re.sub(r'^import .*;$','',script,flags=re.M)
-        result=subprocess.run([shutil.which('node'),'-e',HARNESS],
+        result=subprocess.run([NODE,'-e',HARNESS],
                               input=json.dumps({'script':script,'test':code,'native':native,'rtc':rtc,'audio':audio}),
                               text=True,capture_output=True,timeout=10)
         self.assertEqual(0,result.returncode,result.stderr)
@@ -135,7 +137,7 @@ class PlaybackTests(unittest.TestCase):
     def test_revocation_closes_peer_and_cannot_be_reopened(self):
         self.run_js('''(async()=>{
         const old=pc;fetch=async()=>({status:410,ok:false});await intervals[0].fn();
-        assert.equal(ended,true);assert.equal(old.closed,true);assert.equal(label.textContent,'预览已结束');
+        assert.equal(ended,true);assert.equal(old.closed,true);assert.equal(label.textContent,'预览已结束');assert.equal(screen.hidden,true);
         const previous=player;document.querySelector('#compat').onclick();document.querySelector('#retry').onclick();
         assert.equal(player,previous);
         })()''')

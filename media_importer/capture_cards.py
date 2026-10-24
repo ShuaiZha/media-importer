@@ -15,7 +15,7 @@ from .store import Store
 def supported(action):
     if not isinstance(action, dict) or action.get('version') != 1:
         return False
-    if action.get('action') in ('panel', 'connect', 'settings'):
+    if action.get('action') in ('panel', 'library', 'connect', 'settings'):
         return set(action) == {'version', 'action'}
     if action.get('action') == 'import_shoot':
         return set(action) == {'version', 'action', 'id'} and isinstance(action['id'], str) and bool(re.fullmatch('[0-9a-f]{32}', action['id']))
@@ -52,7 +52,7 @@ def panel(bot, store, receipt=None, *, waiting=False):
         current = 0 <= age < 45 and not observed.get('stale')
     except (KeyError, TypeError, ValueError):
         current = False
-    title = '正在执行相机操作' if waiting else '操作结果待核验' if observed.get('uncertain') else '相机页面'
+    title = '正在执行相机操作' if waiting else '操作结果待核验' if observed.get('uncertain') else '画面与拍摄'
     elements = [paragraph((device.get('model_name') or '尚未连接相机') + ' · ' +
                          {'usb': 'USB', 'wifi': 'Wi-Fi'}.get(device.get('transport'), '未连接'))]
     if waiting:
@@ -66,7 +66,7 @@ def panel(bot, store, receipt=None, *, waiting=False):
             label = '拍摄已结束'
         if receipt.get('parameter_label'):
             label += '：' + receipt['parameter_label'] + ' → ' + receipt.get('value_label', '未知')
-        elements.append(markdown('**' + label + '**'))
+        title = label
     if current and 'recording' in observed:
         mode = observed.get('mode')
         state_label = camera['activity']['label'] if camera['activity']['state'] not in ('unknown', 'idle') else (
@@ -103,7 +103,7 @@ def panel(bot, store, receipt=None, *, waiting=False):
         shoot = store.get_meta('capture_session', {})
         if shoot.get('owner') == bot.scope and shoot.get('serial') == device.get('serial_number'):
             if shoot.get('state') == 'ready':
-                elements += [bot.buttons(button(bot, '导入本次素材', 'import_shoot', id=shoot['id']))]
+                elements += [bot.buttons(button(bot, '备份本次拍摄', 'import_shoot', id=shoot['id']))]
             elif shoot.get('state') in ('awaiting_media', 'uncertain', 'empty', 'not_started'):
                 elements.append(note(shoot.get('reason') or '正在核验拍摄结果'))
     return card(title, elements, 'orange' if observed.get('uncertain') or observed.get('error') else 'blue', shared=True)
@@ -122,7 +122,7 @@ def connection_result(bot, store, job, payload):
     if fresh(state) and state.get('state') == 'approved' and device.get('http_ready', True):
         return card('相机已连接', [paragraph((device.get('model_name') or '相机') + ' · ' +
             {'usb': 'USB', 'wifi': 'Wi-Fi'}.get(device.get('transport'), '未知')),
-            bot.buttons(button(bot, '相机页面', 'panel'))], 'green', shared=True), False
+            bot.buttons(button(bot, '画面与拍摄', 'panel'))], 'green', shared=True), False
     if mode == 'usb':
         return card('等待 USB 连接', [paragraph('请将已开机的相机通过 USB 连接到本机。'),
             bot.buttons(button(bot, '检查连接', 'connect'))], shared=True), False
@@ -174,6 +174,15 @@ def process_job(bot, job, payload):
             payload['connect_observation'] = fingerprint
             with bot.db() as db:
                 db.execute('UPDATE bot_jobs SET payload=? WHERE id=?', (json.dumps(payload), job['id']))
+        elif kind == 'library':
+            from .camera_web import button as workspace_button
+            workspace = workspace_button(bot, store, media=True)
+            if workspace:
+                camera = store.get_meta('source_connection', {}).get('device', {})
+                response = card('相机素材', [paragraph(camera.get('model_name') or '相机'), bot.buttons(workspace)], shared=True)
+            else:
+                response = card('选择文件备份', [paragraph('相机页面暂不可用，可使用文件选择卡。'),
+                    bot.buttons(bot.button('打开文件选择', {'selected_import': {'version': 1, 'action': 'browse'}}))], shared=True)
         elif kind in ('panel', 'settings', 'parameter'):
             response = panel(bot, store)
         elif kind == 'import_shoot':
@@ -218,7 +227,7 @@ def process_job(bot, job, payload):
             waiting = waiting or watching
     except ConfigError as exc:
         response = card('相机操作未执行', [paragraph(str(exc)),
-            bot.buttons(button(bot, '刷新相机控制', 'panel'))], 'orange', shared=True)
+            bot.buttons(button(bot, '查看相机状态', 'panel'))], 'orange', shared=True)
     finally:
         store.close()
     delivered = bot.reply(job, payload, response, waiting)

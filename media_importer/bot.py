@@ -76,6 +76,9 @@ class Bot:
             from .selected_cards import supported
             return supported(payload['selected_import']) and not payload.get('changes')
         from .bot_settings import FORMS, PAGES, LIMIT_FIELDS, INTERVAL_FIELDS
+        if payload.get('settings_version') == 5:
+            from .bot_settings import supported_v5
+            return supported_v5(payload)
         modern = payload.get('settings_version') in (1, 2)
         if payload.get('settings_version') == 4:
             if 'settings_form' in payload:
@@ -183,10 +186,10 @@ class Bot:
         if page == 'previews':
             enabled = values['backup']['archive_previews']
             action = {'changes': {'backup': {'archive_previews': not enabled}}, 'page': 'previews'}
-            return card('预览文件', [
-                markdown('**归档预览：' + ('已开启' if enabled else '已关闭') + '**'),
+            return card('辅助文件归档', [
+                markdown('**辅助文件归档：' + ('已开启' if enabled else '已关闭') + '**'),
                 note('关联 LRV、THM；修改在下轮生效。'),
-                self.buttons(self.button('改为不归档预览' if enabled else '归档预览文件', action, rev))
+                self.buttons(self.button('关闭辅助文件归档' if enabled else '开启辅助文件归档', action, rev))
             ], 'blue', shared=True)
         if page == 'scope':
             from .media import MEDIA_SCOPES
@@ -205,7 +208,7 @@ class Bot:
             return card('原片处理', [
                 markdown('**自动删除：' + ('已启用' if enabled else '已停用') + '**'),
                 paragraph('当前设备未通过删除验收，保留原片；配置开关保持不变。' if enabled and not effective else
-                          '整组素材完成本地导入与核验后，自动删除相机原片。' if enabled else '导入完成后保留相机原片。'),
+                          '通过完整副本核验后，自动删除相机原片。' if enabled else '导入完成后保留相机原片。'),
                 self.buttons(self.button('停用自动删除' if enabled else '启用自动删除', action, rev))
             ], 'blue', shared=True)
         view = snapshot(self.directory, self.settings)
@@ -375,7 +378,7 @@ class Bot:
                     from .livestream_settings import draft
                     identifier = uuid.uuid5(uuid.NAMESPACE_URL, self.scope + ':live-network:' + event_id).hex
                     payload['changes'] = {'livestream': draft(self.settings, parsed, identifier, row['revision'])}
-                elif name == 'destination_settings':
+                elif name in ('destination_settings', 'destination_advanced'):
                     # Passwords bypass SQLite entirely. The durable request contains
                     # only a random local-file reference, checked again before commit.
                     password = parsed.pop('password', '')
@@ -395,12 +398,21 @@ class Bot:
                             _stopped(store, item)
                         finally:
                             store.close()
+                        if payload['settings_version'] == 5:
+                            current = item['config']['destination']
+                            if name == 'destination_advanced':
+                                parsed = {**{k: current[k] for k in ('host', 'share', 'directory', 'name', 'username')}, **parsed, 'mode': 'connection'}
+                            else:
+                                parsed = {**{k: current[k] for k in ('port', 'domain')}, **parsed}
+                            payload['settings_version'] = 2
                         candidate(item['config'], {k: v for k, v in parsed.items() if k != 'mode'}, self.settings.path.parent)
                         if password:
                             from .credentials import stage
                             parsed['credential_id'] = stage(self.settings.path.parent, change_id, password)
                     payload.update(archive_draft={k: v for k, v in parsed.items() if k != 'mode'},
                                    mode=parsed['mode'], change_id=change_id)
+                elif name == 'media_settings' and parsed['backup']['delete_source_after_import'] and not self.settings.read()['config']['backup']['delete_source_after_import']:
+                    payload['media_draft'] = parsed
                 else:
                     payload['changes'] = parsed
             except ConfigError as exc:
@@ -417,7 +429,7 @@ class Bot:
                 return {'toast': {'type': 'error', 'content': '原消息不可用，请从底部菜单重新打开'}}
             payload['message_id'] = message_id
         mutating = bool(payload.get('changes') or 'source_decision' in payload or
-                        payload.get('capture', {}).get('action') not in (None, 'panel', 'settings', 'parameter') or
+                        payload.get('capture', {}).get('action') not in (None, 'panel', 'library', 'settings', 'parameter') or
                         payload.get('camera', {}).get('action') in ('confirm', 'cancel') or
                         payload.get('selected_import', {}).get('action') in ('confirm', 'cancel', 'drain', 'resume') or
                         payload.get('live_preview', {}).get('action') in ('open', 'stop'))
@@ -504,7 +516,7 @@ class Bot:
                         db.execute('UPDATE bot_jobs SET retry_at=? WHERE id=?', (time.time() + 1, job['id']))
                     return False
                 notice = {'title': '设置已变更', 'detail': '本次回执已失效，请查看当前状态。', 'level': 'info'} if obsolete else settings_result(
-                    {'backup': {'enabled': False}} if drained else changes, True, False)
+                    {'backup': {'enabled': False}} if drained else payload.get('display_changes', changes), True, False)
                 response = self.panel(payload.get('page', payload.get('form', 'status')), notice)
                 payload['wait_for_apply'] = False
                 with self.db() as db:
@@ -521,6 +533,11 @@ class Bot:
                         with self.db() as db:
                             cancel(db, owner=self.scope)
                             cancel_selected(db, owner=self.scope)
+                    if payload.get('media_draft'):
+                        from .bot_settings import confirm_media
+                        if self.settings.read()['revision'] != payload['revision']:
+                            raise ConfigError('设置已经变化，请重新打开素材与清理')
+                        custom_response = confirm_media(self, payload['media_draft'], payload['revision'])
                     archive_change = payload.get('archive_change')
                     if payload.get('archive_draft') or archive_change:
                         from .archive_settings import check
@@ -546,7 +563,7 @@ class Bot:
                         finally:
                             store.close()
                         notice = {'title': '相机已确认' if payload['source_decision'] else '暂未确认相机',
-                                  'detail': ('备份已开启' if self.settings.read()['config']['backup']['enabled'] else '备份已关闭') if payload['source_decision'] else '', 'level': 'success' if payload['source_decision'] else 'info'}
+                                  'detail': ('自动备份已开启' if self.settings.read()['config']['backup']['enabled'] else '备份已关闭') if payload['source_decision'] else '', 'level': 'success' if payload['source_decision'] else 'info'}
                     # Enabling arms discovery even before the camera is reachable.
                     # Source IO still requires a fresh, approved identity; a new
                     # camera receives its own confirmation without blocking SMB.
@@ -554,6 +571,13 @@ class Bot:
                     if changes and not stop_request and time.time() - job["created"] > 300:
                         raise ConfigError("控制请求已经过期，未执行；请重新操作")
                     if changes:
+                        previous = self.settings.read()['config']
+                        payload['display_changes'] = {group: {key: value for key, value in fields.items()
+                            if previous.get(group, {}).get(key) != value} for group, fields in changes.items()}
+                        payload['display_changes'] = {k: v for k, v in payload['display_changes'].items() if v}
+                        # Start/stop is an operation, even if the requested flag is unchanged.
+                        if any(key in changes.get('backup', {}) for key in ('enabled', 'stop_after_current')):
+                            payload['display_changes'] = changes
                         if not archive_change:
                             item = self.settings.update_preferences(changes, None if stop_request else payload.get("revision"))
                         applied, stopping = False, False
@@ -565,7 +589,7 @@ class Bot:
                                 stopping = any(c["state"] == "pausing" for c in view["controls"].values()) or view.get('source_operation_running', False)
                                 break
                             time.sleep(.2)
-                        notice = settings_result(changes, applied, stopping)
+                        notice = settings_result(payload.get('display_changes', changes), applied, stopping)
                         waiting = not applied or stopping or changes == {'backup': {'stop_after_current': True}}
                         payload.update(changes_applied=changes, applied_revision=item['revision'], wait_for_apply=waiting)
                         if changes.get('backup', {}).get('enabled') is True:

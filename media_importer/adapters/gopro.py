@@ -92,6 +92,8 @@ class GoProSource:
     def __init__(self, config, stop=None):
         self.config = config
         self.transport = config.source.get("transport", "usb")
+        if self.transport == 'auto':
+            self.transport = 'usb'  # The connection manager resolves Wi-Fi before constructing a source.
         self.base = config.source["url"]
         self.serial = config.source["serial"]
         self.timeout = config.source["timeout_seconds"]
@@ -310,7 +312,7 @@ class GoProSource:
                 or not info["serial_number"].isalnum() or not isinstance(info.get("model_name"), str)):
             raise SourceError("相机身份响应无效")
         self.device_name = re.sub(r"\s+Black$", "", info["model_name"], flags=re.IGNORECASE).strip()
-        self.compatibility = compatibility(info['model_name'], info.get('firmware_version', ''))
+        self.compatibility = compatibility(info['model_name'], info.get('firmware_version', ''), self.transport)
         return {**{key: info.get(key) for key in ("model_name", "serial_number", "firmware_version")},
                 "archive_directory": device_directory(self.device_name, info["serial_number"]),
                 "transport": self.transport, "compatibility": self.compatibility}
@@ -724,10 +726,17 @@ class GoProSource:
         except ValueError as exc:
             raise SourceError("相机下载响应无效") from exc
 
+    def deletion_support(self, asset):
+        if self.transport == 'wifi' and PurePosixPath(asset.path).suffix.lower() not in ('.mp4', '.lrv'):
+            return '无线删除目前仅验证 MP4 及关联 LRV，保留此文件'
+        return None
+
     def delete(self, asset):
         self.verify_primary(asset)
-        if self.transport == 'wifi' or not self.compatibility['delete_verified']:
+        if not self.compatibility['delete_verified']:
             raise SourceError('此型号或固件尚未验证原片删除，保留相机文件')
+        if reason := self.deletion_support(asset):
+            raise SourceError(reason)
         try:
             with self._open("/gopro/media/delete/file?" + urlencode({"path": asset.path}, safe="/")) as response:
                 if response.status != 200:
@@ -751,7 +760,7 @@ def link(action, serial, stop=None, *, parameters=None):
         found = probe('http://10.5.5.9:8080', stop, timeout=2)
         if found:
             found.update(transport='wifi', http_ready=True)
-            found['compatibility'] = {**found['compatibility'], 'delete_verified': False}
+            found['compatibility'] = compatibility(found['model_name'], found.get('firmware_version', ''), 'wifi')
         return found
     from ..radio import request
     return request('gopro', action, serial, stop, parameters=parameters) if parameters else request('gopro', action, serial, stop)

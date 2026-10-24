@@ -86,7 +86,8 @@ class MessageContractTests(unittest.TestCase):
         self.assertIn('**2 个文件**', rendered)
         self.assertNotIn('99', rendered)
         self.assertNotIn('预览文件：', rendered)
-        self.assertIn('原片已删除 4 个', rendered)
+        self.assertIn('原片已删除 2 个', rendered)
+        self.assertIn('辅助文件已删除 2 个', rendered)
         self.assertNotIn('smb://', rendered)
         self.assertEqual(before, result)
 

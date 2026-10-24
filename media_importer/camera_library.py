@@ -14,6 +14,41 @@ from .model import BackupError, ConfigError
 from .source_connection import fresh
 
 
+def backup_states(store, destination, assets):
+    """Recorded outcomes only; remote and cache proofs belong to cleanup."""
+    assets = list(assets)
+    if not assets:
+        return {}
+    rows = {r['asset_id']: dict(r) for r in store.db.execute(
+        'SELECT * FROM source_index WHERE destination=? AND source_type=? AND serial=?',
+        (destination, assets[0].source_type, assets[0].serial))}
+    rows.update({r['asset_id']: dict(r) for r in store.db.execute(
+        'SELECT * FROM files WHERE destination=?', (destination,))})
+    status = store.get_meta('status', {})
+    stage = status.get('stages', {}).get('import') or {}
+    from .status import age
+    importing = (stage.get('current_file_id') if stage.get('phase') == 'downloading'
+                 and age(stage.get('progress_updated_at')) < 30 else None)
+    result = {}
+    for asset in assets:
+        row = rows.get(asset.identity, {})
+        state = row.get('state')
+        error = row.get('error') or row.get('source_cleanup_error') or row.get('cache_cleanup_error')
+        key, label = 'pending', '未备份'
+        if state == 'uploaded':
+            key, label = 'archived', '已归档'
+        elif error:
+            key, label = 'error', '异常'
+        elif state in ('cached', 'staged', 'publishing'):
+            key, label = 'imported', '待归档'
+        elif row.get('id') and row['id'] == importing:
+            key, label = 'importing', '导入中'
+        result[asset.identity] = {'state': key, 'label': label,
+                                  'error': str(error) if error else None,
+                                  'archive_path': row.get('remote_path') if state == 'uploaded' else None}
+    return result
+
+
 def active(store):
     value = store.get_meta('camera_library', {})
     connection = store.get_meta('source_connection', {})
@@ -61,6 +96,11 @@ class Library:
                     or not set(identifiers) <= self.choices.keys()):
                 raise ConfigError('请选择当前清单中的文件')
             return [self.choices[value] for value in identifiers]
+
+    def recorded_states(self, store, destination, session):
+        with self.lock:
+            assets = [pair[0] for pair in self.assets.values()] if session == self.session else []
+        return backup_states(store, destination, assets)
 
     def submit(self, session, action, identifier=None, header=None):
         future = Future()
@@ -112,6 +152,9 @@ class Library:
                     self.choices, self.catalog = choices, uuid.uuid4().hex
                     self.observed_at = time.monotonic()
                     catalog = self.catalog
+                states = backup_states(service.store, service.destination_id, [pair[0] for pair in mapping.values()])
+                for item in result:
+                    item['backup'] = states[item['id']]
                 future.set_result({'files': result, 'session_id': session, 'catalog': catalog})
             else:
                 with self.lock:

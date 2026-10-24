@@ -12,7 +12,7 @@ class BuildContextTests(unittest.TestCase):
     def test_context_contains_only_sources_without_credentials_cache_or_sidecars(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            for name in ('Dockerfile', '.dockerignore', 'requirements.txt', 'scripts/migrate_v010.py',
+            for name in ('Dockerfile', '.dockerignore', 'requirements.txt', 'LICENSE', 'scripts/migrate_v010.py',
                          'media_importer/__init__.py', 'media_importer/._hidden.py', '.env', 'data/state.sqlite3',
                          'cache/video.bin', 'config/settings.json', '._.dockerignore'):
                 path = root / name
@@ -20,6 +20,6 @@ class BuildContextTests(unittest.TestCase):
                 path.write_text(name)
             with image_build.build_context(root) as context:
                 paths = {p.relative_to(context).as_posix() for p in context.rglob('*') if p.is_file()}
-                self.assertEqual({'Dockerfile', '.dockerignore', 'requirements.txt', 'scripts/migrate_v010.py',
+                self.assertEqual({'Dockerfile', '.dockerignore', 'requirements.txt', 'LICENSE', 'scripts/migrate_v010.py',
                                   'media_importer/__init__.py'}, paths)
             self.assertFalse(context.exists())

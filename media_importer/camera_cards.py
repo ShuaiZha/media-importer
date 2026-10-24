@@ -36,7 +36,7 @@ def selection(bot, mode='archived'):
             '清理已有完整本地缓存或正式归档的素材；未归档文件的本地缓存可能是唯一副本。')
     primary = button(bot, '预览清理范围', 'preview', mode=mode)
     primary['type'] = 'primary'
-    return card('清理原片', [markdown('**清理范围：' + MODES[mode] + '**'), paragraph(text),
+    return card('批量清理原片', [markdown('**清理范围：' + MODES[mode] + '**'), paragraph(text),
         bot.buttons(primary, button(bot, '改为' + MODES[other], 'select', mode=other))], shared=True)
 
 
@@ -87,6 +87,8 @@ def render(bot, op, page=None, *, device_details=False):
     result = json.loads(op['result'] or '{}')
     plan = json.loads(op['plan'] or '{"groups":[],"retained":[]}')
     identifier = op['id']
+    from .message_facts import cleanup_scope, cleanup_scope_text, cleanup_result_counts
+    scope = cleanup_scope(plan)
     if op['state'] in ACTIVE:
         title = ('正在停止相机操作' if op['cancelled'] else
                  '正在清理原片' if op['state'] == 'deleting' else
@@ -119,7 +121,7 @@ def render(bot, op, page=None, *, device_details=False):
         stale = age(stamp) > 45
         elements = _source(result.get('identity', {}), details=device_details, stale=stale) if result.get('identity') else []
         if device_details and result.get('scanned'):
-            labels = {'video': '视频', 'photo': '照片', 'preview': '关联预览文件', 'other': '其他文件'}
+            labels = {'video': '视频', 'photo': '照片', 'preview': '关联辅助文件', 'other': '其他文件'}
             elements.append(paragraph('\n'.join(f"{labels[k]}：{v['files']} 个 · {_size(v['bytes'])}"
                                                    for k, v in result['counts'].items() if v['files'])))
         if result.get('error') or result.get('reason'):
@@ -132,7 +134,8 @@ def render(bot, op, page=None, *, device_details=False):
                     'orange' if result.get('error') else 'blue', shared=True)
     if op['state'] == 'ready' and not op['cancelled']:
         elements = [markdown('**清理范围：' + MODES[op['mode']] + '**'),
-                    paragraph(f"{result['eligible_files']} 个文件\n"
+                    paragraph(cleanup_scope_text(scope['primary_files'], scope['auxiliary_files']) + '\n'
+                              f"共 {result['eligible_files']} 个文件\n"
                               f"预计释放 {_size(result['eligible_bytes'])}"),
                     paragraph('相机：' + (result.get('identity', {}).get('model_name') or '未知') +
                               ' · ' + (result.get('identity', {}).get('serial_number') or '未知'))]
@@ -149,7 +152,10 @@ def render(bot, op, page=None, *, device_details=False):
         return card('原片清理预览', elements + [bot.buttons(*actions)], 'orange', shared=True)
     elements = []
     if 'deleted' in result:
-        elements.append(markdown(f"**已删除 {result['deleted']} 个 · 释放 {_size(result['released_bytes'])}**"))
+        counts = cleanup_result_counts(plan, result)
+        elements.append(markdown(f"**已删除 {result['deleted']} 个文件 · 释放 {_size(result['released_bytes'])}**"))
+        if result['deleted'] and counts.get('deleted_primary', 0) + counts.get('deleted_auxiliary', 0) == result['deleted']:
+            elements.append(paragraph(cleanup_scope_text(counts.get('deleted_primary', 0), counts.get('deleted_auxiliary', 0))))
         remaining = ' · '.join(f"{label} {result[key]} 个" for key, label in [('absent', '原片未找到'), ('retained', '保留'), ('unknown', '待核验')] if result[key])
         if remaining: elements.append(paragraph(remaining))
     if result.get('error') or result.get('reason'):
@@ -161,9 +167,9 @@ def render(bot, op, page=None, *, device_details=False):
         actions.insert(0, button(bot, '复查删除结果', 'verify', id=identifier))
     if result.get('details'):
         actions.insert(0, button(bot, '查看明细', 'details', id=identifier))
-    attention = result.get('error') or result.get('retained') or result.get('unknown') or op['cancelled']
+    attention = result.get('error') or result.get('retained') or result.get('unknown')
     return card('原片清理已结束' if 'deleted' in result else '本次清理未执行',
-                elements + [bot.buttons(*actions)], 'orange' if attention else 'green', shared=True)
+                elements + [bot.buttons(*actions)], 'orange' if attention else 'grey' if op['cancelled'] else 'green', shared=True)
 
 
 def process_job(bot, job, payload):

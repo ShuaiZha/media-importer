@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def build_context(root):
     with tempfile.TemporaryDirectory(prefix='media-importer-build-') as folder:
         target = Path(folder)
-        files = [root / name for name in ('Dockerfile', '.dockerignore', 'requirements.txt', 'scripts/migrate_v010.py')]
+        files = [root / name for name in ('Dockerfile', '.dockerignore', 'requirements.txt', 'LICENSE', 'scripts/migrate_v010.py')]
         files += [p for p in (root / 'media_importer').rglob('*.py') if not p.name.startswith('._') and '__pycache__' not in p.parts]
         for source in files:
             if source.is_symlink():

@@ -23,7 +23,8 @@ from media_importer.settings import Settings
 class RemoteConfigurationTests(TestCase):
     tearDown = test_bot.BotTests.tearDown
     callback = test_bot.BotTests.callback
-    submit = SettingsFormsTests.submit
+    def submit(self, page, fields, event='form'):
+        return SettingsFormsTests.submit(self, page, fields, event, legacy=page in ('source_settings', 'destination_settings'))
     process = SettingsFormsTests.process
 
     def setUp(self):
@@ -39,7 +40,7 @@ class RemoteConfigurationTests(TestCase):
                 'mode': 'connection', 'password': '', **extra}
 
     def form_token(self, page='destination_settings'):
-        return next(e for e in self.bot.panel(page)['elements'] if e['tag'] == 'form')['elements'][-1]['value']
+        return self.bot.action({'settings_form': page, 'settings_version': 2, 'connection_revision': connection_revision(self.settings.read()['config'])}, self.settings.read()['revision'])
 
     def confirm(self):
         response = self.sender.call_args.args[1]

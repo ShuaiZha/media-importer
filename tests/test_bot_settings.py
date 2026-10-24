@@ -24,7 +24,7 @@ class SettingsFormsTests(TestCase):
     callback = test_bot.BotTests.callback
     message = test_bot.BotTests.message
 
-    def submit(self, page, fields, event='form'):
+    def submit(self, page, fields, event='form', *, legacy=False):
         panel = self.bot.panel(page)
         form = next(e for e in panel['elements'] if e['tag'] == 'form')
         if page in ('transfer_settings', 'advanced_settings'):
@@ -32,7 +32,12 @@ class SettingsFormsTests(TestCase):
         if page == 'destination_settings':
             target = self.settings.read()['config']['destination']
             fields = {**{key: target[key] for key in ('name', 'username', 'domain')}, 'password': '', **fields}
-        return self.bot.receive_card(self.callback(form['elements'][-1]['value'], event_id=event, fields=fields))
+        token = form['elements'][-1]['value']
+        if legacy:
+            token = self.bot.action({'settings_form': page, 'settings_version': 2,
+                                    'connection_revision': connection_revision(self.settings.read()['config'])},
+                                   self.settings.read()['revision'])
+        return self.bot.receive_card(self.callback(token, event_id=event, fields=fields))
 
     def process(self):
         with patch('media_importer.bot.time.monotonic', side_effect=[1, 6]):
@@ -110,7 +115,7 @@ class SettingsFormsTests(TestCase):
             self.assertFalse(db.execute('SELECT 1 FROM bot_jobs').fetchone())
 
     def test_notification_form_validates_interval_and_preserves_other_values(self):
-        fields = {'enabled': 'on', 'progress_interval_seconds': '600'}
+        fields = {'enabled': 'on', 'progress_interval_minutes': '10'}
         before = copy.deepcopy(self.settings.read()['config'])
         self.assertEqual('info', self.submit('notification_settings', fields)['toast']['type'])
         self.process()
@@ -118,8 +123,8 @@ class SettingsFormsTests(TestCase):
         self.assertEqual(before['backup'], after['backup'])
         self.assertEqual(before['limits'], after['limits'])
         self.assertEqual({'enabled': True, 'connection_events': False, 'progress_interval_seconds': 600, 'keyword': ''}, after['notifications'])
-        for value in ('0', '59', '86401', '1.5'):
-            self.assertEqual('error', self.submit('notification_settings', {**fields, 'progress_interval_seconds': value}, value)['toast']['type'])
+        for value in ('0', '.5', '1441', '1.0001'):
+            self.assertEqual('error', self.submit('notification_settings', {**fields, 'progress_interval_minutes': value}, value)['toast']['type'])
         self.assertIn('通知设置', settings_result({'notifications': after['notifications']}, True, False)['title'])
 
     def test_old_form_cannot_overwrite_new_settings_and_duplicate_delivery_applies_once(self):
@@ -258,7 +263,7 @@ class ArchiveSettingsTests(SettingsFormsTests):
 
     def test_destination_confirmation_is_explicit_and_checks_for_new_work(self):
         fields = {**{k: str(v) for k, v in self.fields.items()}, 'mode': 'new'}
-        self.submit('destination_settings', fields); self.process()
+        self.submit('destination_settings', fields, legacy=True); self.process()
         response = self.sender.call_args.args[1]
         self.assertIn('尚未保存', json.dumps(response, ensure_ascii=False))
         self.assertEqual(self.original.destination_id, json.loads(self.path.read_text())['archive']['id'])

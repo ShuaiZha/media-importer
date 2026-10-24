@@ -10,5 +10,6 @@ ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /app
 COPY media_importer /app/media_importer
 COPY scripts/migrate_v010.py /app/migrate_v010.py
+COPY LICENSE /app/LICENSE
 ENTRYPOINT ["python3", "-m", "media_importer"]
 CMD ["daemon"]
