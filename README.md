@@ -6,7 +6,7 @@
 [![Tests](https://github.com/ShuaiZha/media-importer/actions/workflows/ci.yml/badge.svg)](https://github.com/ShuaiZha/media-importer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-[快速开始](#快速开始) · [使用文档](docs/README.md) · [兼容性](docs/compatibility.md) · [v1.0.0](docs/releases/v1.0.0.md)
+[快速开始](#快速开始) · [使用文档](docs/README.md) · [兼容性](docs/compatibility.md) · [v1.0.1](docs/releases/v1.0.1.md)
 
 连接相机，在飞书中确认设备并开启备份。素材先完整导入本地缓存，再并行上传到 SMB 共享；目的地可以是 NAS，也可以是另一台电脑。
 
@@ -45,14 +45,14 @@ curl -fsSL https://github.com/ShuaiZha/media-importer/releases/latest/download/i
 
 更新：`media-importer update` · 卸载：`media-importer uninstall` · [完整说明 →](docs/native.md)
 
-源码新增跨平台[旧版本自动回收](docs/native.md#程序保留)：新版健康后保留当前版与上一健康版本，配置、任务与完整缓存保留。该机制将在后续原生安装包提供，已发布的 v1.0.0 尚不包含。
+原生更新支持跨平台[旧版本自动回收](docs/native.md#程序保留)：新版健康后保留当前版与上一健康版本，配置、任务与完整缓存保留。
 
 ### 部署方式二：Docker Compose
 
 需要 Git、Python 3.9+ 和运行中的 Docker Compose。
 
 ```sh
-git clone --branch v1.0.0 https://github.com/ShuaiZha/media-importer.git
+git clone --branch v1.0.1 https://github.com/ShuaiZha/media-importer.git
 cd media-importer
 python3 scripts/setup.py
 docker compose up -d --no-build
@@ -78,7 +78,7 @@ Mac 无线自动连接需要独立有线网络，相机使用独立供电并开�
 | 配置飞书和日常操作 | [飞书指南](docs/feishu.md) · [配置参考](docs/configuration.md) |
 | 理解备份、画面与拍摄的关系 | [业务流程](docs/workflows.md) |
 | 处理故障、迁移或恢复缓存 | [使用与排障](docs/operations.md) · [迁移与恢复](docs/recovery.md) |
-| 参与开发或查看发布内容 | [架构](docs/architecture.md) · [贡献指南](CONTRIBUTING.md) · [v1.0.0 说明](docs/releases/v1.0.0.md) |
+| 参与开发或查看发布内容 | [架构](docs/architecture.md) · [贡献指南](CONTRIBUTING.md) · [v1.0.1 说明](docs/releases/v1.0.1.md) |
 
 升级保留配置、未完成任务与完整缓存。问题请提交 [Issue](https://github.com/ShuaiZha/media-importer/issues)，附版本、系统及脱敏日志；不要上传凭据、任务数据库、缓存或私人素材。
 
