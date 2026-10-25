@@ -265,9 +265,10 @@ class NativeTests(unittest.TestCase):
 
     def test_bundle_retention_requires_new_worker_heartbeats(self):
         record = self.install()
-        with sqlite3.connect(self.project / 'data/state.sqlite3') as db:
+        with closing(sqlite3.connect(self.project / 'data/state.sqlite3')) as db:
             db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', ('service', json.dumps({'started_at': '2026-01-01T00:00:01+00:00'})))
             db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', ('bot', json.dumps({'heartbeat_at': '2026-01-01T00:00:01+00:00'})))
+            db.commit()
         from datetime import datetime
         stamp = datetime.fromisoformat('2026-01-01T00:00:02+00:00').timestamp()
         with patch('media_importer.status.healthy', return_value=True), patch('media_importer.bot.healthy', return_value=True):
