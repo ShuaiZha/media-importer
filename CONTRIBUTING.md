@@ -62,6 +62,8 @@ python3.12 -m venv .build/native-venv
 
 最后一行以 macOS ARM64 为例，替换为实际产物路径。Windows 使用 `py -3.12` 与 `.build/native-venv/Scripts/python.exe`。输出在 `dist/native/`，包含程序、压缩包和校验清单。冒烟测试在临时实例中检查安装、更新与卸载，不接管生产数据。
 
+Mac 可传入 `--codesign-identity 'Developer ID Application: Example (TEAMID)'`，使用钥匙串中已有的 Apple 证书签署程序与依赖。主程序代码标识固定为 `org.media-importer.cli`，不放宽系统的签名要求。未提供证书时仍为临时签名，不能保证升级保留隐私授权；设置标识本身不能替代 Apple 签名。签名选项不包含证书申请、CI 私钥配置或公证流程，私钥不得提交。构建成功或失败均自动移除本次临时构建目录。
+
 Mac 构建会下载并校验固定版本的 go2rtc，连同 MIT 许可放入包内 `components/`，运行时不下载组件。来源与校验值见 [`scripts/preview_bundle.py`](scripts/preview_bundle.py)；源码测试实时预览前先运行该脚本。不依赖系统 FFmpeg。其他平台不包含尚未适配的预览组件。
 
 ### 发布

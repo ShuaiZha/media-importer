@@ -36,6 +36,9 @@ def supervise(home):
     lifecycle.save(home / 'startup.json', {'phase': 'starting_workers', 'observed_at': time.time()})
     processes = {}
     retry = {}
+    started_at = time.time()
+    maintenance_at = 0
+    maintained = False
     stop_file = home / ('stop-' + uuid.uuid4().hex)
     env = {**lifecycle.runtime_env(record), 'MEDIA_IMPORTER_STOP_FILE': str(stop_file)}
     def log_output(process, role):
@@ -63,6 +66,14 @@ def supervise(home):
                 lifecycle.save(home / 'running.json', {'version': record['version'], 'pid': os.getpid(),
                     'observed_at': time.time(), 'waiting_for_disk': not available,
                     'workers': {role: bool(processes.get(role) and processes[role].poll() is None) for role in ('daemon', 'bot')}})
+                if (not maintained and available and len(processes) == 2
+                        and time.monotonic() >= maintenance_at):
+                    from .retention import maintain
+                    try:
+                        maintained = maintain(home, record, started_at)
+                    except Exception:
+                        logger.exception('Program cleanup deferred; instance data unchanged')
+                    maintenance_at = time.monotonic() + 60
                 stop.wait(2)
         finally:
             stop_file.write_text('stop\n')
@@ -88,6 +99,13 @@ def describe(home):
     result = {'deployment': 'native', 'version': record['version'], 'project': record['project'],
               'paths': {k: record['paths'][k] for k in ('config', 'data', 'cache')},
               'service': {'running': False}, 'health': {'importer': False, 'bot': False}}
+    result['programs'] = {'current': record['bundle'], 'previous': record.get('previous_bundle') or None}
+    try:
+        cleanup = json.loads((home / 'program-cleanup.json').read_text())
+        if cleanup.get('current') == record['bundle']:
+            result['programs']['cleanup_pending'] = cleanup['pending']
+    except (OSError, ValueError, KeyError):
+        pass
     if (home / 'startup.json').is_file():
         result['startup'] = json.loads((home / 'startup.json').read_text())
     try:

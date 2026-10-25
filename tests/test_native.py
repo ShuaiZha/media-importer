@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import shutil
 import sqlite3
 import sys
 import tarfile
@@ -13,7 +14,7 @@ from unittest.mock import patch
 
 from media_importer.config import DEFAULTS
 from media_importer.deployment import assert_runtime
-from media_importer.native import lifecycle, platforms, releases, purge
+from media_importer.native import lifecycle, platforms, releases, purge, retention
 from media_importer.store import Store, worker_lock
 from media_importer.storage import initialize_cache, inspect_cache, MARKER
 
@@ -94,6 +95,246 @@ class NativeTests(unittest.TestCase):
             with self.assertRaises(ValueError): lifecycle.update(self.home, self.bundle('1.1.0'))
             stop.assert_not_called()
         self.assertEqual(before, (self.home / 'installation.json').read_bytes()); self.assert_preserved()
+
+    def confirm(self, record):
+        (self.home / 'stopped').unlink(missing_ok=True)
+        with patch.object(retention, 'ready', return_value=True), patch.object(retention, 'in_use', return_value=False):
+            self.assertTrue(retention.maintain(self.home, record, 0))
+        return lifecycle.load(self.home)
+
+    def test_successive_upgrades_keep_current_and_last_healthy_bundle_only(self):
+        first = self.confirm(self.install())
+        second, _ = lifecycle.update(self.home, self.bundle('1.0.1'), no_start=True)
+        self.assertTrue(Path(first['bundle']).is_dir())
+        second = self.confirm(second)
+        third, _ = lifecycle.update(self.home, self.bundle('1.0.2'), no_start=True)
+        # No reclaim until both new workers have passed their health checks.
+        self.assertTrue(Path(first['bundle']).is_dir())
+        third = self.confirm(third)
+        self.assertFalse(Path(first['bundle']).exists())
+        self.assertEqual(second['bundle'], third['previous_bundle'])
+        self.assertEqual(third['bundle'], third['healthy_bundle'])
+        self.assertEqual({Path(second['bundle']), Path(third['bundle'])}, set((self.home / 'releases').iterdir()))
+        self.assert_preserved()
+        self.assertEqual(3, len(list((self.home / 'backups').glob('*/snapshot.json'))))
+
+    def test_multiple_unstarted_candidates_preserve_the_last_healthy_rollback(self):
+        original = self.confirm(self.install())
+        pending, _ = lifecycle.update(self.home, self.bundle('1.0.1'), no_start=True)
+        latest, _ = lifecycle.update(self.home, self.bundle('1.0.2'), no_start=True)
+        latest = self.confirm(latest)
+        self.assertEqual(original['bundle'], latest['previous_bundle'])
+        self.assertTrue(Path(original['bundle']).is_dir())
+        self.assertFalse(Path(pending['bundle']).exists())
+        self.assert_preserved()
+
+    def test_unhealthy_workers_and_installer_lock_postpone_program_cleanup(self):
+        from media_importer.locking import file_lock
+        record = self.install()
+        orphan, _ = lifecycle.copy_bundle(self.home, self.bundle('0.9.0'))
+        (self.home / 'stopped').unlink()
+        before = (self.home / 'installation.json').read_bytes()
+        with patch.object(retention, 'ready', return_value=False):
+            self.assertFalse(retention.maintain(self.home, record, 0))
+        with patch.object(retention, 'ready', return_value=True), file_lock(self.home / 'install.lock', False):
+            self.assertFalse(retention.maintain(self.home, record, 0))
+        self.assertEqual(before, (self.home / 'installation.json').read_bytes())
+        self.assertTrue(orphan.is_dir()); self.assert_preserved()
+        self.confirm(record)
+        self.assertFalse(orphan.exists())
+
+    def test_start_failure_keeps_the_candidate_and_the_previous_healthy_program(self):
+        record = self.confirm(self.install())
+        with patch.object(lifecycle, 'start', side_effect=RuntimeError('waiting for disk permission')):
+            with self.assertRaisesRegex(RuntimeError, 'permission'):
+                lifecycle.update(self.home, self.bundle('1.0.1'))
+        newer = lifecycle.load(self.home)
+        self.assertTrue(Path(newer['bundle']).is_dir())
+        self.assertTrue(Path(record['bundle']).is_dir())
+        self.assertEqual(record['bundle'], newer['previous_bundle'])
+        self.assert_preserved()
+
+    def test_stop_or_snapshot_failure_does_not_leave_an_unregistered_copy(self):
+        record = self.install()
+        original = set((self.home / 'releases').iterdir())
+        for index, operation in enumerate(('stop', 'snapshot')):
+            with self.subTest(operation=operation), patch.object(lifecycle, operation, side_effect=OSError('fixture')):
+                with self.assertRaises(OSError): lifecycle.update(self.home, self.bundle('1.1.' + str(index)))
+            self.assertEqual(original, set((self.home / 'releases').iterdir()))
+            self.assertEqual(record, lifecycle.load(self.home))
+        self.assert_preserved()
+
+    def test_partial_bundle_copy_is_removed_without_touching_instance_data(self):
+        self.install()
+        original = set((self.home / 'releases').iterdir())
+        def partial(source, destination, **kwargs):
+            (destination / 'partial').write_bytes(b'half')
+            raise OSError('disk full')
+        with patch.object(lifecycle.shutil, 'copytree', side_effect=partial):
+            with self.assertRaises(OSError): lifecycle.copy_bundle(self.home, self.bundle('1.0.1'))
+        self.assertEqual(original, set((self.home / 'releases').iterdir()))
+        self.assert_preserved()
+
+    def test_failed_update_copy_does_not_stop_the_current_service(self):
+        record = self.install()
+        with patch.object(lifecycle.shutil, 'copytree', side_effect=OSError('disk full')), patch.object(lifecycle, 'stop') as stop:
+            with self.assertRaises(OSError): lifecycle.update(self.home, self.bundle('1.0.1'))
+            stop.assert_not_called()
+        self.assertEqual(record, lifecycle.load(self.home))
+        self.assertEqual([Path(record['bundle'])], list((self.home / 'releases').iterdir()))
+        self.assert_preserved()
+
+    def test_launcher_error_after_switch_does_not_remove_selected_candidate(self):
+        record = self.install()
+        with patch.object(lifecycle, 'launcher', side_effect=OSError('launcher locked')):
+            with self.assertRaises(OSError): lifecycle.update(self.home, self.bundle('1.0.1'))
+        selected = lifecycle.load(self.home)
+        self.assertTrue(Path(selected['bundle']).is_dir())
+        self.assertTrue(Path(record['bundle']).is_dir())
+        self.assertEqual(record['bundle'], selected['previous_bundle'])
+        self.assert_preserved()
+
+    def test_legacy_installer_recovers_exact_previous_version_from_completed_snapshot(self):
+        original = self.install()
+        older, _ = lifecycle.copy_bundle(self.home, self.bundle('0.9.9'))
+        lifecycle.snapshot(self.home, original)
+        current, _ = lifecycle.copy_bundle(self.home, self.bundle('1.0.1'))
+        legacy = {k: v for k, v in original.items() if k not in ('healthy_bundle', 'previous_bundle')}
+        legacy.update(bundle=str(current), version='1.0.1')
+        lifecycle.save(self.home / 'installation.json', legacy)
+        upgraded = self.confirm(legacy)
+        self.assertEqual(original['bundle'], upgraded['previous_bundle'])
+        self.assertTrue(Path(original['bundle']).is_dir())
+        self.assertFalse(older.exists()); self.assert_preserved()
+
+    def test_partial_cleanup_is_journaled_and_retried_after_files_are_unlocked(self):
+        record = self.install()
+        obsolete, _ = lifecycle.copy_bundle(self.home, self.bundle('0.9.9'))
+        (self.home / 'stopped').unlink()
+        def partial(path):
+            (path / 'bundle.json').unlink()
+            (path / retention.OWNER).unlink()
+            releases.executable(path).unlink()
+            raise PermissionError('locked DLL')
+        with patch.object(retention, 'ready', return_value=True), patch.object(retention, 'in_use', return_value=False):
+            with patch.object(retention.shutil, 'rmtree', side_effect=partial):
+                self.assertFalse(retention.maintain(self.home, record, 0))
+            journal = json.loads((self.home / 'program-cleanup.json').read_text())
+            self.assertEqual([str(obsolete)], journal['pending'])
+            self.assertTrue(retention.maintain(self.home, record, 0))
+        self.assertFalse(obsolete.exists()); self.assert_preserved()
+
+    def test_cleanup_does_not_remove_in_use_unknown_or_data_directories(self):
+        record = self.install()
+        busy, _ = lifecycle.copy_bundle(self.home, self.bundle('0.9.8'))
+        unknown, _ = lifecycle.copy_bundle(self.home, self.bundle('0.9.9'))
+        (unknown / retention.OWNER).unlink()
+        unrelated = self.home / 'releases/notes'; unrelated.mkdir()
+        (unrelated / 'keep').write_bytes(b'keep')
+        (self.home / 'stopped').unlink()
+        with patch.object(retention, 'ready', return_value=True), patch.object(retention, 'in_use', return_value=True):
+            self.assertFalse(retention.maintain(self.home, record, 0))
+        self.assertTrue(busy.is_dir()); self.assertTrue(unknown.is_dir())
+        self.assertEqual(b'keep', (unrelated / 'keep').read_bytes())
+        fake = {**record, 'paths': {**record['paths'], 'cache': str(busy / 'user-cache')}}
+        self.assertIsNone(retention.program_path(self.home, busy, fake))
+        self.assert_preserved()
+
+    @unittest.skipIf(sys.platform == 'win32', 'symlink creation requires a Windows privilege')
+    def test_cleanup_never_follows_a_bundle_or_release_root_symlink(self):
+        record = self.install()
+        link = self.home / 'releases/0.9.9-12345678'
+        link.symlink_to(self.project / 'cache', target_is_directory=True)
+        self.confirm(record)
+        self.assertTrue(link.is_symlink()); self.assert_preserved()
+        programs = self.home / 'releases'; saved = self.home / 'saved-programs'
+        programs.rename(saved); programs.symlink_to(saved, target_is_directory=True)
+        self.assertIsNone(retention.owned_path(self.home, record['bundle'], record))
+
+    def test_read_only_status_does_not_run_program_maintenance(self):
+        from media_importer.native.cli import describe
+        record = self.install()
+        obsolete, _ = lifecycle.copy_bundle(self.home, self.bundle('0.9.9'))
+        before = (self.home / 'installation.json').read_bytes()
+        with patch.object(retention, 'maintain') as maintain:
+            self.assertEqual(record['bundle'], describe(self.home)['programs']['current'])
+            maintain.assert_not_called()
+        self.assertTrue(obsolete.is_dir())
+        self.assertEqual(before, (self.home / 'installation.json').read_bytes())
+        self.assert_preserved()
+
+    def test_bundle_retention_requires_new_worker_heartbeats(self):
+        record = self.install()
+        with sqlite3.connect(self.project / 'data/state.sqlite3') as db:
+            db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', ('service', json.dumps({'started_at': '2026-01-01T00:00:01+00:00'})))
+            db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', ('bot', json.dumps({'heartbeat_at': '2026-01-01T00:00:01+00:00'})))
+        from datetime import datetime
+        stamp = datetime.fromisoformat('2026-01-01T00:00:02+00:00').timestamp()
+        with patch('media_importer.status.healthy', return_value=True), patch('media_importer.bot.healthy', return_value=True):
+            self.assertFalse(retention.ready(record, stamp))
+            self.assertTrue(retention.ready(record, stamp - 1))
+        with patch('media_importer.status.healthy', return_value=False):
+            self.assertFalse(retention.ready(record, stamp - 1))
+
+    def test_legacy_cleanup_requires_a_complete_matching_snapshot(self):
+        record = self.install()
+        unknown, _ = lifecycle.copy_bundle(self.home, self.bundle('0.9.9'))
+        (unknown / retention.OWNER).unlink()
+        folder = self.home / 'backups/older'; folder.mkdir()
+        lifecycle.save(folder / 'installation.json', {**record, 'version': '0.9.9', 'bundle': str(unknown)})
+        for receipt in ({'complete': False, 'version': '0.9.9'}, {'complete': True, 'version': '0.9.8'}):
+            lifecycle.save(folder / 'snapshot.json', receipt)
+            self.confirm(record)
+            self.assertTrue(unknown.is_dir())
+        lifecycle.save(folder / 'snapshot.json', {'complete': True, 'version': '0.9.9'})
+        self.confirm(record)
+        self.assertFalse(unknown.exists()); self.assert_preserved()
+
+    def test_mac_open_file_probe_defers_on_errors_or_existing_handles(self):
+        record = self.install()
+        bundle = Path(record['bundle'])
+        for code, output, error, expected in ((1, '', '', False), (0, '123\n', '', True),
+                                              (1, '', 'cannot inspect', True), (2, '', '', True)):
+            result = lifecycle.subprocess.CompletedProcess([], code, output, error)
+            with self.subTest(code=code, output=output, error=error), patch.object(retention.sys, 'platform', 'darwin'), patch.object(retention.subprocess, 'run', return_value=result):
+                self.assertEqual(expected, retention.in_use(bundle))
+        with patch.object(retention.sys, 'platform', 'darwin'), patch.object(retention.subprocess, 'run', side_effect=OSError('unavailable')):
+            self.assertTrue(retention.in_use(bundle))
+
+    @unittest.skipUnless(sys.platform == 'linux', 'requires Linux /proc and executable file identity')
+    def test_linux_running_obsolete_program_is_retained_until_it_exits(self):
+        record = self.install()
+        obsolete, _ = lifecycle.copy_bundle(self.home, self.bundle('0.9.9'))
+        program = releases.executable(obsolete)
+        shutil.copyfile(shutil.which('sleep'), program); program.chmod(0o755)
+        process = lifecycle.subprocess.Popen([str(program), '30'])
+        (self.home / 'stopped').unlink()
+        try:
+            with patch.object(retention, 'ready', return_value=True):
+                self.assertFalse(retention.maintain(self.home, record, 0))
+                self.assertTrue(program.is_file())
+        finally:
+            process.terminate(); process.wait(timeout=5)
+        with patch.object(retention, 'ready', return_value=True):
+            self.assertTrue(retention.maintain(self.home, record, 0))
+        self.assertFalse(obsolete.exists()); self.assert_preserved()
+
+    @unittest.skipUnless(sys.platform == 'win32', 'requires real Windows file sharing locks')
+    def test_windows_locked_obsolete_program_cleanup_recovers_after_release(self):
+        from test_native_windows import deny_delete
+        record = self.install()
+        obsolete, _ = lifecycle.copy_bundle(self.home, self.bundle('0.9.9'))
+        program = releases.executable(obsolete)
+        (self.home / 'stopped').unlink()
+        with patch.object(retention, 'ready', return_value=True):
+            with deny_delete(program):
+                self.assertFalse(retention.maintain(self.home, record, 0))
+                self.assertTrue(program.is_file())
+                journal = json.loads((self.home / 'program-cleanup.json').read_text())
+                self.assertEqual([str(obsolete)], journal['pending'])
+                self.assert_preserved()
+            self.assertTrue(retention.maintain(self.home, record, 0))
+        self.assertFalse(obsolete.exists()); self.assert_preserved()
 
     def test_live_worker_prevents_adoption(self):
         with worker_lock(self.project / 'data'):

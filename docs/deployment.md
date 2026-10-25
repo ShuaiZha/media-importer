@@ -78,6 +78,8 @@ python3 scripts/manage.py update
 - 生成的 `compose.override.yaml` 固定本机镜像，不提交到 Git。拉取源码不会自动更新容器。
 - v0.10.15 及更早版本先 `git pull --ff-only` 获取更新器；v0.9 使用[一次性迁移](recovery.md#从-v09-迁移)。
 
+[两版保留与旧构建回收](native.md#程序保留)适用于 Mac、Windows、Linux 的原生安装目录。Docker 镜像由 Docker 管理，此更新器不自动回收旧镜像；配置、任务、完整缓存和升级快照保留。
+
 修改 `.env` 后执行 `docker compose up -d --force-recreate --no-build`；JSON 偏好自动重读。换盘、换电脑和恢复备份见[迁移与恢复](recovery.md)。运行中的数据库只通过容器内 CLI 查询，不在宿主机直接打开。
 
 飞书「设置」提供传输、通知和 SMB 归档位置；v0.10.25 起也支持 SMB 账号密码、相机连接和运行间隔，无需重建容器。v0.11.0 起连接统一存 JSON，密码只从已挂载配置目录的凭据文件读取，旧 `.env` 业务字段不再生效。连接修改须先停止备份，SMB 检查后确认。Docker 宿主机挂载与换盘仍在本机处理。见[飞书参数设置](feishu.md#参数设置)；升级程序后还需在飞书后台[更新并发布菜单](feishu.md#3-订阅与菜单)。

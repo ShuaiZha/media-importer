@@ -45,6 +45,8 @@ curl -fsSL https://github.com/ShuaiZha/media-importer/releases/latest/download/i
 
 更新：`media-importer update` · 卸载：`media-importer uninstall` · [完整说明 →](docs/native.md)
 
+源码新增跨平台[旧版本自动回收](docs/native.md#程序保留)：新版健康后保留当前版与上一健康版本，配置、任务与完整缓存保留。该机制将在后续原生安装包提供，已发布的 v1.0.0 尚不包含。
+
 ### 部署方式二：Docker Compose
 
 需要 Git、Python 3.9+ 和运行中的 Docker Compose。

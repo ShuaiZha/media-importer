@@ -184,10 +184,20 @@ def launcher(home, record):
 
 
 def copy_bundle(home, source):
+    from .retention import OWNER
     info = releases.metadata(source)
     destination = home / 'releases' / (info['version'] + '-' + uuid.uuid4().hex[:8])
+    if destination.parent.is_symlink():
+        raise ValueError('程序目录为符号链接，未复制或清理安装包')
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, destination, symlinks=True)
+    destination.mkdir()
+    save(destination / OWNER, {'format': 1, 'home': str(home)})
+    try:
+        shutil.copytree(source, destination, symlinks=True, dirs_exist_ok=True,
+                        ignore=lambda _, names: [OWNER] if OWNER in names else [])
+    except BaseException:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
     return destination, info
 
 
@@ -239,7 +249,8 @@ def install(home, source, project, bin_dir, *, no_start=False):
         project.mkdir(parents=True, exist_ok=True)
         setup(project, checks=None, native=True)
     record = {'format': 1, 'project': str(project.resolve()), 'paths': paths(project),
-              'version': info['version'], 'command': str(target), 'bundle': ''}
+              'version': info['version'], 'command': str(target), 'bundle': '',
+              'previous_bundle': '', 'healthy_bundle': ''}
     programs = home / 'releases'
     for key in ('config', 'data', 'cache'):
         path = Path(record['paths'][key])
@@ -273,16 +284,29 @@ def update(home, source, *, no_start=False):
         return record, False
     assert_paths(record); assert_no_docker(record)
     validate(source, record)
+    # Copy before stopping: a full disk must not interrupt the current service.
     bundle, _ = copy_bundle(home, source)
     was_running = not (home / 'stopped').exists()
-    stop(home)
-    from ..store import worker_lock
-    with worker_lock(record['paths']['data']) as free:
-        if not free:
-            raise ValueError('仍有进程使用此任务目录；未切换版本')
-        snapshot(home, record)
-        record.update(version=info['version'], bundle=str(bundle))
-        save(home / 'installation.json', record); launcher(home, record)
+    try:
+        stop(home)
+        from ..store import worker_lock
+        with worker_lock(record['paths']['data']) as free:
+            if not free:
+                raise ValueError('仍有进程使用此任务目录；未切换版本')
+            snapshot(home, record)
+            previous = record.get('healthy_bundle') or record.get('previous_bundle') or record['bundle']
+            record.update(version=info['version'], bundle=str(bundle), previous_bundle=previous)
+            save(home / 'installation.json', record); launcher(home, record)
+    except BaseException:
+        # A save may have succeeded before an error was reported. Never remove
+        # the selected program, even when its launcher/start still needs repair.
+        try:
+            unselected = load(home)['bundle'] != str(bundle)
+        except (OSError, ValueError, KeyError):
+            unselected = False
+        if unselected:
+            shutil.rmtree(bundle, ignore_errors=True)
+        raise
     if was_running and not no_start:
         start(home, record)
     return record, True
