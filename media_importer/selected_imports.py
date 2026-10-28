@@ -260,11 +260,14 @@ def _scan(service, op, settings):
     connection = service.store.get_meta('source_connection', {})
     if not fresh(connection) or connection.get('state') != 'approved' or connection.get('id') != op['session_id']:
         raise ConfigError('相机连接已变化，请重新确认并浏览')
-    assets = service.source_snapshot()
+    observed = service.source_scan()
+    assets = observed.assets
     from .adapters import source_selection_groups
     groups = source_selection_groups(service.source, assets)
     plan = plan_for_groups(service.config, service.store, service.destination_id, identity, groups)
-    return plan, {'source_files': len(assets), 'source_bytes': sum(a.size for a in assets),
+    plan['source_errors'] = observed.errors
+    return plan, {'source_files': len(assets) + len(observed.errors), 'source_errors': observed.errors,
+                  'source_bytes': sum(a.size for a in assets),
                   'observed_at': now(), **_summary(plan)}
 
 

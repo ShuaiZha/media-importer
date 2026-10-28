@@ -449,6 +449,8 @@ def detail_content(view):
         elements.append(note('相机清单尚未复核'))
     for error in view.get('selected_import', {}).get('archive_errors', [])[:8]:
         elements.append(paragraph(str(error.get('file', '')) + '\n' + str(error.get('reason', ''))))
+    for error in view.get('status', {}).get('inventory', {}).get('errors', [])[:8]:
+        elements.append(paragraph(str(error.get('path', '')) + '\n' + str(error.get('reason', ''))))
     elements += attention_elements(view) + _selection_notes(view) + backlog_elements(view)
     disk = view.get('disk', {})
     if disk.get('available'):

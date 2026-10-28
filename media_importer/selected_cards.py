@@ -122,8 +122,11 @@ def _chooser(bot, op, plan, page):
     file_selection = plan.get('selection_mode') == 'files'
     unit = '项' if file_selection else '组'
     elements = [markdown(f'**已选 {len(selected)} {unit}** · {_size(sum(i.get("size", 0) for i in _members(plan, True)))}')]
+    errors = plan.get('source_errors', [])
+    if errors:
+        elements.append(paragraph(f'{len(errors)} 个文件无法核验，未列入选择；原片清理已暂停。'))
     if not groups:
-        return card('没有可选择的素材', [paragraph('相机清单为空'),
+        return card('没有可选择的素材', [paragraph(f'{len(errors)} 个文件无法核验，请检查相机素材' if errors else '相机清单为空'),
                     bot.buttons(button(bot, '重新扫描', 'browse'))], shared=True)
     visible = list(enumerate(groups[start:start + PAGE_SIZE], start))
     # JSON 1.0 multi_select_static is form-only. selected_values are strings;

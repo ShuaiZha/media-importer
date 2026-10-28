@@ -44,6 +44,8 @@ PROBLEMS = {
     'cache_unavailable': ('传输暂停', '缓存盘不可用\n请连接原缓存盘'),
     'source_state': ('导入等待相机', '相机就绪后自动继续'),
     'source_file': ('文件导入等待重试', '其他文件继续处理'),
+    'source_metadata': ('部分素材无法核验', '请检查异常文件\n其他素材继续备份，原片清理已暂停'),
+    'archive_verification': ('归档副本待核验', '远端副本缺失、变化或暂不可访问\n完整缓存已保留，请检查归档存储'),
     'file': ('文件归档等待重试', '其他文件继续处理'),
     'source_cleanup': ('原片清理未完成', '请检查相机连接及副本核验结果'),
     'cache_cleanup': ('归档完成 · 缓存待清理', '请检查缓存盘写入权限'),
@@ -433,6 +435,8 @@ class NotificationWorker:
                 code = "file"
             if active(stage):
                 found[f"{scope}:{stage}:{code}"] = {"code": code, "scope": scope, "stage": stage}
+        if view.get('status', {}).get('inventory', {}).get('errors'):
+            add('source_metadata', 'file', 'import')
         for stage, progress in view.get("stages", {}).items():
             issue = progress.get("issue") or {}
             phase = progress.get("phase", "")
@@ -466,7 +470,9 @@ class NotificationWorker:
             if not cleaning_source and item.get("source_cleanup_error") and item.get('cleanup_selected', item.get('selected', True)) and view.get("policy", {}).get("delete_source"):
                 add("source_cleanup", "source", "import")
             if item.get("state") == "uploaded":
-                if item.get("cache_cleanup_error") and view.get("policy", {}).get("cleanup_cache"):
+                if item.get('error_code') == 'archive_verification':
+                    add('archive_verification', 'file', 'upload')
+                elif item.get("cache_cleanup_error") and view.get("policy", {}).get("cleanup_cache"):
                     add("cache_cleanup", "cache", "upload")
                 if not cleaning_source and item.get("cleanup") in ("blocked", "changed") and item.get('selected', True) and view.get("policy", {}).get("delete_source"):
                     add("source_cleanup", "source", "import")

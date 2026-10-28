@@ -20,6 +20,7 @@ from .contracts import MediaSource, ArchiveDestination
 from .media import MEDIA_SCOPES, select_groups, selected_file_ids
 from .source_connection import ConfirmationRequired
 from .task_facts import archive_complete
+from .adapters import source_deletion_support
 
 
 LOG = logging.getLogger("media_importer")
@@ -378,10 +379,24 @@ class Service:
             return False
         if row.get('cache_cleared_at'):
             return True
-        with self.cache_lock():
-            if self.cache_guard.protected(row['id']):
-                return False  # The uploader can continue with unrelated files.
-            try:
+        if self.cache_guard.protected(row['id']):
+            return False
+        archive_checked = False
+        try:
+            # A durable upload record is not proof that the remote copy still
+            # exists after a failed cleanup or restart. Check metadata only,
+            # outside the global cache mutation lock, before discarding a copy.
+            if (not row.get('remote_path') or not row.get('remote_identity') or
+                    not self.confirmed_final(row, self.destination.stat(row['remote_path']))):
+                raise DestinationError('正式归档缺失或身份已变化，完整缓存保留，请检查归档存储',
+                                       code='archive_verification')
+            archive_checked = True
+            current = self.store.get(row['id'])
+            if current.get('error_code') == 'archive_verification':
+                self.store.update(row['id'], error=None, error_code=None, error_stage=None, retry_at=0)
+            with self.cache_lock():
+                if self.cache_guard.protected(row['id']):
+                    return False
                 require_cache(self.store)
                 if not self.allowed():
                     return False
@@ -394,9 +409,15 @@ class Service:
                 forget(self.store, row)
                 fsync_directory(self.store.cache)
                 self.store.update(row["id"], cache_cleanup_error=None, cache_cleared_at=now())
-            except (OSError, CacheUnavailable, ValueError) as exc:
-                self.store.update(row["id"], cache_cleanup_error=str(exc))
-                LOG.warning("已归档，缓存待清理: %s", self.store.asset(row).path)
+        except (Cancelled, SyncDisabled, Reconfigure, ConfirmationRequired):
+            raise
+        except (BackupError, OSError, ValueError) as exc:
+            message = self.destination.redact(str(exc)) if hasattr(self.destination, 'redact') else str(exc)
+            fields = {'cache_cleanup_error': message}
+            if not archive_checked:
+                fields.update(error=message, error_stage='upload', error_code='archive_verification')
+            self.store.update(row["id"], **fields)
+            LOG.warning("归档记录保留，缓存待核验或清理: %s", self.store.asset(row).path)
         return True
 
     def verify_archived(self, row):
@@ -486,8 +507,11 @@ class Service:
         if not self.valid_remote(item, self.store.asset(row).size):
             return False
         # A lost rename acknowledgement must not adopt an unrelated equal-size file.
-        if row["remote_identity"] and hasattr(self.destination, "file_identity"):
-            return self.destination.file_identity(row["remote_path"]) == json.loads(row["remote_identity"])
+        if row["remote_identity"]:
+            actual = item.get('identity')
+            if actual is None and hasattr(self.destination, "file_identity"):
+                actual = self.destination.file_identity(row["remote_path"])
+            return actual == json.loads(row["remote_identity"])
         return False
 
     def commit_uploaded(self, row):
@@ -699,6 +723,27 @@ class Service:
             fresh = source.reconcile(fresh, self.rows())
         return fresh
 
+    def source_scan(self, source=None):
+        from .adapters import source_scan
+        from .source_connection import require
+        source = self.source if source is None else source
+        require(self.store, self.config)
+        observed = source_scan(source)
+        require(self.store, self.config)
+        if hasattr(source, 'reconcile'):
+            # A listed but unreadable primary is not an absent/deleted parent.
+            failed_paths = {error['path'] for error in observed.errors}
+            prior = [row for row in self.rows() if self.store.asset(row).path not in failed_paths]
+            observed.assets = source.reconcile(observed.assets, prior)
+        return observed
+
+    def report_scan_errors(self, errors):
+        message = f'{len(errors)} 个文件无法核验，其他素材继续备份；原片清理已暂停'
+        self.report('waiting_scan', message, current_file=None, current_file_id=None,
+                    current_bytes=0, current_total_bytes=0, speed_bytes_per_second=0,
+                    issue={'code': 'source_metadata', 'scope': 'file', 'stage': 'import',
+                           'message': message, 'action': '检查无法核验的文件，修复或另行保存后重新扫描。'})
+
     def settle(self):
         from .lifecycle import settle
         return settle(self)
@@ -710,6 +755,9 @@ class Service:
         if not self.allowed("delete_source_after_import"):
             return
         explicit = groups is not None
+        inventory = self.store.get_meta('status', {}).get('inventory', {})
+        if not explicit and inventory.get('errors') and inventory.get('serial') == self.config.source['serial']:
+            return
         for group in groups if explicit else self.store.groups(self.destination_id):
             if group["id"] in attempted:
                 continue
@@ -730,6 +778,20 @@ class Service:
                 for row in rows:
                     self.store.update(row["id"], cleanup="blocked", source_cleanup_error=group["reason"])
                 continue
+            restriction = next((reason for asset in members
+                                if (reason := source_deletion_support(self.source, asset))), None)
+            def retain_unsupported():
+                for row in rows:
+                    if row['cleanup'] in ('deleted', 'absent'):
+                        continue
+                    if row['cleanup'] != 'unsupported' or row.get('source_cleanup_error'):
+                        self.store.update(row['id'], cleanup='unsupported', source_cleanup_error=None)
+            if restriction and not any(row['cleanup'] == 'deleting' for row in rows):
+                # A known capability restriction is a final retention decision,
+                # not an attempted delete or a transport failure. Check the
+                # whole group before a primary can remove any companion.
+                retain_unsupported()
+                continue
             try:
                 with self.cache_guard.protect(r['id'] for r in rows):
                     self.boundary()
@@ -741,6 +803,20 @@ class Service:
                     fresh = self.source_snapshot()
                     by_path = {a.path: a for a in fresh}
                     members = [self.store.asset(r) for r in rows]
+                    if restriction:
+                        # Do not discard an older uncertain delete just because
+                        # this connection now has a format restriction.
+                        for row, asset in zip(rows, members):
+                            if row['cleanup'] != 'deleting':
+                                continue
+                            actual = by_path.get(asset.path)
+                            if actual and actual.identity != asset.identity:
+                                raise SourceError('删除结果对应的原片身份已变化，需要复查')
+                            if actual is None:
+                                self.store.update(row['id'], cleanup='deleted', source_cleanup_error=None)
+                        rows = [self.store.get(row['id']) for row in rows]
+                        retain_unsupported()
+                        continue
                     # Recompute associations: a newly appeared sidecar postpones this group's deletion.
                     group_ids = {a.identity for a in members}
                     def verify_members(snapshot):
@@ -797,11 +873,12 @@ class Service:
                             self.store.db.executemany("""UPDATE files SET cleanup='deleting',source_cleanup_error=NULL,
                                 updated_at=? WHERE id=? AND cleanup NOT IN ('deleted','absent')""",
                                 ((now(), identifier) for identifier in present_ids))
+                        delete_error = None
                         try:
                             self.source.delete(asset)
-                        except SourceError:
+                        except SourceError as exc:
                             # The response may be lost; re-enumeration decides the outcome.
-                            pass
+                            delete_error = str(exc)
                         after = {a.path: a for a in self.source_snapshot()}
                         for member_row, member in zip(rows, members):
                             if member.path in current and member.path not in after:
@@ -811,7 +888,8 @@ class Service:
                                 if self.store.cached_path(member_row).is_file():
                                     self.checkpoint(member_row)
                         if asset.path in after:
-                            self.store.update(row["id"], cleanup="pending", source_cleanup_error="相机文件仍存在，稍后重新核对")
+                            self.store.update(row["id"], cleanup="pending", source_cleanup_error=(
+                                delete_error or "相机文件仍存在，稍后重新核对"))
             except (BackupError, OSError) as exc:
                 if isinstance(exc, (Cancelled, SyncDisabled, Reconfigure, ConfirmationRequired)):
                     raise
@@ -827,33 +905,37 @@ class Service:
         require(self.store, self.config)
         self.boundary()
         scope = self.config.backup["media_scope"]
-        previous_scope = self.store.get_meta("status", {}).get("inventory", {}).get("media_scope", "all")
-        self.store.status(inventory={"scanned": False, "verified": False}, source_work=True)
+        previous_inventory = self.store.get_meta("status", {}).get("inventory", {})
+        previous_scope = previous_inventory.get('media_scope', 'all')
+        self.store.status(inventory={**previous_inventory, "scanned": False, "verified": False}, source_work=True)
         self.observe_source()
         self.report("scanning", "正在核对相机完整素材清单", issue=None, current_file=None, current_file_id=None)
         self.store.status(source_work=True)
-        assets = self.source_snapshot()
+        observed = self.source_scan()
+        assets, scan_errors = observed.assets, observed.errors
         groups = select_groups(self.source.groups(assets), scope)
         selected = [a for group in groups for a in group["members"]]
         previews = {key for group in groups for key in group.get('preview_ids', [])}
         archive_previews = self.store.preview_policy(self.config)
         from .lifecycle import indexed, restore_member
-        seen = indexed(self.store, self.config, assets)
+        seen = indexed(self.store, self.config, assets, complete=not scan_errors)
         known_rows = {r['asset_id']: r for r in self.rows()}
-        delete_source = self.allowed('delete_source_after_import')
-        def outstanding(asset):
+        delete_source = not scan_errors and self.allowed('delete_source_after_import')
+        def outstanding(asset, cleanup_enabled):
             row = known_rows.get(asset.identity)
             if row is None:
                 return asset.identity not in seen
             if row['state'] not in ('uploaded', 'excluded'):
                 return True
-            return delete_source and row['cleanup'] not in ('deleted', 'absent')
+            return cleanup_enabled and row['cleanup'] not in ('deleted', 'absent')
         working_groups = []
         with self.store.db:
             for group in groups:
                 members = group['members']
-                legacy = delete_source and any(a.identity in seen and a.identity not in known_rows for a in members)
-                if any(outstanding(a) for a in members) or legacy:
+                cleanup_enabled = delete_source and not any(
+                    source_deletion_support(self.source, asset) for asset in members)
+                legacy = cleanup_enabled and any(a.identity in seen and a.identity not in known_rows for a in members)
+                if any(outstanding(a, cleanup_enabled) for a in members) or legacy:
                     for asset in members:
                         if asset.identity in seen:
                             restore_member(self.store, self.destination_id, asset, seen[asset.identity])
@@ -868,11 +950,11 @@ class Service:
             if row["id"] not in eligible:
                 continue
             if row["state"] in ("pending", "missing"):
-                if row["asset_id"] not in available:
+                if row["asset_id"] not in available and not scan_errors:
                     self.store.update(row["id"], state="missing", error="相机当前没有这份素材，等待再次连接原卡", error_stage="import")
-                elif row["state"] == "missing":
+                elif row["state"] == "missing" and row['asset_id'] in available:
                     self.store.update(row["id"], state="pending", error=None, error_stage=None)
-            elif row["state"] == "uploaded" and self.store.asset(row).path not in paths:
+            elif not scan_errors and row["state"] == "uploaded" and self.store.asset(row).path not in paths:
                 self.store.update(row["id"], cleanup="absent", source_cleanup_error=None)
         known_ids = {r["asset_id"] for r in known}
         additions = [a for a in work_assets if a.identity not in known_ids]
@@ -891,17 +973,26 @@ class Service:
             batch_id = None
         self.store.status(batch_id=batch_id, inventory={"scanned": True, "verified": False,
                           "batch_id": batch_id, "serial": self.config.source["serial"], "destination": self.destination_id,
-                          "checked_at": now(), "source_files": len(assets), "new_files": len(additions),
+                          "source_type": self.config.source['type'], 'errors': scan_errors,
+                          "checked_at": now(), "source_files": len(assets) + len(scan_errors), "new_files": len(additions),
                           "media_scope": scope, "archive_previews": archive_previews,
                           "selected_files": sum(r['state'] != 'excluded' for r in self.rows() if r['asset_id'] in {a.identity for a in selected}),
                           "excluded_files": len(assets) - len(selected)})
         self.store.save_groups(self.destination_id, groups)
         self.store.reporting_run(self.config)
-        return {"assets": selected, "batch_id": batch_id, "known_sources": set(seen)}
+        from .completion import refresh
+        with self.store.db:
+            refresh(self.store.db, [r[0] for r in self.store.db.execute(
+                'SELECT id FROM transfer_runs WHERE destination=? AND source_type=? AND serial=?',
+                (self.destination_id, self.config.source['type'], self.config.source['serial']))])
+        return {"assets": selected, "batch_id": batch_id, "known_sources": set(seen), 'errors': scan_errors}
 
     def verify_imports(self, inventory):
         self.boundary()
         require_cache(self.store)
+        if inventory.get('errors'):
+            self.report_scan_errors(inventory['errors'])
+            return False
         rows = {r["asset_id"]: r for r in self.rows()}
         for asset in inventory["assets"]:
             row = rows.get(asset.identity)
@@ -922,7 +1013,20 @@ class Service:
         self.report("verifying", "导入结束，正在复查相机清单", issue=None, current_file=None, current_file_id=None)
         self.store.status(source_work=True)
         self.boundary()
-        fresh = self.source_snapshot()
+        observed = self.source_scan()
+        fresh = observed.assets
+        if observed.errors:
+            state = self.store.get_meta('status', {}).get('inventory', {})
+            state.update(verified=False, errors=observed.errors, source_type=self.config.source['type'],
+                         serial=self.config.source['serial'], destination=self.destination_id)
+            self.store.status(inventory=state, source_work=False)
+            from .completion import refresh
+            with self.store.db:
+                refresh(self.store.db, [r[0] for r in self.store.db.execute(
+                    'SELECT id FROM transfer_runs WHERE destination=? AND source_type=? AND serial=?',
+                    (self.destination_id, self.config.source['type'], self.config.source['serial']))])
+            self.report_scan_errors(observed.errors)
+            return False
         fresh_selected = [a for group in select_groups(self.source.groups(fresh), self.config.backup["media_scope"])
                           for a in group["members"]]
         expected = {a.identity for a in inventory["assets"]
@@ -970,14 +1074,21 @@ class Service:
         batch_id = state.get("batch_id")
         batch_rows = self.store.files(batch_id=batch_id) if batch_id else []
         rows = self.rows()
+        scan_errors = state.get('inventory', {}).get('errors', [])
+        if scan_errors:
+            self.report_scan_errors(scan_errors)
+            return {'complete': False, 'reason': 'source_files', 'source_errors': scan_errors}
         eligible = selected_file_ids(rows, self.config.backup["media_scope"])
-        pending = [r for r in rows if r["state"] not in ("uploaded", "excluded") and
-                   (r["id"] in eligible or r["state"] in ("cached", "staged", "publishing"))]
+        pending = [r for r in rows if (r["state"] not in ("uploaded", "excluded") or
+                                      r.get('error_code') == 'archive_verification') and
+                   (r["id"] in eligible or r["state"] in ("cached", "staged", "publishing") or
+                    r.get('error_code') == 'archive_verification')]
         if pending:
             stages = state.get("stages", {})
             waiting = next((stages[s] for s in ("import", "upload") if stages.get(s, {}).get("phase", "").startswith("waiting")), {})
             self.report(waiting.get("phase", "waiting_retry"), waiting.get("message", "仍有素材待处理，任务与完整缓存已保留"))
-            return {"complete": False, "reason": "pending_files"}
+            return {"complete": False, "reason": 'archive_verification' if any(
+                r.get('error_code') == 'archive_verification' for r in pending) else "pending_files"}
         if not batch_rows:
             from .source_connection import reason
             if reason(self.store, self.config):
@@ -993,7 +1104,7 @@ class Service:
                   "bytes": sum(self.store.asset(r).size for r in transferred), "finished_at": now()}
         result["cleanup"] = "归档完成；相机原片按导入清理设置处理"
         current = self.store.files(batch_id=batch_id)
-        result["cleanup_pending"] = sum(r["cleanup"] not in ("deleted", "absent") for r in current)
+        result["cleanup_pending"] = sum(r["cleanup"] not in ("deleted", "absent", "unsupported") for r in current)
         result["complete"] = archive_complete(current, require_files=False)
         import_state = self.store.get_meta("status", {}).get("stages", {}).get("import", {})
         waiting_import = import_state.get("phase", "").startswith("waiting")

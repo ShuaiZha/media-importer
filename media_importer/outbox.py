@@ -60,7 +60,9 @@ def freeze_completion(db, config, run, rows, *, create):
         return
     if not create and saved and saved['state'] == 'sent':
         return
-    from .completion import build, project
+    from .completion import build, project, source_errors
+    if source_errors(db, dict(run)):
+        return
     binding = _meta(db, 'source_selection', {})
     summary = project(build(dict(run), rows), config, binding)
     result, locations = summary['result'], summary['locations']

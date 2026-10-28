@@ -9,7 +9,8 @@ def file_facts(row, *, cached=False, archive_verified=True):
     if not hasattr(row, 'get'):
         row = dict(row)
     excluded = row['state'] == 'excluded'
-    archived = not excluded and row['state'] == 'uploaded' and archive_verified
+    archived = (not excluded and row['state'] == 'uploaded' and archive_verified
+                and row.get('error_code') != 'archive_verification')
     return {
         'excluded': excluded,
         'archived': archived,
@@ -18,6 +19,7 @@ def file_facts(row, *, cached=False, archive_verified=True):
         'cache_cleared': bool(row.get('cache_cleared_at')) and not row.get('cache_cleanup_error'),
         'source_deleted': row.get('cleanup') == 'deleted',
         'source_absent': row.get('cleanup') == 'absent',
+        'source_retained': row.get('cleanup') == 'unsupported',
         'source_uncertain': row.get('cleanup') == 'deleting',
     }
 

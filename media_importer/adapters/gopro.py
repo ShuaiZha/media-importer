@@ -13,7 +13,7 @@ from urllib.parse import quote, unquote, urlencode, urljoin, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 from ..paths import safe_relative
-from ..model import Asset, SourceError, SourceConnectionError, SourceBlocked, Cancelled, now, device_directory
+from ..model import Asset, SourceScan, SourceError, SourceConnectionError, SourceBlocked, Cancelled, now, device_directory
 from .gopro_models import compatibility, model_key
 
 
@@ -576,21 +576,29 @@ class GoProSource:
             metadata = {**metadata, 'cre': verified['cre'], 's': verified['s']}
         return metadata
 
-    def inventory(self):
+    def inventory(self, *, partial=False):
         self.identify()
         self.ensure_idle()
         primary = self.media_list()
         paths = self.paths()
         if set(primary) - paths:
             raise SourceError("媒体接口与目录清单不一致，稍后重试")
-        assets = []
+        assets, errors = [], []
         by_stem = {}
         for path in sorted(paths):
-            size, modified = self.file_stat(path)
-            item = primary.get(path, {})
-            metadata = self._identity_metadata(path, size, modified, item) if path in primary else {}
-            asset = make_asset(self.serial, path, size, str(metadata.get("cre", item.get("cre", ""))),
-                          modified, self.gumi(metadata.get("gumi")), path in primary, device_name=self.device_name)
+            try:
+                size, modified = self.file_stat(path)
+                item = primary.get(path, {})
+                metadata = self._identity_metadata(path, size, modified, item) if path in primary else {}
+                asset = make_asset(self.serial, path, size, str(metadata.get("cre", item.get("cre", ""))),
+                              modified, self.gumi(metadata.get("gumi")), path in primary, device_name=self.device_name)
+            except (SourceConnectionError, SourceBlocked, Cancelled):
+                raise  # A connection or camera-state failure affects the whole observation.
+            except (SourceError, ValueError, KeyError, TypeError) as exc:
+                if not partial:
+                    raise SourceError(f'无法核验文件 {path}：{exc}') from exc
+                errors.append({'path': path, 'reason': str(exc) if isinstance(exc, SourceError) else '素材元数据无效'})
+                continue
             assets.append(asset)
             if asset.metadata["primary"]:
                 source = PurePosixPath(path)
@@ -606,19 +614,27 @@ class GoProSource:
                                   asset.modified, "", False, parent.metadata["gumi"], device_name=self.device_name)
             resolved.append(asset)
         self.ensure_idle()
-        return resolved
+        return SourceScan(resolved, errors) if partial else resolved
 
-    def snapshot(self):
-        first = self.inventory()
+    def scan(self):
+        first = self.inventory(partial=True)
         if self.stop:
             if self.stop.wait(self.config.backup["stability_seconds"]):
                 raise Cancelled("正在停止")
         else:
             time.sleep(self.config.backup["stability_seconds"])
-        second = self.inventory()
-        if [a.identity for a in first] != [a.identity for a in second]:
+        second = self.inventory(partial=True)
+        if ([a.identity for a in first.assets] != [a.identity for a in second.assets]
+                or first.errors != second.errors):
             raise SourceError("素材清单正在变化，等待稳定后再备份")
         return second
+
+    def snapshot(self):
+        observed = self.scan()
+        if observed.errors:
+            first = observed.errors[0]
+            raise SourceError(f"{len(observed.errors)} 个文件无法核验；{first['path']}：{first['reason']}；原片清理已暂停")
+        return observed.assets
 
     def verify_primary(self, asset):
         self.identify()
@@ -727,9 +743,15 @@ class GoProSource:
             raise SourceError("相机下载响应无效") from exc
 
     def deletion_support(self, asset):
-        if self.transport == 'wifi' and PurePosixPath(asset.path).suffix.lower() not in ('.mp4', '.lrv'):
-            return '无线删除目前仅验证 MP4 及关联 LRV，保留此文件'
-        return None
+        if self.transport != 'wifi':
+            return None
+        path = PurePosixPath(asset.path)
+        if path.suffix.lower() in ('.mp4', '.lrv'):
+            return None
+        if (asset.metadata.get('primary') and
+                re.fullmatch(r'GOPR\d{4}\.JPG', path.name, re.I)):
+            return None
+        return '此类型尚未验证无线清理，保留原片；当前支持 MP4、关联 LRV 和单张 JPG'
 
     def delete(self, asset):
         self.verify_primary(asset)

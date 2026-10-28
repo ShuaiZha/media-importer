@@ -11,6 +11,7 @@ import uuid
 from .model import Asset, BackupError, Cancelled, ConfigError, now
 from .source_connection import fresh
 from .storage import require_cache
+from .adapters import source_deletion_support
 
 
 MODES = {'archived': '已归档素材', 'imported': '已完整导入素材'}
@@ -247,13 +248,20 @@ def inspect(service, mode=None, selection=None):
         return result, None
     selected, retained = [], []
     can_delete = connection.get('device', {}).get('compatibility', {}).get('delete_verified', False)
-    with service.cache_lock():
-        require_cache(service.store)
-        for group in groups:
-            service.boundary()
-            members = group['members']
-            if requested is not None and not requested.intersection(a.identity for a in members):
-                continue
+    require_cache(service.store)
+    for group in groups:
+        service.boundary()
+        members = group['members']
+        if requested is not None and not requested.intersection(a.identity for a in members):
+            continue
+        # Protect only this group's complete copies. SMB checks can take time;
+        # unrelated uploads and cache commits must not wait on a global mutex.
+        protected = [rows[a.identity]['id'] for a in members if a.identity in rows]
+        with service.cache_guard.protect(protected):
+            for asset in members:
+                saved = rows.get(asset.identity)
+                if saved and not saved.get('indexed'):
+                    rows[asset.identity] = service.store.get(saved['id']) or saved
             reason = None if can_delete else '当前型号或固件尚未通过删除验收'
             reason = reason or (group.get('reason') or '素材关联无法确认' if not group['safe'] else None)
             if requested is not None and any(a.identity not in requested for a in members):
@@ -264,8 +272,7 @@ def inspect(service, mode=None, selection=None):
             for asset in members:
                 if reason:
                     break
-                support = getattr(service.source, 'deletion_support', None)
-                if support and (reason := support(asset)):
+                if reason := source_deletion_support(service.source, asset):
                     break
                 row = rows.get(asset.identity)
                 if row and row.get('cleanup') in ('deleted', 'absent'):

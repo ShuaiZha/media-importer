@@ -35,7 +35,9 @@ def backup_states(store, destination, assets):
         state = row.get('state')
         error = row.get('error') or row.get('source_cleanup_error') or row.get('cache_cleanup_error')
         key, label = 'pending', '未备份'
-        if state == 'uploaded':
+        if state == 'uploaded' and row.get('error_code') == 'archive_verification':
+            key, label = 'archive_pending', '归档待核验'
+        elif state == 'uploaded':
             key, label = 'archived', '已归档'
         elif error:
             key, label = 'error', '异常'
@@ -130,7 +132,8 @@ class Library:
                 raise ConfigError('素材浏览会话已结束，请刷新素材')
             source = service.source.fork(service.stop, purpose='browse')
             if action == 'list':
-                assets = service.source_snapshot(source)
+                observed = service.source_scan(source)
+                assets = observed.assets
                 from .adapters import source_selection_groups
                 result, mapping, choices = [], {}, {}
                 for group in source_selection_groups(source, assets):
@@ -155,7 +158,7 @@ class Library:
                 states = backup_states(service.store, service.destination_id, [pair[0] for pair in mapping.values()])
                 for item in result:
                     item['backup'] = states[item['id']]
-                future.set_result({'files': result, 'session_id': session, 'catalog': catalog})
+                future.set_result({'files': result, 'errors': observed.errors, 'session_id': session, 'catalog': catalog})
             else:
                 with self.lock:
                     pair = self.assets.get(identifier) if session == self.session else None

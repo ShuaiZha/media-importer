@@ -30,15 +30,16 @@ def initialize(db):
             db.execute("DELETE FROM meta WHERE key='settled_runs'")
 
 
-def indexed(store, config, assets):
-    """Call only after a successful, identity-checked full source inventory."""
+def indexed(store, config, assets, *, complete=True):
+    """Prune absence only after a complete, identity-checked source inventory."""
     present = {a.identity for a in assets}
     with store.db:
         entries = [dict(r) for r in store.db.execute('''SELECT * FROM source_index
             WHERE destination=? AND source_type=? AND serial=?''',
             (config.destination_id, config.source['type'], config.source['serial']))]
-        store.db.executemany('DELETE FROM source_index WHERE destination=? AND asset_id=?',
-                             ((config.destination_id, r['asset_id']) for r in entries if r['asset_id'] not in present))
+        if complete:
+            store.db.executemany('DELETE FROM source_index WHERE destination=? AND asset_id=?',
+                                 ((config.destination_id, r['asset_id']) for r in entries if r['asset_id'] not in present))
     return {r['asset_id']: r for r in entries if r['asset_id'] in present}
 
 
@@ -79,7 +80,8 @@ def retirement_ready(store, row, *, blocked=(), source_cleanup_required=False):
         return False
     if row.get('cache_cleanup_error') or facts['source_uncertain']:
         return False
-    if source_cleanup_required and (not (facts['source_deleted'] or facts['source_absent']) or row.get('source_cleanup_error')):
+    if source_cleanup_required and (not (facts['source_deleted'] or facts['source_absent'] or facts['source_retained'])
+                                    or row.get('source_cleanup_error')):
         return False
     cache = store.cached_path(row)
     return not any(p.exists() or p.is_symlink() for p in (
@@ -173,9 +175,15 @@ def settle(service):
         relations = [json.loads(g['members']) for g in groups] + list(members.values())
         cleanup_selected = selected_file_ids(rows, config.backup['media_scope'], include_excluded=True)
         blocked = {r['file_id'] for r in store.temporary_items(destination)}
+        from .completion import source_errors
+        incomplete_scan = bool(source_errors(store.db, {'destination': destination,
+            'source_type': config.source['type'], 'serial': config.source['serial'],
+            'historical': False, 'selection': 'all'}))
         def done(row):
             asset = store.asset(row)
             active_source = (asset.source_type, asset.serial) == (config.source['type'], config.source['serial'])
+            if active_source and incomplete_scan:
+                return False
             return retirement_ready(store, row, blocked=blocked, source_cleanup_required=(
                 delete_source and active_source and row['id'] in cleanup_selected))
         retired = [r for group in _components(rows, relations) if all(done(r) for r in group) for r in group]

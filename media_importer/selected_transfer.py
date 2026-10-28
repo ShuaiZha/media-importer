@@ -204,7 +204,7 @@ class SelectedService(Service):
         self.store.status(source_work=True)
         self.observe_source()
         self.report('scanning', '正在核对选定素材清单', current_file=None, current_file_id=None, issue=None)
-        fresh = self.source_snapshot()
+        fresh = self.source_scan().assets
         valid = self._validate_groups(fresh)
         rows = {row['asset_id']: row for row in self.rows()}
         eligible = []
@@ -229,7 +229,7 @@ class SelectedService(Service):
         # primary files do not affect new file-level selections.
         group = next(g for g in self.selected_groups
                      if row['asset_id'] in {a.identity for a in g['members']})
-        if group['id'] not in self._validate_groups(self.source_snapshot()):
+        if group['id'] not in self._validate_groups(self.source_scan().assets):
             raise SourceError('选定文件或附属关系已变化，本次未导入新增或变更的文件')
         super().import_asset(row)
 

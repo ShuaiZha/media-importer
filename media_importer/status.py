@@ -46,12 +46,16 @@ def healthy(directory):
         return False
 
 
-def attention(live, enabled, configuration, health, files, stages):
+def attention(live, enabled, configuration, health, files, stages, inventory=None):
     """Explain whether waiting is enough; do not turn normal pauses into faults."""
     if configuration.get('error'):
         return {'required': True, 'message': '需要处理：配置无效，请检查 .env 和 settings.json。'}
     if not live:
         return {'required': True, 'message': '需要处理：传输服务未响应，请在本机检查后台服务。'}
+    if any(f.get('error_code') == 'archive_verification' for f in files):
+        return {'required': True, 'message': '需要处理：远端归档缺失、变化或暂不可核验；完整缓存已保留，请检查归档存储。'}
+    if inventory and inventory.get('errors'):
+        return {'required': True, 'message': f"需要处理：{len(inventory['errors'])} 个文件无法核验，其他素材可继续备份；请检查异常文件，原片清理已暂停。"}
     uncertain = [f for f in files if f['cache_state'] == 'unverified' and f['state'] != 'uploaded']
     if uncertain:
         return {'required': True, 'message': f'需要处理：{len(uncertain)} 个完整缓存待核验，其他正常文件继续上传。请检查原缓存或备份；停止备份后按维护文档在本机核验缓存。'}
@@ -400,7 +404,7 @@ def snapshot(directory, settings):
             'camera_control': meta.get('camera_control', {}),
             'source_operation_running': bool(state.get('maintenance_running')),
             'unplug': {'ready': ready, 'can_disconnect': can_disconnect, 'message': unplug_message},
-            'attention': attention(live, transfer_enabled, configuration, health, active_files, stages),
+            'attention': attention(live, transfer_enabled, configuration, health, active_files, stages, state.get('inventory')),
             'archive': {'locations': locations, 'planned_locations': planned or [archive_location(target)]},
             'policy': {'delete_source': delete_source,
                        'delete_source_requested': bool(not selected_import and values.get('backup', {}).get('delete_source_after_import', False)),

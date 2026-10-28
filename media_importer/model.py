@@ -92,6 +92,13 @@ class Asset:
         return cls(**data)
 
 
+@dataclass
+class SourceScan:
+    """Readable identities plus explicit file failures; never deletion evidence."""
+    assets: list
+    errors: list = field(default_factory=list)
+
+
 def device_directory(device_name, serial):
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", device_name).strip(". ") or "Camera"
     serial = re.sub(r'[^\w.-]', "_", serial).strip(". ")

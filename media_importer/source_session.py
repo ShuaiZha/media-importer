@@ -3,7 +3,7 @@
 Only IO resolves the current connection. Pure media rules stay in the adapter;
 each IO call pins its client for the duration of that operation.
 """
-from .adapters import create_source
+from .adapters import create_source, source_scan
 from .config import Config
 from .model import SourceConnectionError
 from .source_connection import read, fresh
@@ -21,6 +21,9 @@ class SourceSession:
 
     def fork(self, stop=None, *, purpose='transfer'):
         return type(self)(self.config, self.directory, self.stop if stop is None else stop, purpose)
+
+    def scan(self):
+        return source_scan(self.resolve())
 
     @property
     def transport(self):

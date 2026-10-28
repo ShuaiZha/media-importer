@@ -73,6 +73,19 @@ def source_selection_groups(source, assets):
             for asset in assets]
 
 
+def source_deletion_support(source, asset):
+    """Return a format restriction without issuing a source mutation."""
+    check = getattr(source, 'deletion_support', None)
+    return check(asset) if check else None
+
+
+def source_scan(source):
+    """Optional partial inventory for imports; snapshot() stays strict for cleanup."""
+    from ..model import SourceScan
+    scan = getattr(source, 'scan', None)
+    return scan() if scan else SourceScan(source.snapshot())
+
+
 def notification_adapter(kind):
     return _module(NOTIFICATIONS, kind, "通知")
 

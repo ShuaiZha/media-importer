@@ -17,6 +17,13 @@ Optional keep_alive requires a positive keep_alive_interval_seconds; telemetry
 requires idle_reason(state). Optional deletion_effects(asset, members) returns
 the verified member identities that a delete may affect; omission means only the
 requested file. An adapter must not claim unsafe or unverified capabilities.
+Optional deletion_support(asset) reports format restrictions without mutation.
+The engine checks every member before recording a delete intent; unsupported
+groups retain their originals and can retire after archive/cache completion.
+Optional scan() returns SourceScan(assets, errors) for non-destructive imports
+and browsing. Per-file metadata failures remain explicit; connection failures
+still raise. snapshot() must reject incomplete observations and remains the
+only inventory used to authorize source deletion or prove source absence.
 
 Optional selection_groups(assets) returns one primary per choice with its direct
 companions and preview_ids. It must not

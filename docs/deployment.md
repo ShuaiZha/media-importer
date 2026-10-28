@@ -4,6 +4,8 @@
 
 两个服务：`backup` 导入与上传，`bot` 接收飞书操作。共享配置与数据，不需要开放服务端口。正式镜像为 `ghcr.io/shuaizha/media-importer`，提供 Linux ARM64 / AMD64。
 
+`main` 包含 [v1.0.3 的副本保护修复](releases/v1.0.3.md)，安装包与镜像尚未发布；以下命令仍固定为已发布的 v1.0.1。测试未发布源码请按[构建说明](../CONTRIBUTING.md#docker)操作。
+
 ## 准备
 
 - Git、Python 3.9+、运行中的 [Docker Compose](https://docs.docker.com/compose/install/)。Windows 使用 Linux 容器。

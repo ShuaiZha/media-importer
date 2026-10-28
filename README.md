@@ -6,13 +6,15 @@
 [![Tests](https://github.com/ShuaiZha/media-importer/actions/workflows/ci.yml/badge.svg)](https://github.com/ShuaiZha/media-importer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-[快速开始](#快速开始) · [使用文档](docs/README.md) · [兼容性](docs/compatibility.md) · [v1.0.1](docs/releases/v1.0.1.md)
+[快速开始](#快速开始) · [使用文档](docs/README.md) · [兼容性](docs/compatibility.md) · [变更说明](docs/releases/v1.0.3.md)
+
+当前源码为 **v1.0.3（待发布）**；以下安装命令获取已发布的正式版。
 
 连接相机，在飞书中确认设备并开启备份。素材先完整导入本地缓存，再并行上传到 SMB 共享；目的地可以是 NAS，也可以是另一台电脑。
 
 - **并行传输**：第一个文件导入完成即可上传，同时继续导入后续文件。
 - **离线缓冲**：存储离线时先缓存，相机断开后仍可上传完整文件。
-- **副本保护**：核验大小与正式归档身份，不覆盖已有文件；完整缓存保留至归档成功。
+- **副本保护**：不覆盖已有文件；清理缓存前复核正式归档的大小与身份，无法核验时保留缓存。
 - **飞书操作**：查看状态、配置参数、选择文件备份和核验清理，接收进度、完成与异常提醒。
 
 ![并行传输：文件 A 完整导入本地后开始上传，同时继续导入文件 B、C](docs/assets/parallel-transfer.svg)
@@ -78,7 +80,7 @@ Mac 无线自动连接需要独立有线网络，相机使用独立供电并开�
 | 配置飞书和日常操作 | [飞书指南](docs/feishu.md) · [配置参考](docs/configuration.md) |
 | 理解备份、画面与拍摄的关系 | [业务流程](docs/workflows.md) |
 | 处理故障、迁移或恢复缓存 | [使用与排障](docs/operations.md) · [迁移与恢复](docs/recovery.md) |
-| 参与开发或查看发布内容 | [架构](docs/architecture.md) · [贡献指南](CONTRIBUTING.md) · [v1.0.1 说明](docs/releases/v1.0.1.md) |
+| 参与开发或查看发布内容 | [架构](docs/architecture.md) · [贡献指南](CONTRIBUTING.md) · [变更说明](docs/releases/v1.0.3.md) |
 
 升级保留配置、未完成任务与完整缓存。问题请提交 [Issue](https://github.com/ShuaiZha/media-importer/issues)，附版本、系统及脱敏日志；不要上传凭据、任务数据库、缓存或私人素材。
 

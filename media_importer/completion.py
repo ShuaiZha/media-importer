@@ -17,11 +17,11 @@ def cleanup_summary(files, delete_source=False):
         'preview_absent': sum(f['cleanup'] == 'absent' for f in previews),
         'preview_pending': sum(delete_source and f.get('cleanup_selected', True)
                                and (f.get('group_id') in ready_groups or bool(f.get('source_cleanup_error')))
-                               and f['cleanup'] not in ('deleted', 'absent') for f in previews),
+                               and f['cleanup'] not in ('deleted', 'absent', 'unsupported') for f in previews),
         'source_deleted': sum(f['cleanup'] == 'deleted' for f in files),
         'source_absent': sum(f['cleanup'] == 'absent' for f in files),
         'source_pending': sum(delete_source and f.get('selected', True) and f.get('imported')
-                              and f['cleanup'] not in ('deleted', 'absent') for f in files),
+                              and f['cleanup'] not in ('deleted', 'absent', 'unsupported') for f in files),
         'source_not_deleted': sum(f['cleanup'] not in ('deleted', 'absent') for f in files),
         'cache_cleared': sum(f.get('cache_state') == 'missing' and not f.get('cache_cleanup_error') for f in archived),
         'cache_pending': sum(f.get('cache_state') in ('verified', 'unverified') or bool(f.get('cache_cleanup_error')) for f in archived),
@@ -38,7 +38,19 @@ def initialize(db):
     refresh(db, [r[0] for r in db.execute('SELECT id FROM transfer_runs')])
 
 
-def build(run, rows):
+def source_errors(db, run):
+    """An incomplete full-source scan cannot complete a full-sync round."""
+    if run.get('historical') or run['selection'].startswith('selected:'):
+        return []
+    saved = db.execute("SELECT value FROM meta WHERE key='status'").fetchone()
+    inventory = json.loads(saved[0]).get('inventory', {}) if saved else {}
+    if (inventory.get('destination'), inventory.get('source_type'), inventory.get('serial')) != (
+            run['destination'], run['source_type'], run['serial']):
+        return []
+    return inventory.get('errors', [])
+
+
+def build(run, rows, scan_errors=()):
     from .media import selected_file_ids
     rows = [dict(r) for r in rows]
     included = [r for r in rows if r['state'] != 'excluded']
@@ -52,8 +64,9 @@ def build(run, rows):
               'cleanup': cleanup_summary(observed, True),
               'ignored_preview_files': len(rows) - len(included)}
     return {'id': run['id'], 'historical': bool(run['historical']),
-            'imported_at': run.get('imported_at'), 'created_at': run['created_at'],
-            'complete': archive_complete(rows), 'file_ids': [r['id'] for r in rows],
+            'imported_at': None if scan_errors else run.get('imported_at'), 'created_at': run['created_at'],
+            'complete': archive_complete(rows) and not scan_errors, 'file_ids': [r['id'] for r in rows],
+            'source_errors': list(scan_errors),
             'result': result,
             'directories': sorted({str(PurePosixPath(r['remote_path']).parent) for r in included if r.get('remote_path')})}
 
@@ -65,7 +78,7 @@ def refresh(db, identifiers):
             continue
         run = dict(saved)
         rows = db.execute('SELECT f.* FROM files f JOIN transfer_run_files r ON r.file_id=f.id WHERE r.run_id=?', (identifier,)).fetchall()
-        payload = json.dumps(build(run, rows), ensure_ascii=False, sort_keys=True)
+        payload = json.dumps(build(run, rows, source_errors(db, run)), ensure_ascii=False, sort_keys=True)
         db.execute("""INSERT INTO task_results VALUES (?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET
             payload=excluded.payload WHERE task_results.payload<>excluded.payload""",
             (identifier, run['destination'], run['source_type'], run['serial'], run['selection'], payload))
